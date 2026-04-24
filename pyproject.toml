@@ -10,6 +10,13 @@ dependencies = [
 [project.scripts]
 annotation-pipeline = "annotation_pipeline_skill.interfaces.cli:console_main"
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["annotation_pipeline_skill*"]
+
 [dependency-groups]
 dev = [
   "pytest>=8.0",

@@ -160,3 +160,7 @@ def handle_run_cycle(args: argparse.Namespace) -> int:
 def handle_serve(args: argparse.Namespace) -> int:
     serve_dashboard_api(FileStore(args.project_root / ".annotation-pipeline"), host=args.host, port=args.port)
     return 0
+
+
+if __name__ == "__main__":
+    console_main()
