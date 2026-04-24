@@ -12,10 +12,14 @@ Implemented in the first backend foundation slice:
 - Core task, attempt, artifact, feedback, external task, outbox, and audit event models.
 - Validated task state transitions.
 - File-system JSON/JSONL store.
+- YAML-backed provider, route, annotator, and external-task config loading.
+- Structured annotator capability selection.
 - Append-only feedback records.
 - Compact feedback bundle builder.
 - Idempotent external task pull mapping.
 - Local outbox records for status and submit operations.
+- CLI init, doctor, JSONL task creation, local cycle, and dashboard serving commands.
+- Deterministic local fake runtime cycle.
 - Backend Kanban snapshot data shape.
 
 Not implemented yet:
@@ -73,3 +77,46 @@ npm run dev
 
 The Vite dev server proxies `/api` to `http://127.0.0.1:8765`.
 Use `VITE_API_TARGET=http://127.0.0.1:<port>` when the API runs on another port.
+
+## CLI Workflow
+
+Initialize a local annotation project:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline init --project-root ./demo-project
+```
+
+Validate local configuration and store directories:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline doctor --project-root ./demo-project
+```
+
+Create ready tasks from JSONL:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline create-tasks \
+  --project-root ./demo-project \
+  --source ./input.jsonl \
+  --pipeline-id demo
+```
+
+Run one deterministic local fake cycle:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline run-cycle --project-root ./demo-project
+```
+
+Serve the dashboard API:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline serve \
+  --project-root ./demo-project \
+  --host 127.0.0.1 \
+  --port 8765
+```
