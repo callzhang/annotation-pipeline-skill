@@ -22,7 +22,14 @@ _SAFE_ENV_KEYS = {
     "LANG",
     "LC_ALL",
     "CODEX_HOME",
+    "ANNOTATION_CODEX_HOME_ROOT",
 }
+
+
+class LocalCLIExecutionError(RuntimeError):
+    def __init__(self, message: str, diagnostics: dict[str, Any]):
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 def codex_shell_environment(env: Mapping[str, str] = os.environ) -> dict[str, str]:
@@ -43,17 +50,20 @@ def build_codex_command(
     reasoning_effort: str | None,
 ) -> tuple[list[str], Path]:
     prompt_file = Path(tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False).name)
-    prompt_file.write_text(prompt, encoding="utf-8")
+    full_prompt = prompt
+    if developer_instructions:
+        full_prompt = f"{developer_instructions}\n\n{prompt}"
+    prompt_file.write_text(full_prompt, encoding="utf-8")
 
-    command = [binary, "--dangerously-bypass-approvals-and-sandbox", "exec"]
+    command = [binary, "exec"]
     if continuity_handle:
-        command.extend(["resume", continuity_handle])
-    command.extend(["--json", "--model", model])
+        command.append("resume")
+    command.extend(["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json", "--model", model])
     if reasoning_effort:
         command.extend(["--config", f'model_reasoning_effort="{reasoning_effort}"'])
-    if developer_instructions:
-        command.extend(["--developer-message", developer_instructions])
-    command.extend(["--", prompt_file.read_text(encoding="utf-8")])
+    if continuity_handle:
+        command.append(continuity_handle)
+    command.append(prompt_file.read_text(encoding="utf-8"))
     return command, prompt_file
 
 
@@ -66,7 +76,9 @@ def isolated_codex_home(
     continuity_handle: str | None,
 ) -> Iterator[tuple[dict[str, str], Path]]:
     source_home = Path(env.get("CODEX_HOME") or Path(env.get("HOME", "~")).expanduser() / ".codex")
-    with tempfile.TemporaryDirectory(prefix="annotation-codex-home-") as temp_dir:
+    runtime_root = Path(env.get("ANNOTATION_CODEX_HOME_ROOT") or Path.cwd() / ".annotation-pipeline-codex-homes")
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="annotation-codex-home-", dir=runtime_root) as temp_dir:
         isolated_home = Path(temp_dir)
         for filename in ("auth.json", "config.toml", "credentials.json"):
             source_file = source_home / filename
@@ -172,6 +184,8 @@ class LocalCLIClient:
             diagnostics["returncode"] = process.returncode
             if stderr:
                 diagnostics["stderr"] = stderr.decode("utf-8", errors="replace")[-4000:]
+            if process.returncode != 0:
+                raise LocalCLIExecutionError("local CLI provider failed", diagnostics)
             return LLMGenerateResult(
                 runtime=result.runtime,
                 provider=result.provider,
@@ -188,14 +202,6 @@ class LocalCLIClient:
 
 def _write_isolated_codex_config(path: Path, *, model: str, reasoning_effort: str | None) -> None:
     lines = []
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("[plugins.") or stripped.startswith("model ") or stripped.startswith("model_reasoning_effort"):
-                continue
-            if stripped.startswith("enabled ="):
-                continue
-            lines.append(line)
     lines.append(f'model = "{model}"')
     if reasoning_effort:
         lines.append(f'model_reasoning_effort = "{reasoning_effort}"')

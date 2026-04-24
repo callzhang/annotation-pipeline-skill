@@ -40,11 +40,14 @@ def test_build_codex_command_includes_json_resume_and_model():
         reasoning_effort="none",
     )
 
-    assert command[:5] == ["codex", "--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "thread-1"]
+    assert command[:3] == ["codex", "exec", "resume"]
     assert "--json" in command
     assert "--model" in command
     assert "gpt-5.4-mini" in command
-    assert prompt_file.read_text(encoding="utf-8") == "Annotate this"
+    assert "--developer-message" not in command
+    assert command[-2:] == ["thread-1", prompt_file.read_text(encoding="utf-8")]
+    assert "Return JSON" in prompt_file.read_text(encoding="utf-8")
+    assert "Annotate this" in prompt_file.read_text(encoding="utf-8")
     prompt_file.unlink()
 
 
@@ -73,6 +76,40 @@ def test_isolated_codex_home_strips_desktop_context_and_preserves_auth(tmp_path:
         assert 'model = "gpt-5.4-mini"' in config
         assert 'model_reasoning_effort = "none"' in config
         assert "[plugins." not in config
+
+
+def test_isolated_codex_home_does_not_copy_user_tui_state(tmp_path: Path):
+    source_home = tmp_path / "source"
+    source_home.mkdir()
+    (source_home / "config.toml").write_text(
+        'model = "gpt-5.4"\n[tui]\nmodel_availability_nux = "gpt-5.4-mini"\n',
+        encoding="utf-8",
+    )
+
+    with isolated_codex_home(
+        {"CODEX_HOME": str(source_home), "ANNOTATION_CODEX_HOME_ROOT": str(tmp_path / "runtime")},
+        model="gpt-5.4-mini",
+        reasoning_effort="none",
+        continuity_handle=None,
+    ) as (_isolated_env, isolated_home):
+        config = (isolated_home / "config.toml").read_text(encoding="utf-8")
+        assert "[tui]" not in config
+        assert "model_availability_nux" not in config
+
+
+def test_isolated_codex_home_can_use_non_tmp_runtime_root(tmp_path: Path):
+    source_home = tmp_path / "source"
+    runtime_root = tmp_path / "runtime"
+    source_home.mkdir()
+
+    with isolated_codex_home(
+        {"CODEX_HOME": str(source_home), "ANNOTATION_CODEX_HOME_ROOT": str(runtime_root)},
+        model="gpt-5.4-mini",
+        reasoning_effort="none",
+        continuity_handle=None,
+    ) as (isolated_env, isolated_home):
+        assert isolated_home.is_relative_to(runtime_root)
+        assert isolated_env["CODEX_HOME"] == str(isolated_home)
 
 
 def test_parse_codex_json_events_extracts_thread_and_final_text():
