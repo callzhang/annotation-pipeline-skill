@@ -43,3 +43,33 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run pytest -v
 ```
 
 The cache variables keep `uv` writes inside sandbox-writable locations.
+
+Run the frontend tests and production build:
+
+```bash
+cd web
+npm_config_cache=/tmp/npm-cache npm install
+npm test -- --run
+npm run build
+```
+
+## Run The Dashboard
+
+Start the Python dashboard API against a file-store root:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  python -m annotation_pipeline_skill.interfaces.api .annotation-pipeline \
+  --host 127.0.0.1 \
+  --port 8765
+```
+
+Start the Vite React dashboard:
+
+```bash
+cd web
+npm run dev
+```
+
+The Vite dev server proxies `/api` to `http://127.0.0.1:8765`.
+Use `VITE_API_TARGET=http://127.0.0.1:<port>` when the API runs on another port.

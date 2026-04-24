@@ -10,3 +10,5 @@ build/
 *.egg-info/
 .codex
 .superpowers/
+web/node_modules/
+web/dist/
