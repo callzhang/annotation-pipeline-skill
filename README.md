@@ -20,13 +20,14 @@ Implemented in the first backend foundation slice:
 - Local outbox records for status and submit operations.
 - CLI init, doctor, JSONL task creation, local cycle, and dashboard serving commands.
 - Deterministic local fake runtime cycle.
+- Configurable subagent runtime through `llm_profiles.yaml`.
+- OpenAI Responses API and local LLM CLI provider profiles.
 - Backend Kanban snapshot data shape.
 
 Not implemented yet:
 
 - Streamlit dashboard. This project will not use Streamlit.
-- Vite + React + TypeScript frontend.
-- Real provider clients.
+- Production distributed runtime.
 - Real external HTTP task API calls.
 - Real multimodal preview renderers.
 
@@ -35,6 +36,8 @@ Not implemented yet:
 - Product design: `PRODUCT_DESIGN.md`
 - Technical architecture: `TECHNICAL_ARCHITECTURE.md`
 - Test plan: `VERIFY_MANAGER_CYCLES_TEST_PLAN.md`
+- Agent operator guide: `docs/agent-operator-guide.md`
+- Algorithm engineer user story: `docs/algorithm-engineer-user-story.md`
 - Current spec: `docs/superpowers/specs/2026-04-24-annotation-pipeline-skill-design.md`
 - Current implementation plan: `docs/superpowers/plans/2026-04-24-core-foundation.md`
 
@@ -110,6 +113,57 @@ Run one deterministic local fake cycle:
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline run-cycle --project-root ./demo-project
 ```
+
+Validate subagent provider profiles:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline provider doctor --project-root ./demo-project
+```
+
+Inspect configured stage targets:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline provider targets --project-root ./demo-project
+```
+
+Run one configured subagent cycle:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline run-cycle --runtime subagent --project-root ./demo-project
+```
+
+Provider configuration lives at `.annotation-pipeline/llm_profiles.yaml`.
+
+OpenAI Responses API example:
+
+```yaml
+profiles:
+  openai_default:
+    provider: openai_responses
+    model: gpt-5.4-mini
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+targets:
+  qc: openai_default
+```
+
+Local LLM CLI example:
+
+```yaml
+profiles:
+  local_codex:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4-mini
+targets:
+  annotation: local_codex
+```
+
+Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and repair analysis.
 
 Serve the dashboard API:
 
