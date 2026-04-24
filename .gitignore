@@ -10,6 +10,7 @@ build/
 *.egg-info/
 .codex
 .superpowers/
+.worktrees/
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
