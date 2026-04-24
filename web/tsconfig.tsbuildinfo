@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/kanban.test.ts","./src/kanban.ts","./src/main.tsx","./src/types.ts","./src/components/KanbanBoard.tsx","./src/components/TaskDrawer.tsx"],"version":"5.9.3"}
