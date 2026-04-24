@@ -9,7 +9,11 @@ from annotation_pipeline_skill.core.models import Task
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
+from annotation_pipeline_skill.llm.local_cli import LocalCLIClient
+from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
+from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
 from annotation_pipeline_skill.runtime.local_cycle import run_local_cycle
+from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -56,6 +60,30 @@ human_review:
   default:
     enabled: false
 """,
+    "llm_profiles.yaml": """profiles:
+  local_codex:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4-mini
+    reasoning_effort: none
+    timeout_seconds: 900
+    no_progress_timeout_seconds: 30
+  openai_default:
+    provider: openai_responses
+    model: gpt-5.4-mini
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    reasoning_effort: medium
+    timeout_seconds: 300
+targets:
+  annotation: local_codex
+  qc: openai_default
+  repair: local_codex
+  coordinator: local_codex
+limits:
+  local_cli_global_concurrency: 4
+""",
 }
 
 
@@ -90,7 +118,20 @@ def build_parser() -> argparse.ArgumentParser:
     cycle_parser = subparsers.add_parser("run-cycle")
     cycle_parser.add_argument("--project-root", type=Path, default=Path.cwd())
     cycle_parser.add_argument("--limit", type=int, default=None)
+    cycle_parser.add_argument("--runtime", choices=("local", "subagent"), default="local")
+    cycle_parser.add_argument("--stage-target", default="annotation")
     cycle_parser.set_defaults(handler=handle_run_cycle)
+
+    provider_parser = subparsers.add_parser("provider")
+    provider_subparsers = provider_parser.add_subparsers(required=True)
+
+    provider_doctor = provider_subparsers.add_parser("doctor")
+    provider_doctor.add_argument("--project-root", type=Path, default=Path.cwd())
+    provider_doctor.set_defaults(handler=handle_provider_doctor)
+
+    provider_targets = provider_subparsers.add_parser("targets")
+    provider_targets.add_argument("--project-root", type=Path, default=Path.cwd())
+    provider_targets.set_defaults(handler=handle_provider_targets)
 
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -153,13 +194,51 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
 def handle_run_cycle(args: argparse.Namespace) -> int:
     config = load_project_config(args.project_root)
     store = FileStore(args.project_root / ".annotation-pipeline")
+    if args.runtime == "subagent":
+        registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
+        runtime = SubagentRuntime(store=store, client_factory=lambda target: _build_llm_client(registry.resolve(target)))
+        runtime.run_once(stage_target=args.stage_target, limit=args.limit)
+        return 0
     run_local_cycle(store, config, limit=args.limit)
+    return 0
+
+
+def handle_provider_doctor(args: argparse.Namespace) -> int:
+    try:
+        load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
+    except (OSError, ProfileValidationError):
+        return 1
+    return 0
+
+
+def handle_provider_targets(args: argparse.Namespace) -> int:
+    try:
+        registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
+    except (OSError, ProfileValidationError):
+        return 1
+    payload = {
+        target: {
+            "profile": registry.resolve(target).name,
+            "provider": registry.resolve(target).provider,
+            "model": registry.resolve(target).model,
+        }
+        for target in sorted(registry.targets)
+    }
+    print(json.dumps(payload, sort_keys=True, indent=2))
     return 0
 
 
 def handle_serve(args: argparse.Namespace) -> int:
     serve_dashboard_api(FileStore(args.project_root / ".annotation-pipeline"), host=args.host, port=args.port)
     return 0
+
+
+def _build_llm_client(profile):
+    if profile.provider == "openai_responses":
+        return OpenAIResponsesClient(profile)
+    if profile.provider == "local_cli":
+        return LocalCLIClient(profile)
+    raise ProfileValidationError(f"unsupported provider: {profile.provider}")
 
 
 if __name__ == "__main__":
