@@ -56,9 +56,25 @@ human_review:
     preview_renderer_id: image_bbox_preview
     enabled: true
 """,
+    "annotation_rules.yaml": """rules:
+  - id: entity_span_defaults
+    applies_to: [entity_span]
+    instruction: Label person, organization, location, date, product, and event mentions with exact text spans.
+    examples: []
+""",
     "external_tasks.yaml": """external_tasks:
   default:
     enabled: false
+""",
+    "callbacks.yaml": """callbacks:
+  status:
+    enabled: false
+    url: null
+    secret_env: null
+  submit:
+    enabled: false
+    url: null
+    secret_env: null
 """,
     "llm_profiles.yaml": """profiles:
   local_codex:

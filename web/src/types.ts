@@ -50,3 +50,19 @@ export interface TaskDetail {
   events: Array<Record<string, unknown>>;
   feedback: Array<Record<string, unknown>>;
 }
+
+export interface ConfigFile {
+  id: string;
+  title: string;
+  path: string;
+  exists: boolean;
+  content: string;
+}
+
+export interface ConfigSnapshot {
+  files: ConfigFile[];
+}
+
+export interface EventLog {
+  events: Array<Record<string, unknown>>;
+}

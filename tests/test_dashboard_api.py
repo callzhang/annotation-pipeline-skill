@@ -89,3 +89,50 @@ def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events
     assert payload["artifacts"][0]["payload"]["text"] == '{"entities":[{"text":"Alice"}]}'
     assert payload["events"][0]["next_status"] == "annotating"
     assert payload["feedback"][0]["message"] == "Check entity span boundary."
+
+
+def test_dashboard_api_returns_config_files_and_can_update_allowed_yaml(tmp_path):
+    store = FileStore(tmp_path)
+    (tmp_path / "annotation_rules.yaml").write_text("rules:\n  - id: default\n", encoding="utf-8")
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/config")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert any(item["id"] == "annotation_rules.yaml" for item in payload["files"])
+
+    status, _headers, body = api.handle_put(
+        "/api/config/annotation_rules.yaml",
+        b"rules:\n  - id: updated\n    instruction: Label named entities.\n",
+    )
+
+    assert status == 200
+    assert json.loads(body.decode("utf-8"))["ok"] is True
+    assert "updated" in (tmp_path / "annotation_rules.yaml").read_text(encoding="utf-8")
+
+
+def test_dashboard_api_rejects_invalid_config_name(tmp_path):
+    api = DashboardApi(FileStore(tmp_path))
+
+    status, _headers, body = api.handle_put("/api/config/../bad.yaml", b"ok: true\n")
+
+    assert status == 404
+    assert json.loads(body.decode("utf-8")) == {"error": "config_not_found"}
+
+
+def test_dashboard_api_returns_event_log_across_tasks(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.READY
+    event = transition_task(task, TaskStatus.ANNOTATING, actor="test", reason="started", stage="annotation")
+    store.save_task(task)
+    store.append_event(event)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/events")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["events"][0]["task_id"] == "task-1"
+    assert payload["events"][0]["next_status"] == "annotating"
