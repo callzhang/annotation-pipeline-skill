@@ -15,7 +15,7 @@ def test_feedback_bundle_orders_records_by_creation_time(tmp_path):
         category="format",
         message="Bad JSON shape",
         target={"path": "$"},
-        suggested_action="bulk_code_repair",
+        suggested_action="batch_code_update",
         created_by="validator",
     )
     second = FeedbackRecord.new(
@@ -53,7 +53,7 @@ def test_external_task_pull_is_idempotent_and_creates_status_outbox(tmp_path):
         external_task_id="42",
         payload={"text": "hello again"},
     )
-    record = service.enqueue_status(first, status="ready")
+    record = service.enqueue_status(first, status="pending")
 
     assert first.task_id == second.task_id
     assert record.kind is OutboxKind.STATUS

@@ -27,9 +27,9 @@ def validate_structured_text(text_format: type[BaseModel], payload: str) -> Base
         raise StructuredParseError(str(exc)) from exc
 
 
-def build_repair_prompt(schema_name: str, validation_error: str, invalid_payload: str) -> str:
+def build_correction_prompt(schema_name: str, validation_error: str, invalid_payload: str) -> str:
     return (
-        f"Repair the following {schema_name} JSON so it satisfies the schema. "
+        f"Correct the following {schema_name} JSON so it satisfies the schema. "
         "Return only valid JSON.\n\n"
         f"Validation error:\n{validation_error}\n\n"
         f"Invalid payload:\n{invalid_payload}"

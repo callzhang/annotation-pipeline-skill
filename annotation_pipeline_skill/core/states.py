@@ -3,15 +3,13 @@ from enum import Enum
 
 class TaskStatus(str, Enum):
     DRAFT = "draft"
-    READY = "ready"
+    PENDING = "pending"
     ANNOTATING = "annotating"
     VALIDATING = "validating"
     QC = "qc"
     HUMAN_REVIEW = "human_review"
-    REPAIR = "repair"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
-    MERGED = "merged"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
 

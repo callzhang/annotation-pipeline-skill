@@ -23,7 +23,7 @@ class StubLLMClient:
 def test_subagent_runtime_advances_ready_task_and_records_attempt(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
-    task.status = TaskStatus.READY
+    task.status = TaskStatus.PENDING
     store.save_task(task)
     runtime = SubagentRuntime(store=store, client_factory=lambda target: StubLLMClient())
 

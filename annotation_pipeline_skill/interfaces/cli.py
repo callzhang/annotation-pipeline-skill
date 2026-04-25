@@ -22,8 +22,6 @@ CONFIG_FILES: dict[str, str] = {
     target: annotation
   qc:
     target: qc
-  repair:
-    target: repair
 human_review:
   required: false
 """,
@@ -85,7 +83,6 @@ human_review:
 targets:
   annotation: local_codex
   qc: openai_default
-  repair: local_codex
   coordinator: local_codex
 limits:
   local_cli_global_concurrency: 4
@@ -187,7 +184,7 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
         )
         event = transition_task(
             task,
-            TaskStatus.READY,
+            TaskStatus.PENDING,
             actor="cli",
             reason="created from jsonl source",
             stage="prepare",

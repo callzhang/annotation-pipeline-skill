@@ -2,7 +2,7 @@
 
 Local-first foundation for a reusable annotation pipeline skill.
 
-This repository is building toward a task-type-agnostic annotation manager with durable tasks, attempts, audit events, QC feedback, optional Human Review, repair flows, external task API integration, and a Vite + React + TypeScript Kanban dashboard.
+This repository is building toward a task-type-agnostic annotation manager with durable tasks, attempts, audit events, QC feedback, optional Human Review, feedback-driven annotation updates, external task API integration, and a Vite + React + TypeScript Kanban dashboard.
 
 ## Current Slice
 
@@ -96,7 +96,7 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline doctor --project-root ./demo-project
 ```
 
-Create ready tasks from JSONL:
+Create pending tasks from JSONL:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
@@ -162,7 +162,7 @@ targets:
   annotation: local_codex
 ```
 
-Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and repair analysis.
+Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis.
 
 Serve the dashboard API:
 

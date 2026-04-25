@@ -14,7 +14,6 @@ This creates `.annotation-pipeline/llm_profiles.yaml` with default stage targets
 
 - `annotation`
 - `qc`
-- `repair`
 - `coordinator`
 
 Validate provider configuration:
@@ -68,7 +67,7 @@ Subagent attempts record provider, model, artifact metadata, diagnostics, and co
 2. Select annotators by task modality and annotation type.
 3. Run annotation and QC stages.
 4. Notify the user when QC routes items to Human Review.
-5. Capture feedback as concrete repair rules or manual edits.
-6. Re-run repair or annotation and submit accepted training data.
+5. Capture feedback as concrete batch update rules or manual edits.
+6. Re-run annotation with feedback and submit accepted training data.
 
 For multimodal projects, keep the core task model generic and add adapters/renderers for images, video, point clouds, or model-specific previews such as bounding boxes from a VC detection model.

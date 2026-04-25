@@ -19,15 +19,15 @@ def test_transition_task_updates_state_and_returns_audit_event():
 
     event = transition_task(
         task,
-        TaskStatus.READY,
+        TaskStatus.PENDING,
         actor="tester",
         reason="source slice created",
         stage="prepare",
     )
 
-    assert task.status is TaskStatus.READY
+    assert task.status is TaskStatus.PENDING
     assert event.previous_status == TaskStatus.DRAFT
-    assert event.next_status == TaskStatus.READY
+    assert event.next_status == TaskStatus.PENDING
     assert event.actor == "tester"
     assert event.reason == "source slice created"
 
@@ -36,4 +36,4 @@ def test_invalid_transition_is_rejected():
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
 
     with pytest.raises(InvalidTransition):
-        transition_task(task, TaskStatus.MERGED, actor="tester", reason="bad jump", stage="merge")
+        transition_task(task, TaskStatus.ACCEPTED, actor="tester", reason="bad jump", stage="accept")

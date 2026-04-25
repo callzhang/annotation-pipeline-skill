@@ -10,7 +10,7 @@ from annotation_pipeline_skill.store.file_store import FileStore
 def test_dashboard_api_returns_kanban_snapshot_json(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-    task.status = TaskStatus.READY
+    task.status = TaskStatus.PENDING
     store.save_task(task)
     api = DashboardApi(store)
 
@@ -19,7 +19,7 @@ def test_dashboard_api_returns_kanban_snapshot_json(tmp_path):
     assert status == 200
     assert headers["content-type"] == "application/json"
     payload = json.loads(body.decode("utf-8"))
-    assert payload["columns"][0]["id"] == "ready"
+    assert payload["columns"][0]["id"] == "pending"
     assert payload["columns"][0]["cards"][0]["task_id"] == "task-1"
 
 
@@ -40,7 +40,7 @@ def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events
         pipeline_id="pipe",
         source_ref={"kind": "jsonl", "payload": {"text": "Alice joined OpenAI."}},
     )
-    task.status = TaskStatus.READY
+    task.status = TaskStatus.PENDING
     event = transition_task(task, TaskStatus.ANNOTATING, actor="test", reason="started", stage="annotation")
     artifact = ArtifactRef.new(
         task_id="task-1",
@@ -124,7 +124,7 @@ def test_dashboard_api_rejects_invalid_config_name(tmp_path):
 def test_dashboard_api_returns_event_log_across_tasks(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-    task.status = TaskStatus.READY
+    task.status = TaskStatus.PENDING
     event = transition_task(task, TaskStatus.ANNOTATING, actor="test", reason="started", stage="annotation")
     store.save_task(task)
     store.append_event(event)

@@ -25,13 +25,13 @@ class SubagentRuntime:
         self.client_factory = client_factory
 
     def run_once(self, stage_target: str = "annotation", limit: int | None = None) -> SubagentRuntimeResult:
-        ready_tasks = [task for task in self.store.list_tasks() if task.status is TaskStatus.READY]
+        pending_tasks = [task for task in self.store.list_tasks() if task.status is TaskStatus.PENDING]
         if limit is not None:
-            ready_tasks = ready_tasks[:limit]
+            pending_tasks = pending_tasks[:limit]
 
         accepted = 0
         failed = 0
-        for task in ready_tasks:
+        for task in pending_tasks:
             try:
                 self._run_task(task, stage_target)
             except Exception:
@@ -39,7 +39,7 @@ class SubagentRuntime:
                 raise
             if task.status is TaskStatus.ACCEPTED:
                 accepted += 1
-        return SubagentRuntimeResult(started=len(ready_tasks), accepted=accepted, failed=failed)
+        return SubagentRuntimeResult(started=len(pending_tasks), accepted=accepted, failed=failed)
 
     def _run_task(self, task: Task, stage_target: str) -> None:
         attempt_id = f"{task.task_id}-attempt-{task.current_attempt + 1}"

@@ -6,15 +6,13 @@ from annotation_pipeline_skill.store.file_store import FileStore
 
 
 KANBAN_COLUMNS: list[tuple[str, str, TaskStatus]] = [
-    ("ready", "Ready", TaskStatus.READY),
+    ("pending", "Pending", TaskStatus.PENDING),
     ("annotating", "Annotating", TaskStatus.ANNOTATING),
     ("validating", "Validating", TaskStatus.VALIDATING),
     ("qc", "QC", TaskStatus.QC),
     ("human_review", "Human Review", TaskStatus.HUMAN_REVIEW),
-    ("repair", "Repair", TaskStatus.REPAIR),
     ("accepted", "Accepted", TaskStatus.ACCEPTED),
     ("rejected", "Rejected", TaskStatus.REJECTED),
-    ("merged", "Merged", TaskStatus.MERGED),
 ]
 
 

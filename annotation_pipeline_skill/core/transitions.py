@@ -7,12 +7,12 @@ class InvalidTransition(ValueError):
 
 
 ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.DRAFT: {TaskStatus.READY, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
-    TaskStatus.READY: {TaskStatus.ANNOTATING, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
+    TaskStatus.DRAFT: {TaskStatus.PENDING, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
+    TaskStatus.PENDING: {TaskStatus.ANNOTATING, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
     TaskStatus.ANNOTATING: {TaskStatus.VALIDATING, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
     TaskStatus.VALIDATING: {
         TaskStatus.QC,
-        TaskStatus.REPAIR,
+        TaskStatus.ANNOTATING,
         TaskStatus.REJECTED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
@@ -20,27 +20,20 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.QC: {
         TaskStatus.ACCEPTED,
         TaskStatus.HUMAN_REVIEW,
-        TaskStatus.REPAIR,
+        TaskStatus.ANNOTATING,
         TaskStatus.REJECTED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },
     TaskStatus.HUMAN_REVIEW: {
         TaskStatus.ACCEPTED,
-        TaskStatus.REPAIR,
+        TaskStatus.ANNOTATING,
         TaskStatus.REJECTED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },
-    TaskStatus.REPAIR: {
-        TaskStatus.ANNOTATING,
-        TaskStatus.VALIDATING,
-        TaskStatus.BLOCKED,
-        TaskStatus.CANCELLED,
-    },
-    TaskStatus.ACCEPTED: {TaskStatus.MERGED},
+    TaskStatus.ACCEPTED: set(),
     TaskStatus.REJECTED: set(),
-    TaskStatus.MERGED: set(),
     TaskStatus.BLOCKED: set(),
     TaskStatus.CANCELLED: set(),
 }
