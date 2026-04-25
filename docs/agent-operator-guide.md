@@ -54,12 +54,6 @@ The local CLI adapter uses an isolated Codex home, strips desktop session contex
 
 ## Run A Cycle
 
-Use local fake runtime for smoke tests:
-
-```bash
-annotation-pipeline run-cycle --project-root ./demo-project
-```
-
 Use configured subagents:
 
 ```bash

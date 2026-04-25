@@ -12,28 +12,18 @@ from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
 from annotation_pipeline_skill.llm.local_cli import LocalCLIClient
 from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
-from annotation_pipeline_skill.runtime.local_cycle import run_local_cycle
 from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
 CONFIG_FILES: dict[str, str] = {
-    "providers.yaml": """providers:
-  local_fake:
-    kind: fake
-    models: [fake-annotator]
-    default_model: fake-annotator
-    secret_ref: null
-""",
-    "stage_routes.yaml": """stage_routes:
+    "workflow.yaml": """stages:
   annotation:
-    primary_provider: local_fake
-    primary_model: fake-annotator
-    primary_effort: medium
+    target: annotation
   qc:
-    primary_provider: local_fake
-    primary_model: fake-annotator
-    primary_effort: medium
+    target: qc
+  repair:
+    target: repair
 human_review:
   required: false
 """,
@@ -44,7 +34,7 @@ human_review:
     annotation_types: [entity_span, classification, relation, structured_json]
     input_artifact_kinds: [raw_slice]
     output_artifact_kinds: [annotation_result]
-    provider_route_id: annotation
+    provider_target: annotation
     enabled: true
   image_bbox_annotator:
     display_name: Image Bounding Box Annotator
@@ -52,7 +42,7 @@ human_review:
     annotation_types: [bounding_box, segmentation]
     input_artifact_kinds: [raw_slice]
     output_artifact_kinds: [annotation_result, image_bbox_preview]
-    provider_route_id: annotation
+    provider_target: annotation
     preview_renderer_id: image_bbox_preview
     enabled: true
 """,
@@ -134,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     cycle_parser = subparsers.add_parser("run-cycle")
     cycle_parser.add_argument("--project-root", type=Path, default=Path.cwd())
     cycle_parser.add_argument("--limit", type=int, default=None)
-    cycle_parser.add_argument("--runtime", choices=("local", "subagent"), default="local")
+    cycle_parser.add_argument("--runtime", choices=("subagent",), default="subagent")
     cycle_parser.add_argument("--stage-target", default="annotation")
     cycle_parser.set_defaults(handler=handle_run_cycle)
 
@@ -208,14 +198,11 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
 
 
 def handle_run_cycle(args: argparse.Namespace) -> int:
-    config = load_project_config(args.project_root)
+    load_project_config(args.project_root)
     store = FileStore(args.project_root / ".annotation-pipeline")
-    if args.runtime == "subagent":
-        registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
-        runtime = SubagentRuntime(store=store, client_factory=lambda target: _build_llm_client(registry.resolve(target)))
-        runtime.run_once(stage_target=args.stage_target, limit=args.limit)
-        return 0
-    run_local_cycle(store, config, limit=args.limit)
+    registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
+    runtime = SubagentRuntime(store=store, client_factory=lambda target: _build_llm_client(registry.resolve(target)))
+    runtime.run_once(stage_target=args.stage_target, limit=args.limit)
     return 0
 
 

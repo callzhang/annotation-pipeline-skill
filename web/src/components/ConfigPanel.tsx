@@ -6,10 +6,9 @@ const configHints: Record<string, string> = {
   "annotation_rules.yaml": "Rules that guide how annotators should label the data.",
   "annotators.yaml": "Annotator capability profiles, modalities, annotation types, and renderer hooks.",
   "llm_profiles.yaml": "Subagent provider profiles and stage target bindings for Annotation, QC, repair, and coordinator agents.",
+  "workflow.yaml": "Workflow stages, target bindings, and Human Review policy.",
   "external_tasks.yaml": "External task API pull, submit, and status integration settings.",
   "callbacks.yaml": "Callback endpoints for status and submit notifications.",
-  "stage_routes.yaml": "Legacy stage route and Human Review policy settings.",
-  "providers.yaml": "Legacy provider definitions kept for local fake runtime compatibility.",
 };
 
 export function ConfigPanel() {

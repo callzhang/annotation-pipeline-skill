@@ -16,8 +16,7 @@ CONFIG_FILE_DEFINITIONS: dict[str, str] = {
     "annotation_rules.yaml": "Annotation Rules",
     "annotators.yaml": "Annotation Agents",
     "llm_profiles.yaml": "Subagent Providers",
-    "stage_routes.yaml": "Stage Routing",
-    "providers.yaml": "Legacy Providers",
+    "workflow.yaml": "Workflow",
     "external_tasks.yaml": "External Task API",
     "callbacks.yaml": "Callbacks",
 }

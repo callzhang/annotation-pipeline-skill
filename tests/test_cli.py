@@ -9,8 +9,10 @@ def test_cli_init_creates_project_layout(tmp_path):
 
     assert exit_code == 0
     config_root = tmp_path / ".annotation-pipeline"
-    assert (config_root / "providers.yaml").exists()
-    assert (config_root / "stage_routes.yaml").exists()
+    assert not (config_root / "providers.yaml").exists()
+    assert not (config_root / "stage_routes.yaml").exists()
+    assert (config_root / "workflow.yaml").exists()
+    assert (config_root / "llm_profiles.yaml").exists()
     assert (config_root / "annotators.yaml").exists()
     assert (config_root / "tasks").is_dir()
 

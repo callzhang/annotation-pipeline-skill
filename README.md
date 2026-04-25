@@ -12,14 +12,13 @@ Implemented in the first backend foundation slice:
 - Core task, attempt, artifact, feedback, external task, outbox, and audit event models.
 - Validated task state transitions.
 - File-system JSON/JSONL store.
-- YAML-backed provider, route, annotator, and external-task config loading.
+- YAML-backed subagent provider, workflow, annotator, and external-task config loading.
 - Structured annotator capability selection.
 - Append-only feedback records.
 - Compact feedback bundle builder.
 - Idempotent external task pull mapping.
 - Local outbox records for status and submit operations.
-- CLI init, doctor, JSONL task creation, local cycle, and dashboard serving commands.
-- Deterministic local fake runtime cycle.
+- CLI init, doctor, JSONL task creation, subagent cycle, and dashboard serving commands.
 - Configurable subagent runtime through `llm_profiles.yaml`.
 - OpenAI Responses API and local LLM CLI provider profiles.
 - Backend Kanban snapshot data shape.
@@ -107,13 +106,6 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   --pipeline-id demo
 ```
 
-Run one deterministic local fake cycle:
-
-```bash
-UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
-  annotation-pipeline run-cycle --project-root ./demo-project
-```
-
 Validate subagent provider profiles:
 
 ```bash
@@ -129,6 +121,13 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 Run one configured subagent cycle:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline run-cycle --project-root ./demo-project
+```
+
+The explicit runtime form is also accepted:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \

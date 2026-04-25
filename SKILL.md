@@ -10,7 +10,6 @@ Core responsibilities:
 
 - Initialize the local project with `annotation-pipeline init`.
 - Ingest raw JSONL tasks with `annotation-pipeline create-tasks`.
-- Run deterministic local cycles for smoke tests.
 - Run subagent cycles for LLM-backed annotation work.
 - Monitor queues and surface tasks that need Human Review.
 - Record QC feedback so annotators can manually repair or apply batch code changes.
