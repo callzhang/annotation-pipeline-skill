@@ -21,3 +21,32 @@ export interface KanbanColumn {
 export interface KanbanSnapshot {
   columns: KanbanColumn[];
 }
+
+export interface TaskDetailArtifact {
+  artifact_id: string;
+  task_id: string;
+  kind: string;
+  path: string;
+  content_type: string;
+  created_at: string;
+  metadata: Record<string, unknown>;
+  payload: unknown;
+}
+
+export interface TaskDetail {
+  task: {
+    task_id: string;
+    pipeline_id: string;
+    source_ref: Record<string, unknown>;
+    modality: string;
+    annotation_requirements: Record<string, unknown>;
+    selected_annotator_id: string | null;
+    status: string;
+    current_attempt: number;
+    metadata: Record<string, unknown>;
+  };
+  attempts: Array<Record<string, unknown>>;
+  artifacts: TaskDetailArtifact[];
+  events: Array<Record<string, unknown>>;
+  feedback: Array<Record<string, unknown>>;
+}

@@ -20,11 +20,47 @@ class DashboardApi:
             return self._json_response(200, {"ok": True})
         if route == "/api/kanban":
             return self._json_response(200, build_kanban_snapshot(self.store))
+        if route.startswith("/api/tasks/"):
+            task_id = route.removeprefix("/api/tasks/")
+            if not task_id:
+                return self._json_response(404, {"error": "not_found"})
+            return self._task_detail_response(task_id)
         return self._json_response(404, {"error": "not_found"})
 
     def _json_response(self, status: int, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
         return status, {"content-type": "application/json"}, body
+
+    def _task_detail_response(self, task_id: str) -> tuple[int, dict[str, str], bytes]:
+        try:
+            task = self.store.load_task(task_id)
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "task_not_found"})
+
+        artifacts = [
+            {**artifact.to_dict(), "payload": self._read_artifact_payload(artifact.path)}
+            for artifact in self.store.list_artifacts(task_id)
+        ]
+        return self._json_response(
+            200,
+            {
+                "task": task.to_dict(),
+                "attempts": [attempt.to_dict() for attempt in self.store.list_attempts(task_id)],
+                "artifacts": artifacts,
+                "events": [event.to_dict() for event in self.store.list_events(task_id)],
+                "feedback": [feedback.to_dict() for feedback in self.store.list_feedback(task_id)],
+            },
+        )
+
+    def _read_artifact_payload(self, relative_path: str) -> Any:
+        path = self.store.root / relative_path
+        if not path.exists():
+            return None
+        text = path.read_text(encoding="utf-8")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
 
 
 def make_handler(api: DashboardApi) -> type[BaseHTTPRequestHandler]:

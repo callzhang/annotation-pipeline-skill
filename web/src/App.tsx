@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
-import { fetchKanbanSnapshot } from "./api";
+import { fetchKanbanSnapshot, fetchTaskDetail } from "./api";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
-import type { KanbanSnapshot, TaskCard } from "./types";
+import type { KanbanSnapshot, TaskCard, TaskDetail } from "./types";
 
 const emptySnapshot: KanbanSnapshot = { columns: [] };
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
   const [selectedTask, setSelectedTask] = useState<TaskCard | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<TaskDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,6 +38,36 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!selectedTask) {
+      setSelectedDetail(null);
+      setDetailError(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let active = true;
+    setDetailLoading(true);
+    setDetailError(null);
+    fetchTaskDetail(selectedTask.task_id)
+      .then((detail) => {
+        if (!active) return;
+        setSelectedDetail(detail);
+      })
+      .catch((reason: unknown) => {
+        if (!active) return;
+        setSelectedDetail(null);
+        setDetailError(reason instanceof Error ? reason.message : "Unable to load task detail");
+      })
+      .finally(() => {
+        if (active) setDetailLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedTask]);
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -47,7 +80,13 @@ export default function App() {
 
       {error ? <div className="notice">{error}</div> : null}
       <KanbanBoard snapshot={snapshot} selectedTaskId={selectedTask?.task_id ?? null} onSelectTask={setSelectedTask} />
-      <TaskDrawer task={selectedTask} onClose={() => setSelectedTask(null)} />
+      <TaskDrawer
+        task={selectedTask}
+        detail={selectedDetail}
+        loading={detailLoading}
+        error={detailError}
+        onClose={() => setSelectedTask(null)}
+      />
     </main>
   );
 }
