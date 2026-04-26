@@ -59,3 +59,42 @@ def test_cli_run_cycle_uses_project_config(tmp_path):
 
     assert exit_code == 0
     assert store.load_task("task-1").status is TaskStatus.ACCEPTED
+
+
+def test_local_cycle_can_auto_merge_accepted_task(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.READY
+    store.save_task(task)
+
+    result = run_local_cycle(store, empty_config(), auto_merge=True)
+
+    loaded = store.load_task("task-1")
+    assert result.started == 1
+    assert result.accepted == 1
+    assert result.merged == 1
+    assert loaded.status is TaskStatus.MERGED
+    assert [event.next_status for event in store.list_events("task-1")] == [
+        TaskStatus.ANNOTATING,
+        TaskStatus.VALIDATING,
+        TaskStatus.QC,
+        TaskStatus.ACCEPTED,
+        TaskStatus.MERGED,
+    ]
+    outbox = store.list_outbox()
+    assert len(outbox) == 1
+    assert outbox[0].payload["result"]["status"] == "merged"
+
+
+def test_cli_merge_accepted_moves_task_to_merged(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+
+    exit_code = main(["merge-accepted", "--project-root", str(tmp_path)])
+
+    assert exit_code == 0
+    assert store.load_task("task-1").status is TaskStatus.MERGED
+    assert store.list_events("task-1")[-1].next_status is TaskStatus.MERGED

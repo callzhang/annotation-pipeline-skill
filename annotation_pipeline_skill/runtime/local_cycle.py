@@ -12,23 +12,36 @@ class LocalCycleResult:
     started: int
     accepted: int
     human_review: int
+    merged: int = 0
 
 
-def run_local_cycle(store: FileStore, config: ProjectConfig, limit: int | None = None) -> LocalCycleResult:
+def run_local_cycle(
+    store: FileStore,
+    config: ProjectConfig,
+    limit: int | None = None,
+    auto_merge: bool = False,
+) -> LocalCycleResult:
+    from annotation_pipeline_skill.services.merge_service import MergeService
+
     ready_tasks = [task for task in store.list_tasks() if task.status is TaskStatus.READY]
     if limit is not None:
         ready_tasks = ready_tasks[:limit]
 
     accepted = 0
     human_review = 0
+    merged = 0
+    merge_service = MergeService(store) if auto_merge else None
     for task in ready_tasks:
         _run_task(store, task, config)
         if task.status is TaskStatus.ACCEPTED:
             accepted += 1
+            if merge_service:
+                merge_service.merge_task(task, actor="local-cycle")
+                merged += 1
         if task.status is TaskStatus.HUMAN_REVIEW:
             human_review += 1
 
-    return LocalCycleResult(started=len(ready_tasks), accepted=accepted, human_review=human_review)
+    return LocalCycleResult(started=len(ready_tasks), accepted=accepted, human_review=human_review, merged=merged)
 
 
 def _run_task(store: FileStore, task: Task, config: ProjectConfig) -> None:

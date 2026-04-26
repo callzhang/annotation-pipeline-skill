@@ -11,6 +11,7 @@ from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
 from annotation_pipeline_skill.runtime.local_cycle import run_local_cycle
+from annotation_pipeline_skill.services.merge_service import MergeService
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -96,7 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
     cycle_parser = subparsers.add_parser("run-cycle")
     cycle_parser.add_argument("--project-root", type=Path, default=Path.cwd())
     cycle_parser.add_argument("--limit", type=int, default=None)
+    cycle_parser.add_argument("--auto-merge", action="store_true")
     cycle_parser.set_defaults(handler=handle_run_cycle)
+
+    merge_parser = subparsers.add_parser("merge-accepted")
+    merge_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    merge_parser.add_argument("--limit", type=int, default=None)
+    merge_parser.set_defaults(handler=handle_merge_accepted)
 
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -233,7 +240,13 @@ def batch_metadata(batch: list[dict]) -> dict:
 def handle_run_cycle(args: argparse.Namespace) -> int:
     config = load_project_config(args.project_root)
     store = FileStore(args.project_root / ".annotation-pipeline")
-    run_local_cycle(store, config, limit=args.limit)
+    run_local_cycle(store, config, limit=args.limit, auto_merge=args.auto_merge)
+    return 0
+
+
+def handle_merge_accepted(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    MergeService(store).merge_accepted(limit=args.limit, actor="cli")
     return 0
 
 

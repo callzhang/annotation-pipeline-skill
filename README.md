@@ -18,7 +18,7 @@ Implemented in the first backend foundation slice:
 - Compact feedback bundle builder.
 - Idempotent external task pull mapping.
 - Local outbox records for status and submit operations.
-- CLI init, doctor, JSONL task creation, local cycle, and dashboard serving commands.
+- CLI init, doctor, JSONL task creation, local cycle, merge, and dashboard serving commands.
 - Deterministic local fake runtime cycle.
 - Backend Kanban snapshot data shape.
 
@@ -129,6 +129,24 @@ Run one deterministic local fake cycle:
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline run-cycle --project-root ./demo-project
 ```
+
+Run a deterministic fake cycle and immediately merge accepted tasks:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline run-cycle --project-root ./demo-project --auto-merge
+```
+
+Merge tasks that already passed QC and reached `accepted`:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline merge-accepted --project-root ./demo-project
+```
+
+Merged tasks move through the validated `accepted -> merged` transition, append
+an audit event, and enqueue a pending `submit` outbox record for downstream
+merge sinks or external task APIs.
 
 Serve the dashboard API:
 
