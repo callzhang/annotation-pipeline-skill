@@ -42,6 +42,10 @@ def test_build_codex_command_includes_json_resume_and_model():
 
     assert command[:3] == ["codex", "exec", "resume"]
     assert "--json" in command
+    assert "--ignore-user-config" in command
+    assert "--ephemeral" in command
+    assert command[command.index("--disable") + 1] == "apps"
+    assert command[command.index("--disable", command.index("--disable") + 1) + 1] == "plugins"
     assert "--model" in command
     assert "gpt-5.4-mini" in command
     assert "--developer-message" not in command
@@ -69,6 +73,7 @@ def test_isolated_codex_home_strips_desktop_context_and_preserves_auth(tmp_path:
         continuity_handle=None,
     ) as (isolated_env, isolated_home):
         assert isolated_env["CODEX_HOME"] == str(isolated_home)
+        assert isolated_env["HOME"] == str(isolated_home)
         assert "CODEX_THREAD_ID" not in isolated_env
         assert "OPENAI_API_KEY" not in isolated_env
         assert (isolated_home / "auth.json").exists()
@@ -117,6 +122,7 @@ def test_parse_codex_json_events_extracts_thread_and_final_text():
         [
             '{"type":"thread.started","thread_id":"thread-1"}',
             '{"type":"item.completed","item":{"type":"agent_message","text":"final answer"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":2}}',
         ],
         provider="local_cli",
         model="gpt-5.4-mini",
@@ -124,6 +130,7 @@ def test_parse_codex_json_events_extracts_thread_and_final_text():
 
     assert result.continuity_handle == "thread-1"
     assert result.final_text == "final answer"
+    assert result.usage == {"input_tokens": 11, "output_tokens": 2}
 
 
 def test_local_cli_profile_import_contract():

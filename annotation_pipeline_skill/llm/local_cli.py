@@ -58,7 +58,21 @@ def build_codex_command(
     command = [binary, "exec"]
     if continuity_handle:
         command.append("resume")
-    command.extend(["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json", "--model", model])
+    command.extend(
+        [
+            "--ignore-user-config",
+            "--ephemeral",
+            "--disable",
+            "apps",
+            "--disable",
+            "plugins",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--json",
+            "--model",
+            model,
+        ]
+    )
     if reasoning_effort:
         command.extend(["--config", f'model_reasoning_effort="{reasoning_effort}"'])
     if continuity_handle:
@@ -93,6 +107,7 @@ def isolated_codex_home(
 
         isolated_env = codex_shell_environment(env)
         isolated_env["CODEX_HOME"] = str(isolated_home)
+        isolated_env["HOME"] = str(isolated_home)
         isolated_env.pop("CODEX_THREAD_ID", None)
         if continuity_handle:
             isolated_env["CODEX_RESUME_THREAD_ID"] = continuity_handle
@@ -108,6 +123,7 @@ def parse_codex_json_events(
     thread_id: str | None = None
     final_text_parts: list[str] = []
     raw_events: list[dict[str, Any]] = []
+    usage: dict[str, Any] | None = None
 
     for line in lines:
         stripped = line.strip()
@@ -132,6 +148,9 @@ def parse_codex_json_events(
         message = event.get("message")
         if event_type in {"agent_message", "message"} and isinstance(message, str):
             final_text_parts.append(message)
+        event_usage = event.get("usage")
+        if event_type == "turn.completed" and isinstance(event_usage, dict):
+            usage = event_usage
 
     return LLMGenerateResult(
         runtime="local_cli",
@@ -139,7 +158,7 @@ def parse_codex_json_events(
         model=model,
         continuity_handle=thread_id,
         final_text="\n".join(final_text_parts),
-        usage=None,
+        usage=usage,
         raw_response=raw_events,
         diagnostics={"line_count": len(lines), "event_count": len(raw_events)},
     )
