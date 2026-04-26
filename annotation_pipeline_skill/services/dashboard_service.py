@@ -16,9 +16,12 @@ KANBAN_COLUMNS: list[tuple[str, str, TaskStatus]] = [
 ]
 
 
-def build_kanban_snapshot(store: FileStore) -> dict:
+def build_kanban_snapshot(store: FileStore, project_id: str | None = None) -> dict:
     tasks = sorted(store.list_tasks(), key=lambda task: task.created_at)
+    if project_id is not None:
+        tasks = [task for task in tasks if task.pipeline_id == project_id]
     return {
+        "project_id": project_id,
         "columns": [
             {
                 "id": column_id,
@@ -26,6 +29,29 @@ def build_kanban_snapshot(store: FileStore) -> dict:
                 "cards": [_task_card(store, task) for task in tasks if task.status is status],
             }
             for column_id, title, status in KANBAN_COLUMNS
+        ]
+    }
+
+
+def build_project_summaries(store: FileStore) -> dict:
+    summaries: dict[str, dict] = {}
+    for task in store.list_tasks():
+        summary = summaries.setdefault(
+            task.pipeline_id,
+            {"project_id": task.pipeline_id, "task_count": 0, "status_counts": {}},
+        )
+        summary["task_count"] += 1
+        status_counts = summary["status_counts"]
+        status_counts[task.status.value] = status_counts.get(task.status.value, 0) + 1
+
+    return {
+        "projects": [
+            {
+                "project_id": summary["project_id"],
+                "task_count": summary["task_count"],
+                "status_counts": dict(sorted(summary["status_counts"].items())),
+            }
+            for summary in sorted(summaries.values(), key=lambda item: item["project_id"])
         ]
     }
 

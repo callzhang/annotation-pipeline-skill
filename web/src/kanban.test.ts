@@ -3,6 +3,7 @@ import { cardSubtitle, countCards, visibleColumns } from "./kanban";
 import type { KanbanSnapshot } from "./types";
 
 const snapshot: KanbanSnapshot = {
+  project_id: null,
   columns: [
     {
       id: "pending",

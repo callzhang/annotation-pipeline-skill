@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
 import { fetchEventLog } from "../api";
 
-export function EventLogPanel() {
+interface EventLogPanelProps {
+  projectId: string | null;
+}
+
+export function EventLogPanel({ projectId }: EventLogPanelProps) {
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    fetchEventLog()
+    setLoading(true);
+    fetchEventLog(projectId)
       .then((payload) => {
         if (!active) return;
         setEvents(payload.events);
@@ -24,14 +29,14 @@ export function EventLogPanel() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [projectId]);
 
   return (
     <section className="work-panel event-log" aria-label="Event log">
       <div className="panel-header">
         <div>
           <h2>Event Log</h2>
-          <p>{events.length} audit events from task lifecycle transitions</p>
+          <p>{events.length} audit events from {projectId ?? "all projects"}</p>
         </div>
       </div>
       {loading ? <div className="drawer-state">Loading event log</div> : null}

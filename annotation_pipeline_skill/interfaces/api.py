@@ -5,6 +5,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 
@@ -12,7 +13,7 @@ from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
-from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot
+from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -31,15 +32,20 @@ class DashboardApi:
         self.store = store
 
     def handle_get(self, path: str) -> tuple[int, dict[str, str], bytes]:
-        route = path.split("?", 1)[0]
+        parsed_path = urlparse(path)
+        route = parsed_path.path
+        query = parse_qs(parsed_path.query)
+        project_id = query.get("project", [None])[0]
         if route == "/api/health":
             return self._json_response(200, {"ok": True})
+        if route == "/api/projects":
+            return self._json_response(200, build_project_summaries(self.store))
         if route == "/api/kanban":
-            return self._json_response(200, build_kanban_snapshot(self.store))
+            return self._json_response(200, build_kanban_snapshot(self.store, project_id=project_id))
         if route == "/api/config":
             return self._json_response(200, {"files": self._config_files()})
         if route == "/api/events":
-            return self._json_response(200, {"events": self._event_log()})
+            return self._json_response(200, {"events": self._event_log(project_id=project_id)})
         if route.startswith("/api/tasks/"):
             task_id = route.removeprefix("/api/tasks/")
             if not task_id:
@@ -180,9 +186,11 @@ class DashboardApi:
         path.write_text(content, encoding="utf-8")
         return self._json_response(200, {"ok": True, "id": config_id})
 
-    def _event_log(self) -> list[dict[str, Any]]:
+    def _event_log(self, project_id: str | None = None) -> list[dict[str, Any]]:
         events = []
         for task in self.store.list_tasks():
+            if project_id is not None and task.pipeline_id != project_id:
+                continue
             events.extend(event.to_dict() for event in self.store.list_events(task.task_id))
         return sorted(events, key=lambda event: event["created_at"], reverse=True)
 

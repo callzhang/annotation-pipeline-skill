@@ -107,6 +107,8 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   --pipeline-id demo
 ```
 
+You can import multiple JSONL sources into the same project root by using a different `--pipeline-id` for each logical annotation project. The dashboard exposes those pipeline IDs as projects, so switching projects filters the Kanban board and event log without moving or rewriting task data.
+
 Validate subagent provider profiles:
 
 ```bash

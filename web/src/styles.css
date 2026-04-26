@@ -63,6 +63,38 @@ button {
   white-space: nowrap;
 }
 
+.topbar-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.project-selector {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.project-selector span {
+  color: #52616b;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.project-selector select {
+  background: #ffffff;
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  color: #172026;
+  font: inherit;
+  font-size: 13px;
+  min-height: 34px;
+  min-width: 220px;
+  padding: 6px 9px;
+}
+
 .notice {
   background: #fff4d8;
   border: 1px solid #e8c46b;
@@ -587,6 +619,17 @@ button {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-actions,
+  .project-selector {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .project-selector select {
+    min-width: 0;
+    width: 100%;
   }
 
   .kanban-board {

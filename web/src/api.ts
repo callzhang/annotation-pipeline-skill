@@ -1,7 +1,19 @@
-import type { ConfigSnapshot, EventLog, KanbanSnapshot, TaskDetail } from "./types";
+import type { ConfigSnapshot, EventLog, KanbanSnapshot, ProjectSnapshot, TaskDetail } from "./types";
 
-export async function fetchKanbanSnapshot(): Promise<KanbanSnapshot> {
-  const response = await fetch("/api/kanban");
+function projectQuery(projectId: string | null): string {
+  return projectId ? `?project=${encodeURIComponent(projectId)}` : "";
+}
+
+export async function fetchProjects(): Promise<ProjectSnapshot> {
+  const response = await fetch("/api/projects");
+  if (!response.ok) {
+    throw new Error(`Projects API returned ${response.status}`);
+  }
+  return response.json() as Promise<ProjectSnapshot>;
+}
+
+export async function fetchKanbanSnapshot(projectId: string | null = null): Promise<KanbanSnapshot> {
+  const response = await fetch(`/api/kanban${projectQuery(projectId)}`);
   if (!response.ok) {
     throw new Error(`Kanban API returned ${response.status}`);
   }
@@ -53,8 +65,8 @@ export async function saveConfigFile(id: string, content: string): Promise<void>
   }
 }
 
-export async function fetchEventLog(): Promise<EventLog> {
-  const response = await fetch("/api/events");
+export async function fetchEventLog(projectId: string | null = null): Promise<EventLog> {
+  const response = await fetch(`/api/events${projectQuery(projectId)}`);
   if (!response.ok) {
     throw new Error(`Event log API returned ${response.status}`);
   }

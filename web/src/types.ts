@@ -19,7 +19,18 @@ export interface KanbanColumn {
 }
 
 export interface KanbanSnapshot {
+  project_id: string | null;
   columns: KanbanColumn[];
+}
+
+export interface ProjectSummary {
+  project_id: string;
+  task_count: number;
+  status_counts: Record<string, number>;
+}
+
+export interface ProjectSnapshot {
+  projects: ProjectSummary[];
 }
 
 export interface TaskDetailArtifact {

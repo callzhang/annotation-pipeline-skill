@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
-import { fetchKanbanSnapshot, fetchTaskDetail, postFeedbackDiscussion } from "./api";
+import { fetchKanbanSnapshot, fetchProjects, fetchTaskDetail, postFeedbackDiscussion } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
-import type { KanbanSnapshot, TaskCard, TaskDetail } from "./types";
+import type { KanbanSnapshot, ProjectSummary, TaskCard, TaskDetail } from "./types";
 
-const emptySnapshot: KanbanSnapshot = { columns: [] };
+const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
 type ViewMode = "kanban" | "config" | "events";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<TaskCard | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<TaskDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -23,10 +25,12 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
 
-    fetchKanbanSnapshot()
-      .then((nextSnapshot) => {
+    Promise.all([fetchProjects(), fetchKanbanSnapshot(selectedProjectId)])
+      .then(([projectSnapshot, nextSnapshot]) => {
         if (!active) return;
+        setProjects(projectSnapshot.projects);
         setSnapshot(nextSnapshot);
         setError(null);
       })
@@ -41,7 +45,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (!selectedTask) {
@@ -80,7 +84,7 @@ export default function App() {
     try {
       const detail = await postFeedbackDiscussion(selectedTask.task_id, payload);
       setSelectedDetail(detail);
-      setSnapshot(await fetchKanbanSnapshot());
+      setSnapshot(await fetchKanbanSnapshot(selectedProjectId));
     } catch (reason: unknown) {
       setDetailError(reason instanceof Error ? reason.message : "Unable to save feedback discussion");
     } finally {
@@ -95,7 +99,26 @@ export default function App() {
           <h1>Annotation Pipeline</h1>
           <p>{countCards(snapshot)} tasks across operational stages</p>
         </div>
-        <div className="status-pill">{loading ? "Loading" : error ? "API error" : "Live snapshot"}</div>
+        <div className="topbar-actions">
+          <label className="project-selector">
+            <span>Project</span>
+            <select
+              value={selectedProjectId ?? ""}
+              onChange={(event) => {
+                setSelectedProjectId(event.target.value || null);
+                setSelectedTask(null);
+              }}
+            >
+              <option value="">All projects</option>
+              {projects.map((project) => (
+                <option key={project.project_id} value={project.project_id}>
+                  {project.project_id} ({project.task_count})
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="status-pill">{loading ? "Loading" : error ? "API error" : "Live snapshot"}</div>
+        </div>
       </header>
 
       <nav className="view-tabs" aria-label="Dashboard views">
@@ -115,7 +138,7 @@ export default function App() {
         <KanbanBoard snapshot={snapshot} selectedTaskId={selectedTask?.task_id ?? null} onSelectTask={setSelectedTask} />
       ) : null}
       {viewMode === "config" ? <ConfigPanel /> : null}
-      {viewMode === "events" ? <EventLogPanel /> : null}
+      {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}
       <TaskDrawer
         task={selectedTask}
         detail={selectedDetail}

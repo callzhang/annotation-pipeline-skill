@@ -23,6 +23,36 @@ def test_dashboard_api_returns_kanban_snapshot_json(tmp_path):
     assert payload["columns"][0]["cards"][0]["task_id"] == "task-1"
 
 
+def test_dashboard_api_returns_projects_and_filters_kanban_by_project(tmp_path):
+    store = FileStore(tmp_path)
+    alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
+    beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
+    alpha.status = TaskStatus.PENDING
+    beta.status = TaskStatus.PENDING
+    store.save_task(alpha)
+    store.save_task(beta)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/projects")
+    projects_payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert projects_payload["projects"] == [
+        {"project_id": "project-alpha", "status_counts": {"pending": 1}, "task_count": 1},
+        {"project_id": "project-beta", "status_counts": {"pending": 1}, "task_count": 1},
+    ]
+
+    status, _headers, body = api.handle_get("/api/kanban?project=project-alpha")
+    kanban_payload = json.loads(body.decode("utf-8"))
+    visible_task_ids = [
+        card["task_id"]
+        for column in kanban_payload["columns"]
+        for card in column["cards"]
+    ]
+    assert status == 200
+    assert kanban_payload["project_id"] == "project-alpha"
+    assert visible_task_ids == ["alpha-1"]
+
+
 def test_dashboard_api_returns_404_for_unknown_route(tmp_path):
     api = DashboardApi(FileStore(tmp_path))
 
@@ -189,3 +219,24 @@ def test_dashboard_api_returns_event_log_across_tasks(tmp_path):
     assert status == 200
     assert payload["events"][0]["task_id"] == "task-1"
     assert payload["events"][0]["next_status"] == "annotating"
+
+
+def test_dashboard_api_filters_event_log_by_project(tmp_path):
+    store = FileStore(tmp_path)
+    alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
+    beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
+    alpha.status = TaskStatus.PENDING
+    beta.status = TaskStatus.PENDING
+    alpha_event = transition_task(alpha, TaskStatus.ANNOTATING, actor="test", reason="started", stage="annotation")
+    beta_event = transition_task(beta, TaskStatus.ANNOTATING, actor="test", reason="started", stage="annotation")
+    store.save_task(alpha)
+    store.save_task(beta)
+    store.append_event(alpha_event)
+    store.append_event(beta_event)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/events?project=project-beta")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert [event["task_id"] for event in payload["events"]] == ["beta-1"]
