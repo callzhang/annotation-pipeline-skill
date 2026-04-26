@@ -104,6 +104,25 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   --pipeline-id demo
 ```
 
+Create 100-row grouped JSONL batch tasks:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline create-tasks \
+  --project-root ./demo-project \
+  --source ./input.jsonl \
+  --pipeline-id memory-ner-v2 \
+  --task-prefix memory-ner-v2 \
+  --batch-size 100 \
+  --group-by source_dataset \
+  --annotation-type entity_span \
+  --annotation-type structured_json
+```
+
+Each generated task stores the batch rows in `source_ref.payload.rows`, records
+line boundaries and row count, and includes an all-row QC policy in task
+metadata.
+
 Run one deterministic local fake cycle:
 
 ```bash
