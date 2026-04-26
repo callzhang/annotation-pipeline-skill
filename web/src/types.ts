@@ -49,6 +49,13 @@ export interface TaskDetail {
   artifacts: TaskDetailArtifact[];
   events: Array<Record<string, unknown>>;
   feedback: Array<Record<string, unknown>>;
+  feedback_discussions: Array<Record<string, unknown>>;
+  feedback_consensus: {
+    total_feedback: number;
+    consensus_feedback: number;
+    open_feedback: string[];
+    can_accept_by_consensus: boolean;
+  };
 }
 
 export interface ConfigFile {

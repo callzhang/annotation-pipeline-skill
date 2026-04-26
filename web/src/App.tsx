@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchKanbanSnapshot, fetchTaskDetail } from "./api";
+import { fetchKanbanSnapshot, fetchTaskDetail, postFeedbackDiscussion } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
@@ -15,6 +15,7 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<TaskCard | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<TaskDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailSaving, setDetailSaving] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("kanban");
   const [loading, setLoading] = useState(true);
@@ -72,6 +73,21 @@ export default function App() {
     };
   }, [selectedTask]);
 
+  async function submitFeedbackDiscussion(payload: Record<string, unknown>) {
+    if (!selectedTask) return;
+    setDetailSaving(true);
+    setDetailError(null);
+    try {
+      const detail = await postFeedbackDiscussion(selectedTask.task_id, payload);
+      setSelectedDetail(detail);
+      setSnapshot(await fetchKanbanSnapshot());
+    } catch (reason: unknown) {
+      setDetailError(reason instanceof Error ? reason.message : "Unable to save feedback discussion");
+    } finally {
+      setDetailSaving(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -104,7 +120,9 @@ export default function App() {
         task={selectedTask}
         detail={selectedDetail}
         loading={detailLoading}
+        saving={detailSaving}
         error={detailError}
+        onSubmitFeedbackDiscussion={submitFeedbackDiscussion}
         onClose={() => setSelectedTask(null)}
       />
     </main>

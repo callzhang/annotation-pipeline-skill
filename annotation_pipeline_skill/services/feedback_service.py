@@ -3,6 +3,7 @@ from annotation_pipeline_skill.store.file_store import FileStore
 
 def build_feedback_bundle(store: FileStore, task_id: str) -> dict:
     records = sorted(store.list_feedback(task_id), key=lambda record: record.created_at)
+    discussions = sorted(store.list_feedback_discussions(task_id), key=lambda entry: entry.created_at)
     return {
         "task_id": task_id,
         "items": [
@@ -17,7 +18,38 @@ def build_feedback_bundle(store: FileStore, task_id: str) -> dict:
                 "suggested_action": record.suggested_action,
                 "created_at": record.created_at.isoformat(),
                 "created_by": record.created_by,
+                "discussion": [
+                    entry.to_dict()
+                    for entry in discussions
+                    if entry.feedback_id == record.feedback_id
+                ],
+                "consensus": any(
+                    entry.consensus
+                    for entry in discussions
+                    if entry.feedback_id == record.feedback_id
+                ),
             }
             for record in records
         ],
+    }
+
+
+def build_feedback_consensus_summary(store: FileStore, task_id: str) -> dict:
+    feedback = store.list_feedback(task_id)
+    discussions = store.list_feedback_discussions(task_id)
+    consensus_feedback_ids = {
+        entry.feedback_id
+        for entry in discussions
+        if entry.consensus
+    }
+    return {
+        "task_id": task_id,
+        "total_feedback": len(feedback),
+        "consensus_feedback": len(consensus_feedback_ids),
+        "open_feedback": [
+            record.feedback_id
+            for record in feedback
+            if record.feedback_id not in consensus_feedback_ids
+        ],
+        "can_accept_by_consensus": bool(feedback) and len(consensus_feedback_ids) == len(feedback),
     }

@@ -1,6 +1,6 @@
 import json
 
-from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackRecord, Task
+from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task
 from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import DashboardApi
@@ -78,6 +78,16 @@ def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events
     store.append_artifact(artifact)
     store.append_attempt(attempt)
     store.append_feedback(feedback)
+    store.append_feedback_discussion(
+        FeedbackDiscussionEntry.new(
+            task_id="task-1",
+            feedback_id=feedback.feedback_id,
+            role="annotator",
+            stance="partial_agree",
+            message="I agree with the boundary issue only.",
+            created_by="annotator",
+        )
+    )
     api = DashboardApi(store)
 
     status, _headers, body = api.handle_get("/api/tasks/task-1")
@@ -89,6 +99,49 @@ def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events
     assert payload["artifacts"][0]["payload"]["text"] == '{"entities":[{"text":"Alice"}]}'
     assert payload["events"][0]["next_status"] == "annotating"
     assert payload["feedback"][0]["message"] == "Check entity span boundary."
+    assert payload["feedback_discussions"][0]["stance"] == "partial_agree"
+    assert payload["feedback_consensus"]["can_accept_by_consensus"] is False
+
+
+def test_dashboard_api_posts_feedback_discussion_and_accepts_by_consensus(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.QC
+    feedback = FeedbackRecord.new(
+        task_id="task-1",
+        attempt_id="attempt-1",
+        source_stage=FeedbackSource.QC,
+        severity=FeedbackSeverity.WARNING,
+        category="span",
+        message="Span boundary issue.",
+        target={"entity": "OpenAI"},
+        suggested_action="manual_annotation",
+        created_by="qc",
+    )
+    store.save_task(task)
+    store.append_feedback(feedback)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_post(
+        "/api/tasks/task-1/feedback-discussions",
+        json.dumps(
+            {
+                "feedback_id": feedback.feedback_id,
+                "role": "qc",
+                "stance": "agree",
+                "message": "Annotator and QC agree on the final span.",
+                "agreed_points": ["span corrected"],
+                "consensus": True,
+                "created_by": "qc",
+            }
+        ).encode("utf-8"),
+    )
+
+    payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert payload["feedback_consensus"]["can_accept_by_consensus"] is True
+    assert store.load_task("task-1").status is TaskStatus.ACCEPTED
+    assert store.list_events("task-1")[-1].reason == "feedback consensus accepted by annotator and qc"
 
 
 def test_dashboard_api_returns_config_files_and_can_update_allowed_yaml(tmp_path):

@@ -16,6 +16,23 @@ export async function fetchTaskDetail(taskId: string): Promise<TaskDetail> {
   return response.json() as Promise<TaskDetail>;
 }
 
+export async function postFeedbackDiscussion(
+  taskId: string,
+  payload: Record<string, unknown>,
+): Promise<TaskDetail> {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/feedback-discussions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Feedback discussion API returned ${response.status}`);
+  }
+  await response.json();
+  return fetchTaskDetail(taskId);
+}
+
 export async function fetchConfigSnapshot(): Promise<ConfigSnapshot> {
   const response = await fetch("/api/config");
   if (!response.ok) {

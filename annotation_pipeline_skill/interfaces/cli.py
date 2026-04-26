@@ -147,7 +147,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def handle_init(args: argparse.Namespace) -> int:
     config_root = args.project_root / ".annotation-pipeline"
-    for name in ("tasks", "events", "feedback", "attempts", "artifacts", "outbox", "runtime", "snapshots"):
+    for name in (
+        "tasks",
+        "events",
+        "feedback",
+        "feedback_discussions",
+        "attempts",
+        "artifacts",
+        "outbox",
+        "runtime",
+        "snapshots",
+    ):
         (config_root / name).mkdir(parents=True, exist_ok=True)
     for filename, content in CONFIG_FILES.items():
         path = config_root / filename
@@ -161,7 +171,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
         load_project_config(args.project_root)
     except ConfigValidationError:
         return 1
-    required_dirs = ("tasks", "events", "feedback", "attempts", "artifacts", "outbox")
+    required_dirs = ("tasks", "events", "feedback", "feedback_discussions", "attempts", "artifacts", "outbox")
     config_root = args.project_root / ".annotation-pipeline"
     return 0 if all((config_root / name).is_dir() for name in required_dirs) else 1
 

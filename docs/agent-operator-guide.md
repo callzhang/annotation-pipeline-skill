@@ -66,8 +66,9 @@ Subagent attempts record provider, model, artifact metadata, diagnostics, and co
 1. Pull or create tasks.
 2. Select annotators by task modality and annotation type.
 3. Run annotation and QC stages.
-4. Notify the user when QC routes items to Human Review.
-5. Capture feedback as concrete batch update rules or manual edits.
-6. Re-run annotation with feedback and submit accepted training data.
+4. Let annotator and QC exchange feedback, including partial agreement.
+5. Record consensus when both sides agree on the final resolution.
+6. Notify the user when unresolved items need Human Review.
+7. Re-run annotation with feedback when consensus requires label updates, then submit accepted training data.
 
 For multimodal projects, keep the core task model generic and add adapters/renderers for images, video, point clouds, or model-specific previews such as bounding boxes from a VC detection model.

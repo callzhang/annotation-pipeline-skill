@@ -8,6 +8,7 @@ from annotation_pipeline_skill.core.models import (
     ArtifactRef,
     Attempt,
     AuditEvent,
+    FeedbackDiscussionEntry,
     FeedbackRecord,
     OutboxRecord,
     Task,
@@ -22,6 +23,7 @@ class FileStore:
         self.tasks_dir = self.root / "tasks"
         self.events_dir = self.root / "events"
         self.feedback_dir = self.root / "feedback"
+        self.feedback_discussions_dir = self.root / "feedback_discussions"
         self.attempts_dir = self.root / "attempts"
         self.artifacts_dir = self.root / "artifacts"
         self.outbox_dir = self.root / "outbox"
@@ -29,6 +31,7 @@ class FileStore:
             self.tasks_dir,
             self.events_dir,
             self.feedback_dir,
+            self.feedback_discussions_dir,
             self.attempts_dir,
             self.artifacts_dir,
             self.outbox_dir,
@@ -58,6 +61,15 @@ class FileStore:
 
     def list_feedback(self, task_id: str) -> list[FeedbackRecord]:
         return self._read_jsonl(self.feedback_dir / f"{task_id}.jsonl", FeedbackRecord.from_dict)
+
+    def append_feedback_discussion(self, entry: FeedbackDiscussionEntry) -> None:
+        self._append_jsonl(self.feedback_discussions_dir / f"{entry.task_id}.jsonl", entry.to_dict())
+
+    def list_feedback_discussions(self, task_id: str) -> list[FeedbackDiscussionEntry]:
+        return self._read_jsonl(
+            self.feedback_discussions_dir / f"{task_id}.jsonl",
+            FeedbackDiscussionEntry.from_dict,
+        )
 
     def append_attempt(self, attempt: Attempt) -> None:
         self._append_jsonl(self.attempts_dir / f"{attempt.task_id}.jsonl", attempt.to_dict())

@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { cardSubtitle } from "../kanban";
 import type { TaskCard, TaskDetail } from "../types";
 import type { ReactNode } from "react";
@@ -6,11 +7,21 @@ interface TaskDrawerProps {
   task: TaskCard | null;
   detail: TaskDetail | null;
   loading: boolean;
+  saving: boolean;
   error: string | null;
+  onSubmitFeedbackDiscussion: (payload: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }
 
-export function TaskDrawer({ task, detail, loading, error, onClose }: TaskDrawerProps) {
+export function TaskDrawer({
+  task,
+  detail,
+  loading,
+  saving,
+  error,
+  onSubmitFeedbackDiscussion,
+  onClose,
+}: TaskDrawerProps) {
   if (!task) return null;
 
   const annotationArtifacts = detail?.artifacts.filter((artifact) => artifact.kind === "annotation_result") ?? [];
@@ -101,23 +112,129 @@ export function TaskDrawer({ task, detail, loading, error, onClose }: TaskDrawer
             ))}
           </DetailSection>
 
-          <DetailSection title={`Feedback (${detail.feedback.length})`}>
+          <DetailSection title={`Feedback Agreement (${detail.feedback.length})`}>
             {detail.feedback.length === 0 ? (
               <p className="empty-detail">No QC or Human Review feedback recorded.</p>
             ) : (
-              detail.feedback.map((item) => (
-                <TimelineItem
-                  key={String(item.feedback_id)}
-                  title={`${String(item.severity)} · ${String(item.category)}`}
-                  meta={String(item.message)}
-                  value={item}
-                />
-              ))
+              <>
+                <ConsensusSummary detail={detail} />
+                {detail.feedback.map((item) => (
+                  <FeedbackAgreementCard
+                    key={String(item.feedback_id)}
+                    feedback={item}
+                    discussions={detail.feedback_discussions.filter(
+                      (entry) => entry.feedback_id === item.feedback_id,
+                    )}
+                    saving={saving}
+                    onSubmit={onSubmitFeedbackDiscussion}
+                  />
+                ))}
+              </>
             )}
           </DetailSection>
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function ConsensusSummary({ detail }: { detail: TaskDetail }) {
+  const consensus = detail.feedback_consensus;
+  return (
+    <div className={consensus.can_accept_by_consensus ? "consensus-box accepted" : "consensus-box"}>
+      <strong>{consensus.consensus_feedback}/{consensus.total_feedback} feedback items agreed</strong>
+      <span>
+        {consensus.can_accept_by_consensus
+          ? "Annotator and QC have reached agreement; QC can pass."
+          : "Open feedback still needs annotator/QC agreement."}
+      </span>
+    </div>
+  );
+}
+
+function FeedbackAgreementCard({
+  feedback,
+  discussions,
+  saving,
+  onSubmit,
+}: {
+  feedback: Record<string, unknown>;
+  discussions: Array<Record<string, unknown>>;
+  saving: boolean;
+  onSubmit: (payload: Record<string, unknown>) => Promise<void>;
+}) {
+  const [role, setRole] = useState("annotator");
+  const [stance, setStance] = useState("partial_agree");
+  const [message, setMessage] = useState("");
+  const [consensus, setConsensus] = useState(false);
+  const consensusReached = useMemo(() => discussions.some((entry) => entry.consensus === true), [discussions]);
+
+  async function submit() {
+    await onSubmit({
+      feedback_id: feedback.feedback_id,
+      role,
+      stance,
+      message,
+      consensus,
+      created_by: role,
+    });
+    setMessage("");
+    setConsensus(false);
+  }
+
+  return (
+    <div className="feedback-card">
+      <div className="feedback-card-header">
+        <div>
+          <strong>{String(feedback.severity)} · {String(feedback.category)}</strong>
+          <p>{String(feedback.message)}</p>
+        </div>
+        <span className={consensusReached ? "agreement-pill accepted" : "agreement-pill"}>
+          {consensusReached ? "Agreed" : "Open"}
+        </span>
+      </div>
+
+      {discussions.length > 0 ? (
+        <div className="discussion-stack">
+          {discussions.map((entry) => (
+            <TimelineItem
+              key={String(entry.entry_id)}
+              title={`${String(entry.role)} · ${String(entry.stance)}${entry.consensus ? " · consensus" : ""}`}
+              meta={String(entry.message)}
+              value={entry}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="empty-detail">No annotator/QC discussion yet.</p>
+      )}
+
+      <div className="agreement-form">
+        <select value={role} onChange={(event) => setRole(event.target.value)}>
+          <option value="annotator">Annotator</option>
+          <option value="qc">QC</option>
+          <option value="coordinator">Coordinator</option>
+        </select>
+        <select value={stance} onChange={(event) => setStance(event.target.value)}>
+          <option value="agree">Agree</option>
+          <option value="partial_agree">Partially agree</option>
+          <option value="disagree">Disagree</option>
+          <option value="proposal">Proposal</option>
+        </select>
+        <textarea
+          placeholder="Record the annotator/QC opinion, agreed points, or final resolution."
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+        />
+        <label className="checkbox-row">
+          <input checked={consensus} type="checkbox" onChange={(event) => setConsensus(event.target.checked)} />
+          Mark as consensus between annotator and QC
+        </label>
+        <button className="primary-button" type="button" disabled={saving || !message.trim()} onClick={submit}>
+          {saving ? "Saving" : "Add Discussion"}
+        </button>
+      </div>
+    </div>
   );
 }
 

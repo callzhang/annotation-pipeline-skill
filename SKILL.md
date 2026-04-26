@@ -12,7 +12,7 @@ Core responsibilities:
 - Ingest raw JSONL tasks with `annotation-pipeline create-tasks`.
 - Run subagent cycles for LLM-backed annotation work.
 - Monitor queues and surface tasks that need Human Review.
-- Record QC feedback so annotators can manually update labels or apply batch code changes.
+- Record QC feedback and annotator/QC discussion so both sides can agree on the final label decision.
 - Keep provider settings in project config, not in chat history.
 
 ## Configure Subagents
@@ -36,3 +36,7 @@ Do not put raw secrets in skill docs or committed config. Prefer `api_key_env`.
 ## Human Review
 
 Human Review is optional and sits after QC. When a task is routed there, remind the user that the goal is to decide whether the produced labels are usable for training data, need manual correction, or need a batch/code update rule.
+
+## Feedback Agreement
+
+QC feedback is not a one-way order. The annotator and QC agent may exchange opinions, partially agree, and record a final consensus. When all open feedback items have consensus, the task can pass QC and move to Accepted even if the final resolution differs from the original QC suggestion.

@@ -15,6 +15,7 @@ Implemented in the first backend foundation slice:
 - YAML-backed subagent provider, workflow, annotator, and external-task config loading.
 - Structured annotator capability selection.
 - Append-only feedback records.
+- Annotator/QC feedback discussion records with consensus-based acceptance.
 - Compact feedback bundle builder.
 - Idempotent external task pull mapping.
 - Local outbox records for status and submit operations.
@@ -163,6 +164,8 @@ targets:
 ```
 
 Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis.
+
+QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
 
 Serve the dashboard API:
 

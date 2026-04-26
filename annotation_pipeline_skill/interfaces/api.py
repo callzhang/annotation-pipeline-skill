@@ -8,6 +8,10 @@ from typing import Any
 
 import yaml
 
+from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry
+from annotation_pipeline_skill.core.states import TaskStatus
+from annotation_pipeline_skill.core.transitions import transition_task
+from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot
 from annotation_pipeline_skill.store.file_store import FileStore
 
@@ -50,6 +54,13 @@ class DashboardApi:
             return self._update_config_response(config_id, body)
         return self._json_response(404, {"error": "not_found"})
 
+    def handle_post(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        route = path.split("?", 1)[0]
+        if route.startswith("/api/tasks/") and route.endswith("/feedback-discussions"):
+            task_id = route.removeprefix("/api/tasks/").removesuffix("/feedback-discussions").strip("/")
+            return self._post_feedback_discussion_response(task_id, body)
+        return self._json_response(404, {"error": "not_found"})
+
     def _json_response(self, status: int, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
         return status, {"content-type": "application/json"}, body
@@ -72,6 +83,63 @@ class DashboardApi:
                 "artifacts": artifacts,
                 "events": [event.to_dict() for event in self.store.list_events(task_id)],
                 "feedback": [feedback.to_dict() for feedback in self.store.list_feedback(task_id)],
+                "feedback_discussions": [
+                    entry.to_dict()
+                    for entry in self.store.list_feedback_discussions(task_id)
+                ],
+                "feedback_consensus": build_feedback_consensus_summary(self.store, task_id),
+            },
+        )
+
+    def _post_feedback_discussion_response(self, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            task = self.store.load_task(task_id)
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "task_not_found"})
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+
+        feedback_id = str(payload.get("feedback_id") or "")
+        if feedback_id not in {feedback.feedback_id for feedback in self.store.list_feedback(task_id)}:
+            return self._json_response(400, {"error": "unknown_feedback_id"})
+        entry = FeedbackDiscussionEntry.new(
+            task_id=task_id,
+            feedback_id=feedback_id,
+            role=str(payload.get("role") or "annotator"),
+            stance=str(payload.get("stance") or "comment"),
+            message=str(payload.get("message") or ""),
+            agreed_points=list(payload.get("agreed_points") or []),
+            disputed_points=list(payload.get("disputed_points") or []),
+            proposed_resolution=payload.get("proposed_resolution"),
+            consensus=bool(payload.get("consensus", False)),
+            created_by=str(payload.get("created_by") or payload.get("role") or "unknown"),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+        self.store.append_feedback_discussion(entry)
+
+        consensus = build_feedback_consensus_summary(self.store, task_id)
+        if consensus["can_accept_by_consensus"] and task.status in {TaskStatus.QC, TaskStatus.HUMAN_REVIEW}:
+            event = transition_task(
+                task,
+                TaskStatus.ACCEPTED,
+                actor=entry.created_by,
+                reason="feedback consensus accepted by annotator and qc",
+                stage="qc",
+                metadata={"feedback_id": feedback_id, "discussion_entry_id": entry.entry_id},
+            )
+            self.store.append_event(event)
+            self.store.save_task(task)
+
+        return self._json_response(
+            200,
+            {
+                "entry": entry.to_dict(),
+                "feedback_consensus": consensus,
+                "task": self.store.load_task(task_id).to_dict(),
             },
         )
 
@@ -134,6 +202,17 @@ def make_handler(api: DashboardApi) -> type[BaseHTTPRequestHandler]:
             content_length = int(self.headers.get("content-length", "0"))
             request_body = self.rfile.read(content_length)
             status, headers, body = api.handle_put(self.path, request_body)
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            content_length = int(self.headers.get("content-length", "0"))
+            request_body = self.rfile.read(content_length)
+            status, headers, body = api.handle_post(self.path, request_body)
             self.send_response(status)
             for name, value in headers.items():
                 self.send_header(name, value)
