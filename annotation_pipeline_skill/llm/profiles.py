@@ -8,7 +8,8 @@ from typing import Literal, Mapping
 import yaml
 
 
-ProviderName = Literal["openai_responses", "local_cli"]
+ProviderName = Literal["openai_responses", "openai_compatible", "local_cli"]
+ProviderFlavor = Literal["deepseek", "glm", "minimax"]
 CliKind = Literal["codex", "claude"]
 
 
@@ -21,6 +22,7 @@ class LLMProfile:
     name: str
     provider: ProviderName
     model: str
+    provider_flavor: ProviderFlavor | None = None
     api_key: str | None = None
     api_key_env: str | None = None
     base_url: str | None = None
@@ -95,13 +97,14 @@ def _parse_profile(name: str, raw: object) -> LLMProfile:
     if not isinstance(raw, dict):
         raise ProfileValidationError(f"LLM profile must be a mapping: {name}")
     provider = raw.get("provider")
-    if provider not in {"openai_responses", "local_cli"}:
+    if provider not in {"openai_responses", "openai_compatible", "local_cli"}:
         raise ProfileValidationError(f"LLM profile {name} has invalid provider")
     model = _required_string(raw.get("model"), f"profile {name} model")
     profile = LLMProfile(
         name=name,
         provider=provider,
         model=model,
+        provider_flavor=_optional_provider_flavor(raw.get("provider_flavor"), f"profile {name} provider_flavor"),
         api_key=_optional_string(raw.get("api_key"), f"profile {name} api_key"),
         api_key_env=_optional_string(raw.get("api_key_env"), f"profile {name} api_key_env"),
         base_url=_optional_string(raw.get("base_url"), f"profile {name} base_url"),
@@ -123,6 +126,14 @@ def _parse_profile(name: str, raw: object) -> LLMProfile:
 
 def _validate_profile(profile: LLMProfile) -> None:
     if profile.provider == "openai_responses":
+        if not profile.base_url:
+            raise ProfileValidationError(f"LLM profile {profile.name} missing base_url")
+        if not (profile.api_key or profile.api_key_env):
+            raise ProfileValidationError(f"LLM profile {profile.name} missing api_key or api_key_env")
+        return
+    if profile.provider == "openai_compatible":
+        if not profile.provider_flavor:
+            raise ProfileValidationError(f"LLM profile {profile.name} missing provider_flavor")
         if not profile.base_url:
             raise ProfileValidationError(f"LLM profile {profile.name} missing base_url")
         if not (profile.api_key or profile.api_key_env):
@@ -159,6 +170,14 @@ def _optional_cli_kind(value: object, label: str) -> CliKind | None:
     if value is None:
         return None
     if value not in {"codex", "claude"}:
+        raise ProfileValidationError(f"invalid {label}")
+    return value
+
+
+def _optional_provider_flavor(value: object, label: str) -> ProviderFlavor | None:
+    if value is None:
+        return None
+    if value not in {"deepseek", "glm", "minimax"}:
         raise ProfileValidationError(f"invalid {label}")
     return value
 
