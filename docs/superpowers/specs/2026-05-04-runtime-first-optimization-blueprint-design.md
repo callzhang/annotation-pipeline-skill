@@ -154,7 +154,7 @@ The local runtime should:
 - Keep due retry work visible until it drains.
 - Expose runtime health through the API.
 
-Phase 1 may detect stale active runs without automatically repairing every case. Automatic repair can be added after the read model is reliable.
+Phase 1 may detect stale active runs without automatically resolving every case. Automatic stale-run recovery can be added after the read model is reliable.
 
 ### API
 
@@ -201,10 +201,10 @@ Extend feedback discussion into a per-feedback timeline with explicit resolution
 
 On QC failure, the next annotation prompt must include unresolved feedback and relevant discussion history.
 
-Annotator repair modes should be represented explicitly:
+Annotator update modes should be represented explicitly:
 
 - Manual edit.
-- Batch/code repair.
+- Batch/code update.
 - Model-assisted reannotation.
 
 Add validator lint policy artifacts. QC can suggest policy changes, but those changes should not become active from one QC opinion alone. Policy activation should require configured agreement thresholds between QC and annotator.
@@ -411,6 +411,6 @@ The blueprint does not require:
 - systemd.
 - Multi-machine scheduling.
 - NER-specific validators in core.
-- Reintroducing fake runtime or fake providers.
+- Reintroducing product-only placeholder runtimes or providers. Scripted doubles are still acceptable in tests.
 
 Those can exist as optional adapters or external deployments later, but the open-source skill core should remain local-first and task-type agnostic.

@@ -1,14 +1,19 @@
 import type {
   ConfigSnapshot,
+  CoordinatorLongTailIssue,
+  CoordinatorLongTailIssuePayload,
+  CoordinatorReport,
+  CoordinatorRuleUpdate,
+  CoordinatorRuleUpdatePayload,
   EventLog,
   KanbanSnapshot,
   ProjectSnapshot,
+  ProviderConfigSnapshot,
   RuntimeCyclesResponse,
   RuntimeMonitorReport,
   RuntimeRunOnceResponse,
   RuntimeSnapshot,
   TaskDetail,
-  ProviderConfigSnapshot,
   ReadinessReport,
   OutboxSummary,
 } from "./types";
@@ -176,4 +181,46 @@ export async function saveProviderConfig(payload: {
     throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Provider save returned ${response.status}`);
   }
   return response.json() as Promise<ProviderConfigSnapshot>;
+}
+
+export async function fetchCoordinatorReport(projectId: string | null = null): Promise<CoordinatorReport> {
+  const response = await fetch(`/api/coordinator${projectQuery(projectId)}`);
+  if (!response.ok) {
+    throw new Error(`Coordinator API returned ${response.status}`);
+  }
+  return response.json() as Promise<CoordinatorReport>;
+}
+
+export async function postCoordinatorRuleUpdate(
+  payload: CoordinatorRuleUpdatePayload,
+): Promise<CoordinatorRuleUpdate> {
+  const response = await fetch("/api/coordinator/rule-updates", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(
+      errorPayload?.detail ?? errorPayload?.error ?? `Coordinator rule update returned ${response.status}`,
+    );
+  }
+  return response.json() as Promise<CoordinatorRuleUpdate>;
+}
+
+export async function postCoordinatorLongTailIssue(
+  payload: CoordinatorLongTailIssuePayload,
+): Promise<CoordinatorLongTailIssue> {
+  const response = await fetch("/api/coordinator/long-tail-issues", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(
+      errorPayload?.detail ?? errorPayload?.error ?? `Coordinator long-tail issue returned ${response.status}`,
+    );
+  }
+  return response.json() as Promise<CoordinatorLongTailIssue>;
 }

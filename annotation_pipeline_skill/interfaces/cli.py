@@ -27,6 +27,7 @@ from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
+from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
 from annotation_pipeline_skill.services.external_task_service import ExternalTaskService
 from annotation_pipeline_skill.services.export_service import TrainingDataExportService
 from annotation_pipeline_skill.services.human_review_service import HumanReviewService
@@ -273,6 +274,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     human_review_decide.set_defaults(handler=handle_human_review_decide)
 
+    coordinator_parser = subparsers.add_parser("coordinator")
+    coordinator_subparsers = coordinator_parser.add_subparsers(required=True)
+
+    coordinator_report = coordinator_subparsers.add_parser("report")
+    coordinator_report.add_argument("--project-root", type=Path, default=Path.cwd())
+    coordinator_report.add_argument("--project-id")
+    coordinator_report.set_defaults(handler=handle_coordinator_report)
+
+    coordinator_rule = coordinator_subparsers.add_parser("rule-update")
+    coordinator_rule.add_argument("--project-root", type=Path, default=Path.cwd())
+    coordinator_rule.add_argument("--project-id", required=True)
+    coordinator_rule.add_argument("--source", required=True)
+    coordinator_rule.add_argument("--summary", required=True)
+    coordinator_rule.add_argument("--action", required=True)
+    coordinator_rule.add_argument("--created-by", default="coordinator-agent")
+    coordinator_rule.add_argument("--task-id", action="append", default=[])
+    coordinator_rule.set_defaults(handler=handle_coordinator_rule_update)
+
+    coordinator_issue = coordinator_subparsers.add_parser("long-tail-issue")
+    coordinator_issue.add_argument("--project-root", type=Path, default=Path.cwd())
+    coordinator_issue.add_argument("--project-id", required=True)
+    coordinator_issue.add_argument("--category", required=True)
+    coordinator_issue.add_argument("--summary", required=True)
+    coordinator_issue.add_argument("--recommended-action", required=True)
+    coordinator_issue.add_argument("--severity", default="medium")
+    coordinator_issue.add_argument("--created-by", default="coordinator-agent")
+    coordinator_issue.add_argument("--task-id", action="append", default=[])
+    coordinator_issue.set_defaults(handler=handle_coordinator_long_tail_issue)
+
     external_parser = subparsers.add_parser("external")
     external_subparsers = external_parser.add_subparsers(required=True)
 
@@ -305,6 +335,7 @@ def handle_init(args: argparse.Namespace) -> int:
         "exports",
         "runtime",
         "snapshots",
+        "coordination",
     ):
         (config_root / name).mkdir(parents=True, exist_ok=True)
     for filename, content in CONFIG_FILES.items():
@@ -319,7 +350,17 @@ def handle_doctor(args: argparse.Namespace) -> int:
         load_project_config(args.project_root)
     except ConfigValidationError:
         return 1
-    required_dirs = ("tasks", "events", "feedback", "feedback_discussions", "attempts", "artifacts", "outbox", "exports")
+    required_dirs = (
+        "tasks",
+        "events",
+        "feedback",
+        "feedback_discussions",
+        "attempts",
+        "artifacts",
+        "outbox",
+        "exports",
+        "coordination",
+    )
     config_root = args.project_root / ".annotation-pipeline"
     return 0 if all((config_root / name).is_dir() for name in required_dirs) else 1
 
@@ -546,6 +587,42 @@ def handle_human_review_decide(args: argparse.Namespace) -> int:
         correction_mode=args.correction_mode,
     )
     print(json.dumps(result.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_coordinator_report(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    report = CoordinatorService(store).build_report(project_id=args.project_id)
+    print(json.dumps(report, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_coordinator_rule_update(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    record = CoordinatorService(store).record_rule_update(
+        project_id=args.project_id,
+        source=args.source,
+        summary=args.summary,
+        action=args.action,
+        created_by=args.created_by,
+        task_ids=args.task_id,
+    )
+    print(json.dumps(record, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_coordinator_long_tail_issue(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    record = CoordinatorService(store).record_long_tail_issue(
+        project_id=args.project_id,
+        category=args.category,
+        summary=args.summary,
+        recommended_action=args.recommended_action,
+        severity=args.severity,
+        created_by=args.created_by,
+        task_ids=args.task_id,
+    )
+    print(json.dumps(record, sort_keys=True, indent=2))
     return 0
 
 

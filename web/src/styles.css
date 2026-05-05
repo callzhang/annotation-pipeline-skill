@@ -356,6 +356,65 @@ button {
   padding: 8px 10px;
 }
 
+.preview-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.preview-panel {
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.image-preview-frame {
+  background: #111820;
+  position: relative;
+}
+
+.image-preview-frame img {
+  display: block;
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.bbox-overlay {
+  border: 2px solid #f0c84b;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+  display: block;
+  position: absolute;
+}
+
+.bbox-overlay span {
+  background: #f0c84b;
+  color: #172026;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 2px 4px;
+}
+
+.bbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.bbox-list span {
+  background: #eef2f4;
+  border: 1px solid #d7e0e5;
+  border-radius: 999px;
+  color: #2b3a42;
+  font-size: 12px;
+  padding: 3px 7px;
+}
+
 .json-block {
   background: #101820;
   color: #e9f1f4;
@@ -945,6 +1004,272 @@ button {
   overflow-wrap: anywhere;
 }
 
+.coordinator-panel {
+  display: grid;
+  gap: 14px;
+  margin: 0 auto;
+  max-width: 1680px;
+}
+
+.notice.success {
+  background: #e5f3ed;
+  border-color: #9bc8b7;
+  color: #1f5a43;
+}
+
+.notice.error {
+  background: #f7e6df;
+  border-color: #e5b29c;
+  color: #6d2c12;
+}
+
+.coordinator-empty,
+.coordinator-section,
+.coordinator-stat {
+  background: #ffffff;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.coordinator-empty h3 {
+  font-size: 15px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.coordinator-empty p {
+  color: #52616b;
+  font-size: 13px;
+  margin: 5px 0 0;
+}
+
+.coordinator-stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.coordinator-stat {
+  display: grid;
+  gap: 7px;
+  min-height: 74px;
+}
+
+.coordinator-stat span {
+  color: #52616b;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.coordinator-stat strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.coordinator-stat.success {
+  border-color: #9bc8b7;
+}
+
+.coordinator-stat.warning {
+  border-color: #e8c46b;
+}
+
+.coordinator-stat.critical {
+  border-color: #e5b29c;
+}
+
+.coordinator-layout {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.coordinator-section {
+  display: grid;
+  gap: 12px;
+}
+
+.coordinator-section-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.coordinator-section-header h3 {
+  font-size: 15px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.coordinator-row-list,
+.coordinator-checks,
+.coordinator-table {
+  display: grid;
+  gap: 8px;
+}
+
+.coordinator-action,
+.coordinator-diagnostic,
+.coordinator-record-row,
+.coordinator-check {
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.coordinator-action {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.coordinator-action span,
+.coordinator-diagnostic summary span,
+.coordinator-record-row strong {
+  font-size: 13px;
+  font-weight: 720;
+  overflow-wrap: anywhere;
+}
+
+.coordinator-action small,
+.coordinator-diagnostic summary small,
+.coordinator-record-row small {
+  color: #52616b;
+  font-size: 12px;
+}
+
+.coordinator-action.warning,
+.coordinator-diagnostic.warning,
+.coordinator-record-row.warning {
+  background: #fff4d8;
+  border-color: #e8c46b;
+}
+
+.coordinator-action.critical,
+.coordinator-diagnostic.critical,
+.coordinator-record-row.critical {
+  background: #f7e6df;
+  border-color: #e5b29c;
+}
+
+.coordinator-diagnostic summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  list-style-position: inside;
+}
+
+.coordinator-diagnostic p {
+  color: #52616b;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.coordinator-check {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: 1fr auto;
+}
+
+.coordinator-check.ok {
+  background: #e5f3ed;
+  border-color: #9bc8b7;
+}
+
+.coordinator-check.warning {
+  background: #fff4d8;
+  border-color: #e8c46b;
+}
+
+.coordinator-check.error {
+  background: #f7e6df;
+  border-color: #e5b29c;
+}
+
+.coordinator-check span,
+.coordinator-check strong {
+  font-size: 12px;
+}
+
+.coordinator-check p {
+  color: #52616b;
+  font-size: 12px;
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.coordinator-form {
+  border-bottom: 1px solid #d7e0e5;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-bottom: 12px;
+}
+
+.coordinator-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.coordinator-form label.wide,
+.coordinator-form button {
+  grid-column: 1 / -1;
+}
+
+.coordinator-form span {
+  color: #52616b;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.coordinator-form input,
+.coordinator-form select,
+.coordinator-form textarea {
+  background: #ffffff;
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  color: #172026;
+  font: inherit;
+  min-height: 34px;
+  padding: 6px 9px;
+  width: 100%;
+}
+
+.coordinator-form textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.coordinator-form input:disabled,
+.coordinator-form select:disabled,
+.coordinator-form textarea:disabled {
+  background: #eef2f4;
+  color: #667781;
+}
+
+.coordinator-record-row {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1.4fr 0.7fr 0.8fr 0.6fr;
+}
+
+.coordinator-record-row small {
+  grid-column: 1 / -1;
+}
+
+.coordinator-record-row span {
+  color: #2b3a42;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     padding: 14px;
@@ -991,6 +1316,19 @@ button {
   .runtime-grid,
   .runtime-grid.secondary {
     grid-template-columns: 1fr;
+  }
+
+  .coordinator-stats,
+  .coordinator-layout,
+  .coordinator-form,
+  .coordinator-record-row {
+    grid-template-columns: 1fr;
+  }
+
+  .coordinator-form label.wide,
+  .coordinator-form button,
+  .coordinator-record-row small {
+    grid-column: auto;
   }
 
   .task-drawer {

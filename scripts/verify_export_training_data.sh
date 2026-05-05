@@ -108,7 +108,7 @@ if not (store_root / "exports/export-1/manifest.json").exists():
     raise SystemExit("manifest.json was not saved")
 if readiness["ready_for_training"] is not False:
     raise SystemExit(f"expected readiness to require blocker repair: {readiness}")
-if readiness["recommended_next_action"] != "repair_export_blockers":
+if readiness["recommended_next_action"] != "fix_export_blockers":
     raise SystemExit(f"unexpected readiness action: {readiness}")
 if readiness["validation_blockers"] != expected_excluded:
     raise SystemExit(f"unexpected readiness blockers: {readiness['validation_blockers']}")

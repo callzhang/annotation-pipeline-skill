@@ -46,6 +46,7 @@ def test_cli_init_creates_project_layout(tmp_path):
     assert (config_root / "annotators.yaml").exists()
     assert (config_root / "tasks").is_dir()
     assert (config_root / "exports").is_dir()
+    assert (config_root / "coordination").is_dir()
 
 
 def test_cli_init_writes_runtime_config(tmp_path):
@@ -63,6 +64,37 @@ def test_cli_doctor_succeeds_after_init(tmp_path):
     exit_code = main(["doctor", "--project-root", str(tmp_path)])
 
     assert exit_code == 0
+
+
+def test_cli_coordinator_records_rule_update_and_report(tmp_path, capsys):
+    main(["init", "--project-root", str(tmp_path)])
+
+    exit_code = main(
+        [
+            "coordinator",
+            "rule-update",
+            "--project-root",
+            str(tmp_path),
+            "--project-id",
+            "pipe",
+            "--source",
+            "qc",
+            "--summary",
+            "Need stricter entity boundary rule.",
+            "--action",
+            "Update annotation_rules.yaml before rerun.",
+            "--task-id",
+            "task-1",
+        ]
+    )
+    record = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert record["project_id"] == "pipe"
+
+    exit_code = main(["coordinator", "report", "--project-root", str(tmp_path), "--project-id", "pipe"])
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report["rule_updates"][0]["summary"] == "Need stricter entity boundary rule."
 
 
 def test_cli_runtime_status_returns_snapshot_after_init(tmp_path, capsys):
@@ -296,7 +328,7 @@ def test_cli_report_readiness_returns_project_action(tmp_path, capsys):
     assert exit_code == 0
     assert payload["project_id"] == "pipe"
     assert payload["accepted_count"] == 1
-    assert payload["recommended_next_action"] == "repair_export_blockers"
+    assert payload["recommended_next_action"] == "fix_export_blockers"
 
 
 def test_cli_outbox_status_reports_counts(tmp_path, capsys):

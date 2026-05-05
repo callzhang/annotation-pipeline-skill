@@ -9,9 +9,9 @@ The user installs the skill because they need labeled training data for model tr
 3. The engineer configures stage providers in `llm_profiles.yaml`, choosing OpenAI Responses API or a local LLM CLI such as Codex per stage.
 4. The agent runs subagent annotation and QC cycles.
 5. QC feedback is recorded against attempts and artifacts.
-6. Annotators review feedback, then choose either manual annotation edits or batch/code repair rules.
+6. Annotators review feedback, then choose either manual annotation edits or batch/code update rules.
 7. Human Review is requested only after QC when the policy requires user judgment.
-8. Accepted data is submitted or merged for training.
+8. Accepted data is exported or submitted for training.
 9. Over time, the same workflow can evolve into active learning or RL data workflow management.
 
 ## Multimodal Extension Example

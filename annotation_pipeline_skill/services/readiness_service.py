@@ -144,7 +144,7 @@ def _recommended_next_action(
     if open_feedback_count:
         return "resolve_feedback"
     if validation_blockers:
-        return "repair_export_blockers"
+        return "fix_export_blockers"
     if accepted_count == 0:
         return "run_annotation_runtime"
     if exportable_count:

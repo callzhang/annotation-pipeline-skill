@@ -246,3 +246,79 @@ export interface ProviderConfigSnapshot {
   };
   diagnostics: Record<string, ProviderDiagnostic>;
 }
+
+export interface CoordinatorProviderDiagnostics {
+  config_valid: boolean;
+  error?: string;
+  targets?: Record<string, string>;
+  diagnostics: Record<string, ProviderDiagnostic>;
+}
+
+export interface CoordinatorRuleUpdate {
+  record_id: string;
+  project_id: string;
+  source: string;
+  summary: string;
+  action: string;
+  status: string;
+  task_ids: string[];
+  created_at: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CoordinatorLongTailIssue {
+  issue_id: string;
+  project_id: string;
+  category: string;
+  summary: string;
+  recommended_action: string;
+  severity: string;
+  status: string;
+  task_ids: string[];
+  created_at: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CoordinatorReport {
+  project_id: string | null;
+  generated_at: string;
+  task_count: number;
+  status_counts: Record<string, number>;
+  human_review_task_ids: string[];
+  blocked_task_ids: string[];
+  open_feedback_count: number;
+  open_feedback_ids: string[];
+  feedback_by_category: Record<string, number>;
+  blocking_feedback_count: number;
+  outbox_counts: {
+    pending: number;
+    sent: number;
+    dead_letter: number;
+  };
+  readiness: ReadinessReport | null;
+  provider_diagnostics: CoordinatorProviderDiagnostics;
+  rule_updates: CoordinatorRuleUpdate[];
+  long_tail_issues: CoordinatorLongTailIssue[];
+  recommended_actions: string[];
+}
+
+export interface CoordinatorRuleUpdatePayload {
+  project_id: string;
+  source: string;
+  summary: string;
+  action: string;
+  created_by: string;
+  task_ids: string[];
+}
+
+export interface CoordinatorLongTailIssuePayload {
+  project_id: string;
+  category: string;
+  summary: string;
+  recommended_action: string;
+  severity: string;
+  created_by: string;
+  task_ids: string[];
+}

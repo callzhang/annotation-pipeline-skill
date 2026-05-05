@@ -57,7 +57,8 @@ Use `.annotation-pipeline/llm_profiles.yaml` to configure stage subagents.
 Supported runtimes:
 
 - OpenAI Responses API through `provider: openai_responses`
-- local LLM CLI through `provider: local_cli`, with `cli_kind: codex`
+- OpenAI-compatible API through `provider: openai_compatible`, with `provider_flavor: deepseek`, `glm`, or `minimax`
+- local LLM CLI through `provider: local_cli`, with `cli_kind: codex` or `claude`
 
 Run `annotation-pipeline provider doctor --project-root <project>` after edits.
 Run `annotation-pipeline run-cycle --runtime subagent --project-root <project>` to use configured subagents.
@@ -89,3 +90,25 @@ Use `--action accept` for training-ready labels, `--action reject` for unusable 
 ## Feedback Agreement
 
 QC feedback is not a one-way order. The annotator and QC agent may exchange opinions, partially agree, and record a final consensus. When all open feedback items have consensus, the task can pass QC and move to Accepted even if the final resolution differs from the original QC suggestion.
+
+## Coordinator Records
+
+When QC, Human Review, or model-training feedback reveals a project-level issue, record it as a coordinator artifact instead of leaving it only in chat:
+
+```bash
+annotation-pipeline coordinator rule-update \
+  --project-root ./annotation-project \
+  --project-id <project-id> \
+  --source qc \
+  --summary "Boundary examples are missing." \
+  --action "Update annotation_rules.yaml and rerun affected tasks."
+
+annotation-pipeline coordinator long-tail-issue \
+  --project-root ./annotation-project \
+  --project-id <project-id> \
+  --category ambiguous_case \
+  --summary "This case needs user guidance." \
+  --recommended-action "Ask the algorithm engineer for a rule."
+```
+
+Use `annotation-pipeline coordinator report --project-root ./annotation-project --project-id <project-id>` before handoff. It summarizes queues, Human Review, feedback, provider diagnostics, outbox status, readiness, rule updates, and long-tail issues.

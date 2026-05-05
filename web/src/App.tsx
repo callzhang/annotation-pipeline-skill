@@ -7,6 +7,7 @@ import {
   postHumanReviewDecision,
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
+import { CoordinatorPanel } from "./components/CoordinatorPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { OutboxPanel } from "./components/OutboxPanel";
@@ -18,7 +19,7 @@ import { countCards } from "./kanban";
 import type { KanbanSnapshot, ProjectSummary, TaskCard, TaskDetail } from "./types";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "config" | "events";
+type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
@@ -162,6 +163,13 @@ export default function App() {
         <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("providers")}>
           Providers
         </button>
+        <button
+          className={viewMode === "coordinator" ? "view-tab selected" : "view-tab"}
+          type="button"
+          onClick={() => setViewMode("coordinator")}
+        >
+          Coordinator
+        </button>
         <button className={viewMode === "config" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("config")}>
           Configuration
         </button>
@@ -178,6 +186,7 @@ export default function App() {
       {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} /> : null}
       {viewMode === "outbox" ? <OutboxPanel projectId={selectedProjectId} /> : null}
       {viewMode === "providers" ? <ProvidersPanel /> : null}
+      {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} /> : null}
       {viewMode === "config" ? <ConfigPanel /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}
       <TaskDrawer

@@ -139,7 +139,7 @@ def test_readiness_report_surfaces_latest_export_invalid_row_blockers(tmp_path):
             "errors": ["annotation_string_must_be_json"],
         }
     ]
-    assert report["recommended_next_action"] == "repair_export_blockers"
+    assert report["recommended_next_action"] == "fix_export_blockers"
 
 
 def test_readiness_report_waits_for_external_outbox_after_export(tmp_path):

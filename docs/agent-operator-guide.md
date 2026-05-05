@@ -30,6 +30,8 @@ The dashboard UI exposes provider configuration in two ways:
 
 The Providers tab is the operator path for changing annotation, QC, coordinator, Human Review, or future model-assist provider targets without editing code. Click Validate to run local provider doctor checks for schema validity, missing API key env vars, and missing local CLI binaries.
 
+Use the Coordinator tab for project-scoped handoff work. It shows Human Review reminders, open feedback, provider health, rule updates, and long-tail issues for the selected project, and it provides forms for recording coordinator rule updates and long-tail issues without leaving the dashboard.
+
 ## Provider Profiles
 
 OpenAI Responses API profile:
@@ -138,6 +140,25 @@ bash scripts/verify_runtime_codex_smoke.sh
 
 This script runs one real `local_codex` task. If Codex is missing, unauthenticated, or the runtime cycle fails, it prints the project path, runtime stderr/stdout, cycle stats, task JSON, events, attempts, and artifacts for diagnosis.
 
+Use the 10-task real Codex project verification before handing the skill to another agent:
+
+```bash
+bash scripts/verify_real_codex_project.sh
+```
+
+That script creates ten tasks, runs real Codex annotation and QC cycles, checks task attempts/artifacts/events/feedback, and verifies the accepted-data export path.
+
+Use the real DeepSeek runtime smoke before handing off a project that routes QC or coordinator work to DeepSeek:
+
+```bash
+set -a
+source ~/.agents/auth/deepseek.env
+set +a
+bash scripts/verify_runtime_deepseek_smoke.sh
+```
+
+The smoke passes when the final task status is `pending` or `accepted`. Pending means DeepSeek returned QC feedback and the task is ready for another annotation cycle; accepted means QC passed.
+
 ## Runtime Operations
 
 Use `annotation-pipeline runtime status --project-root <project>` before starting work. A healthy project has a fresh heartbeat, no stale active runs, and capacity that is not exceeded.
@@ -172,6 +193,43 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 `accept` moves the task to `accepted`, `reject` moves it to `rejected`, and `request_changes` returns it to `annotating`. Every decision writes an audit event and `human_review_decision` artifact so the algorithm engineer can inspect why labels were accepted, rejected, or sent back.
 
 For multimodal projects, keep the core task model generic and add adapters/renderers for images, video, point clouds, or model-specific previews such as bounding boxes from a VC detection model.
+
+Image bounding-box preview artifacts should use `kind: image_bbox_preview` and include `image_url` plus `boxes` or `bounding_boxes` in the payload. The task drawer renders those boxes as preview evidence so the annotator can inspect model-assisted labels before QC.
+
+## Coordinator Records
+
+Use the Coordinator tab during the operator handoff check. Confirm there are no unexpected Human Review reminders, review open feedback, check provider health, and record any rule updates or long-tail issues that the algorithm engineer should decide before more tasks move from Pending to Accepted.
+
+Use coordinator records when feedback implies project-level work rather than only a single task rerun:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline coordinator rule-update \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --source qc \
+  --summary "Boundary examples are missing for product names." \
+  --action "Update annotation_rules.yaml and rerun affected tasks."
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline coordinator long-tail-issue \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --category ambiguous_abbreviation \
+  --summary "Abbreviations need user-specific disambiguation." \
+  --recommended-action "Ask the algorithm engineer for a project rule."
+```
+
+Before user handoff, run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline coordinator report \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2
+```
+
+The report combines queue state, Human Review reminders, open feedback, provider diagnostics, outbox status, readiness, rule updates, and long-tail issues. Use it with the Coordinator tab as the DeepSeek handoff summary when DeepSeek is part of the selected project's provider routing.
 
 ## External Task Pull
 
@@ -215,7 +273,7 @@ The export service writes `training_data.jsonl` plus `manifest.json` under `.ann
 
 Schema `jsonl-training-v2` validates that every exported row has the required training fields and that string annotations are non-empty JSON strings. Invalid rows are excluded and reported as `invalid_training_row` with `row_errors`, so the algorithm engineer does not receive silently malformed training data.
 
-Accepted tasks are exported only when they still have a readable `annotation_result` artifact. Missing annotation artifacts are recorded as excluded validation failures, and the task remains `accepted` so the operator can repair/export again without losing QC history.
+Accepted tasks are exported only when they still have a readable `annotation_result` artifact. Missing annotation artifacts are recorded as excluded validation failures, and the task remains `accepted` so the operator can fix the artifact or export configuration and export again without losing QC history.
 
 Check the coordinator readiness report before handing data to an algorithm engineer:
 

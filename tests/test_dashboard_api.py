@@ -121,6 +121,33 @@ def test_dashboard_api_returns_409_when_runtime_runner_is_unavailable(tmp_path):
     assert json.loads(body.decode("utf-8")) == {"error": "runtime_runner_unavailable"}
 
 
+def test_dashboard_api_returns_coordinator_report_and_records_long_tail_issue(tmp_path):
+    store = FileStore(tmp_path)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_post(
+        "/api/coordinator/long-tail-issues",
+        json.dumps(
+            {
+                "project_id": "pipe",
+                "category": "rare_entity",
+                "summary": "Rare entity needs user guidance.",
+                "recommended_action": "Ask for a labeling rule.",
+                "created_by": "agent",
+                "task_ids": ["task-1"],
+            }
+        ).encode("utf-8"),
+    )
+    issue = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert issue["category"] == "rare_entity"
+
+    status, _headers, body = api.handle_get("/api/coordinator?project=pipe")
+    report = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert report["long_tail_issues"][0]["summary"] == "Rare entity needs user guidance."
+
+
 def test_dashboard_api_returns_runtime_cycles(tmp_path):
     from datetime import datetime, timezone
     from annotation_pipeline_skill.core.runtime import RuntimeCycleStats
@@ -161,7 +188,7 @@ def test_dashboard_api_returns_readiness_report_for_project(tmp_path):
     assert status == 200
     assert payload["project_id"] == "pipe"
     assert payload["accepted_count"] == 1
-    assert payload["recommended_next_action"] == "repair_export_blockers"
+    assert payload["recommended_next_action"] == "fix_export_blockers"
 
 
 def test_dashboard_api_returns_outbox_summary(tmp_path):

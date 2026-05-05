@@ -13,6 +13,7 @@ from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry
 from annotation_pipeline_skill.core.runtime import RuntimeConfig, RuntimeSnapshot
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
+from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
 from annotation_pipeline_skill.services.human_review_service import HumanReviewService
@@ -62,6 +63,8 @@ class DashboardApi:
             return self._json_response(200, {"files": self._config_files()})
         if route == "/api/providers":
             return self._provider_config_response()
+        if route == "/api/coordinator":
+            return self._json_response(200, CoordinatorService(self.store).build_report(project_id=project_id))
         if route == "/api/events":
             return self._json_response(200, {"events": self._event_log(project_id=project_id)})
         if route == "/api/readiness":
@@ -99,6 +102,10 @@ class DashboardApi:
         route = path.split("?", 1)[0]
         if route == "/api/runtime/run-once":
             return self._runtime_run_once_response()
+        if route == "/api/coordinator/rule-updates":
+            return self._post_coordinator_rule_update_response(body)
+        if route == "/api/coordinator/long-tail-issues":
+            return self._post_coordinator_long_tail_issue_response(body)
         if route.startswith("/api/tasks/") and route.endswith("/human-review"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/human-review").strip("/")
             return self._post_human_review_response(task_id, body)
@@ -244,6 +251,51 @@ class DashboardApi:
         except (InvalidTransition, ValueError) as exc:
             return self._json_response(400, {"error": "invalid_human_review_decision", "detail": str(exc)})
         return self._json_response(200, result.to_dict())
+
+    def _post_coordinator_rule_update_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        try:
+            record = CoordinatorService(self.store).record_rule_update(
+                project_id=str(payload.get("project_id") or ""),
+                source=str(payload.get("source") or ""),
+                summary=str(payload.get("summary") or ""),
+                action=str(payload.get("action") or ""),
+                created_by=str(payload.get("created_by") or "coordinator-agent"),
+                task_ids=[str(task_id) for task_id in payload.get("task_ids") or []],
+                status=str(payload.get("status") or "open"),
+                metadata=dict(payload.get("metadata") or {}),
+            )
+        except ValueError as exc:
+            return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
+        return self._json_response(200, record)
+
+    def _post_coordinator_long_tail_issue_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        try:
+            record = CoordinatorService(self.store).record_long_tail_issue(
+                project_id=str(payload.get("project_id") or ""),
+                category=str(payload.get("category") or ""),
+                summary=str(payload.get("summary") or ""),
+                recommended_action=str(payload.get("recommended_action") or ""),
+                severity=str(payload.get("severity") or "medium"),
+                created_by=str(payload.get("created_by") or "coordinator-agent"),
+                task_ids=[str(task_id) for task_id in payload.get("task_ids") or []],
+                status=str(payload.get("status") or "open"),
+                metadata=dict(payload.get("metadata") or {}),
+            )
+        except ValueError as exc:
+            return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
+        return self._json_response(200, record)
 
     def _read_artifact_payload(self, relative_path: str) -> Any:
         path = self.store.root / relative_path

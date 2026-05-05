@@ -3,7 +3,7 @@ import type { ReadinessReport } from "./types";
 const actionLabels: Record<string, string> = {
   complete_human_review: "Complete Human Review",
   resolve_feedback: "Resolve feedback",
-  repair_export_blockers: "Repair export blockers",
+  fix_export_blockers: "Fix export blockers",
   run_annotation_runtime: "Run annotation runtime",
   export_training_data: "Export training data",
   drain_external_outbox: "Drain external outbox",

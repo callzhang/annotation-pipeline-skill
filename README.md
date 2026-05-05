@@ -21,14 +21,14 @@ Implemented in the first backend foundation slice:
 - Local outbox records for status and submit operations.
 - CLI init, doctor, JSONL task creation, subagent cycle, and dashboard serving commands.
 - Configurable subagent runtime through `llm_profiles.yaml`.
-- OpenAI Responses API and local LLM CLI provider profiles.
+- OpenAI Responses API, OpenAI-compatible API, Codex CLI, and Claude CLI provider profiles.
 - Backend Kanban snapshot data shape.
 
 Not implemented yet:
 
 - Streamlit dashboard. This project will not use Streamlit.
 - Production distributed runtime.
-- Real multimodal preview renderers.
+- Production multimodal renderers beyond the current image bounding-box preview artifact display.
 
 ## Design Docs
 
@@ -65,11 +65,28 @@ Run the runtime end-to-end verification:
 bash scripts/verify_runtime_e2e.sh
 ```
 
-Run the multi-cycle runtime progress verification with a deterministic fake Codex CLI:
+Run the multi-cycle runtime progress verification with an in-process scripted test provider:
 
 ```bash
 bash scripts/verify_runtime_progress.sh
 ```
+
+Run a 10-task real Codex project verification after local Codex auth is configured:
+
+```bash
+bash scripts/verify_real_codex_project.sh
+```
+
+Run the real DeepSeek runtime smoke after local DeepSeek auth is configured:
+
+```bash
+set -a
+source ~/.agents/auth/deepseek.env
+set +a
+bash scripts/verify_runtime_deepseek_smoke.sh
+```
+
+The DeepSeek smoke passes when it reports `status=pending` or `status=accepted`. Pending is acceptable when QC returns feedback for another annotation cycle.
 
 Run the training data export verification:
 
@@ -134,7 +151,7 @@ npm run dev
 The Vite dev server proxies `/api` to `http://127.0.0.1:8765`.
 Use `VITE_API_TARGET=http://127.0.0.1:<port>` when the API runs on another port.
 
-The dashboard includes Kanban, Runtime, Readiness, Outbox, Providers, Configuration, and Event Log views. The Outbox view can follow the selected project and shows pending, sent, and dead-letter callback records with retry/error details.
+The dashboard includes Kanban, Runtime, Readiness, Outbox, Providers, Coordinator, Configuration, and Event Log views. The Coordinator tab shows the selected project's Human Review reminders, open feedback, provider diagnostics, rule updates, long-tail issues, and coordinator record forms. The Outbox view can follow the selected project and shows pending, sent, and dead-letter callback records with retry/error details.
 
 ## CLI Workflow
 
@@ -278,6 +295,8 @@ targets:
   annotation: local_codex
 ```
 
+OpenAI-compatible providers use `provider: openai_compatible` with `provider_flavor` set to `deepseek`, `glm`, or `minimax`. The Providers tab exposes these choices without requiring code changes.
+
 Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis. Local Codex runs are isolated and do not reuse prior CLI sessions; feedback and prior artifacts are passed explicitly in the next prompt.
 
 QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
@@ -296,6 +315,37 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 Human Review actions are `accept`, `reject`, and `request_changes`. Each decision writes an audit event plus a `human_review_decision` artifact. `request_changes` returns the task to `annotating` with feedback for either `manual_annotation` or `batch_code_update`.
+
+Record coordinator findings when QC, Human Review, or model-training feedback implies a rule change or a long-tail issue:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline coordinator rule-update \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --source qc \
+  --summary "Boundary examples are missing for product names." \
+  --action "Update annotation_rules.yaml and rerun affected tasks."
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline coordinator long-tail-issue \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --category ambiguous_abbreviation \
+  --summary "Abbreviations need user-specific disambiguation." \
+  --recommended-action "Ask the algorithm engineer for a project rule."
+```
+
+Inspect the coordinator report before handoff:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline coordinator report \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2
+```
+
+The coordinator report combines queue state, Human Review reminders, open feedback, provider diagnostics, outbox state, readiness, rule updates, and long-tail issues.
 
 Export accepted tasks into a traceable JSONL training package:
 

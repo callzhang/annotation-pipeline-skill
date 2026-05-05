@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { cardSubtitle } from "../kanban";
-import type { TaskCard, TaskDetail } from "../types";
+import { previewArtifacts, previewBoxes, previewImageSource, previewTitle } from "../preview";
+import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
 import type { ReactNode } from "react";
 
 interface TaskDrawerProps {
@@ -27,6 +28,7 @@ export function TaskDrawer({
   if (!task) return null;
 
   const annotationArtifacts = detail?.artifacts.filter((artifact) => artifact.kind === "annotation_result") ?? [];
+  const previewEvidence = detail ? previewArtifacts(detail.artifacts) : [];
 
   return (
     <aside className="task-drawer" aria-label="Task detail">
@@ -92,6 +94,16 @@ export function TaskDrawer({
             )}
           </DetailSection>
 
+          {previewEvidence.length > 0 ? (
+            <DetailSection title="Preview Evidence">
+              <div className="preview-stack">
+                {previewEvidence.map((artifact) => (
+                  <PreviewArtifact key={artifact.artifact_id} artifact={artifact} />
+                ))}
+              </div>
+            </DetailSection>
+          ) : null}
+
           <DetailSection title={`Attempts (${detail.attempts.length})`}>
             {detail.attempts.map((attempt) => (
               <TimelineItem
@@ -143,6 +155,49 @@ export function TaskDrawer({
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function PreviewArtifact({ artifact }: { artifact: TaskDetailArtifact }) {
+  const imageSource = previewImageSource(artifact);
+  const boxes = previewBoxes(artifact);
+  return (
+    <div className="preview-panel">
+      <div className="artifact-title">
+        <span>{previewTitle(artifact)}</span>
+        <span>{boxes.length} boxes</span>
+      </div>
+      {imageSource ? (
+        <div className="image-preview-frame">
+          <img alt="" src={imageSource} />
+          {boxes.map((box, index) => (
+            <span
+              className="bbox-overlay"
+              key={`${box.label}-${index}`}
+              style={{
+                left: `${box.left}%`,
+                top: `${box.top}%`,
+                width: `${box.width}%`,
+                height: `${box.height}%`,
+              }}
+              title={`${box.label}${box.score === null ? "" : ` ${box.score}`}`}
+            >
+              <span>{box.label}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {boxes.length > 0 ? (
+        <div className="bbox-list">
+          {boxes.map((box, index) => (
+            <span key={`${box.label}-${index}`}>
+              {box.label}{box.score === null ? "" : ` ${box.score.toFixed(2)}`}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <JsonBlock value={artifact.payload} />
+    </div>
   );
 }
 

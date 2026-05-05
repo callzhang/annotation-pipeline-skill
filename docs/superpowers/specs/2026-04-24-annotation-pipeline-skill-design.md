@@ -2,14 +2,14 @@
 
 ## Status
 
-This spec records the approved design direction for the first implementation cycle of `annotation-pipeline-skill`.
+This spec records the approved design direction for the first implementation cycle of `annotation-pipeline-skill`. Some early MVP wording has been superseded by the current runtime-first implementation notes below: the live product uses `pending` for work waiting to run, has no standalone update state, has no post-acceptance terminal state, and uses scripted doubles only in tests.
 
 The project builds a reusable local-first annotation pipeline skill. It is inspired by `/home/derek/Projects/memory-ner/annotation manager/`, but the implementation must remain independent, task-type agnostic, and suitable for open-source reuse.
 
 ## Goals
 
 - Provide a durable task model for batch annotation pipelines.
-- Support a multi-stage flow: prepare, annotate, validate, QC, optional Human Review, repair, accept or reject, merge.
+- Support a multi-stage flow: prepare, annotate, validate, QC, optional Human Review, accept or reject, and export accepted training data.
 - Provide a Vite + React + TypeScript Kanban dashboard for operational control.
 - Support external task APIs through pull, status callback, and submit result operations.
 - Let users configure LLM providers, stage routes, and annotator capabilities without hard-coding provider-specific behavior into core logic.
@@ -32,29 +32,27 @@ The project builds a reusable local-first annotation pipeline skill. It is inspi
 
 - Python package skeleton under `annotation_pipeline_skill/`.
 - File-system-backed task store.
-- In-process fake runtime for deterministic tests.
-- Local subprocess runtime contract, even if the first tests use the fake runtime.
+- In-process scripted clients for deterministic tests.
+- Local subprocess runtime contract for real Codex/Claude CLI execution.
 - Core domain models and validated state transitions.
 - Append-only audit events.
 - Attempts and artifact references.
 - Feedback records for QC and Human Review.
 - External task reference and outbox records.
 - YAML-backed configuration:
-  - `providers.yaml`
-  - `stage_routes.yaml`
+  - `llm_profiles.yaml`
+  - `workflow.yaml`
   - `annotators.yaml`
   - `external_tasks.yaml`
 - CLI commands for init, doctor, creating tasks, external pull, running cycles, and serving dashboard data.
 - Minimal HTTP API for the dashboard.
 - Vite + React + TypeScript dashboard with Kanban columns and detail drawer.
-- UI read-only settings panels for provider routes and annotator capability matching, with validation and test-call actions.
+- UI settings panels for provider routes, annotator capability matching, callbacks, external APIs, and raw YAML configuration.
 - Text annotation core plus a preview artifact contract that can represent image bounding-box previews.
 
 ### Deferred
 
-- UI editing and saving of YAML configuration.
 - Webhook ingestion from external task systems.
-- Real provider SDK integrations beyond a pluggable client contract and test/fake clients.
 - Real VC detection model execution.
 - Full video and point-cloud editing tools.
 - Distributed queueing and multi-host worker coordination.
@@ -74,7 +72,7 @@ The first implementation plan should prefer fewer dependencies unless they mater
 
 ## User Story
 
-As a data engineer, I install `annotation-pipeline-skill`, initialize a new project, configure task source and model providers, open a Kanban dashboard, run annotation cycles, review QC feedback, trigger repair when needed, and submit accepted results back to an external task system.
+As an algorithm engineer, I install `annotation-pipeline-skill`, initialize a new project, configure task source and model providers, open a Kanban dashboard, run annotation cycles, review QC feedback, update labels or rules when needed, and export or submit accepted training data.
 
 End-to-end flow:
 
@@ -83,14 +81,14 @@ End-to-end flow:
 3. Configure data input, providers, stage routes, annotators, and optional external task API in YAML.
 4. Run `annotation-pipeline doctor` to validate config, store paths, and dashboard readiness.
 5. Create local tasks from JSONL or pull external tasks through an adapter.
-6. Run the local scheduler or fake runtime cycle.
+6. Run the monitored local runtime cycle.
 7. Open the React Kanban dashboard.
 8. Inspect task cards by state, modality, selected annotator, provider route, feedback count, and retry state.
 9. Open a task detail drawer to inspect attempts, artifacts, feedback, preview evidence, and external API sync state.
 10. Let deterministic validation run before model QC.
-11. Let QC either accept, reject, require repair, or route a QC-passed task to optional Human Review.
-12. Let annotators use feedback to rerun in one of three ways: bulk code repair, annotator rerun, or manual annotation.
-13. Merge accepted tasks and submit results through the external task outbox.
+11. Let QC accept, reject, request an annotator rerun with feedback, or route a QC-passed task to optional Human Review.
+12. Let annotators use feedback through batch/code updates, annotator reruns, or manual annotation.
+13. Export accepted tasks and submit results through the external task outbox when configured.
 
 ## Core Domain Model
 
@@ -163,7 +161,7 @@ Artifact kinds should be explicit and structured, for example:
 
 ### FeedbackRecord
 
-`FeedbackRecord` is append-only. It is the first-class object that connects QC/Human Review findings to annotator repair behavior.
+`FeedbackRecord` is append-only. It is the first-class object that connects QC/Human Review findings to the next annotator update.
 
 Required fields:
 
@@ -180,9 +178,9 @@ Required fields:
 - `created_by`
 - `metadata`
 
-The repair service must build a compact feedback bundle for the next annotator attempt. The annotator can choose:
+The feedback service must build a compact feedback bundle for the next annotator attempt. The annotator can choose:
 
-- `bulk_code_repair`
+- `batch_code_update`
 - `annotator_rerun`
 - `manual_annotation`
 - `reject`
@@ -227,39 +225,34 @@ Annotator selection must match structured task requirements against structured p
 
 ## State Machine
 
-MVP task states:
+Current task states:
 
 - `draft`
-- `ready`
+- `pending`
 - `annotating`
 - `validating`
 - `qc`
 - `human_review`
-- `repair`
 - `accepted`
 - `rejected`
-- `merged`
 - `blocked`
 - `cancelled`
 
 Required transitions:
 
-- `draft -> ready`
-- `ready -> annotating`
+- `draft -> pending`
+- `pending -> annotating`
 - `annotating -> validating`
 - `validating -> qc`
-- `validating -> repair`
+- `validating -> pending`
 - `validating -> rejected`
 - `qc -> accepted`
 - `qc -> human_review`
-- `qc -> repair`
+- `qc -> pending`
 - `qc -> rejected`
 - `human_review -> accepted`
-- `human_review -> repair`
+- `human_review -> annotating`
 - `human_review -> rejected`
-- `repair -> annotating`
-- `repair -> validating`
-- `accepted -> merged`
 - any active state may move to `blocked` through a runtime or configuration failure
 - terminal states may not move without an explicit administrative transition
 
@@ -290,7 +283,7 @@ Activation:
 - QC policy may route an individual QC-passed task to Human Review when structured risk metadata requires it.
 - If neither condition applies, QC pass transitions directly to `accepted`.
 
-Human Review uses task details, feedback history, and preview artifacts as evidence. It can accept, reject, or request repair.
+Human Review uses task details, feedback history, and preview artifacts as evidence. It can accept, reject, or request changes from the annotator.
 
 ## Multimodal Extension Model
 
@@ -331,7 +324,7 @@ MVP supports three external operations:
 
 - Pull tasks.
 - Post status changes.
-- Submit accepted or merged results.
+- Submit accepted results.
 
 Webhook ingestion is deferred.
 
@@ -371,15 +364,13 @@ The dashboard is a Kanban interface.
 
 Required columns:
 
-- Ready
+- Pending
 - Annotating
 - Validating
 - QC
 - Human Review
-- Repair
 - Accepted
 - Rejected
-- Merged
 
 Each task card should show:
 
@@ -400,7 +391,7 @@ The detail drawer should show:
 - attempts
 - artifact list
 - feedback records
-- compact feedback bundle for repair
+- compact feedback bundle for reruns
 - preview artifacts when available
 - provider route used by the current or latest attempt
 - external task reference and outbox status
@@ -414,7 +405,7 @@ Runtime state is separate from task state.
 
 The first implementation should support:
 
-- in-process fake runtime for tests
+- in-process scripted clients for tests
 - local runtime records for cycles, leases, and heartbeat
 - monitor samples based on task counts, runtime heartbeat, active workers, retry queues, and scheduler cycle stats
 
@@ -445,7 +436,7 @@ Required test groups:
 - Preview artifact reference persistence for image bounding-box evidence.
 - External task pull idempotency.
 - External status outbox creation on transition.
-- External submit outbox creation on accepted or merged tasks.
+- External submit outbox creation on accepted tasks.
 - Runtime heartbeat freshness.
 - Stale active worker detection.
 - Retry drain progress.

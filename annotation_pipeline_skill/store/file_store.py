@@ -31,6 +31,7 @@ class FileStore:
         self.artifacts_dir = self.root / "artifacts"
         self.outbox_dir = self.root / "outbox"
         self.exports_dir = self.root / "exports"
+        self.coordination_dir = self.root / "coordination"
         self.runtime_dir = self.root / "runtime"
         self.active_runs_dir = self.runtime_dir / "active_runs"
         self.runtime_cycles_path = self.runtime_dir / "cycle_stats.jsonl"
@@ -45,6 +46,7 @@ class FileStore:
             self.artifacts_dir,
             self.outbox_dir,
             self.exports_dir,
+            self.coordination_dir,
             self.runtime_dir,
             self.active_runs_dir,
         ):
@@ -114,6 +116,12 @@ class FileStore:
             ExportManifest.from_dict(self._read_json(path))
             for path in sorted(self.exports_dir.glob("*/manifest.json"))
         ]
+
+    def append_coordination_record(self, kind: str, record: dict) -> None:
+        self._append_jsonl(self.coordination_dir / f"{kind}.jsonl", record)
+
+    def list_coordination_records(self, kind: str) -> list[dict]:
+        return self._read_jsonl(self.coordination_dir / f"{kind}.jsonl", lambda item: item)
 
     def save_active_run(self, run: ActiveRun) -> None:
         self._write_json(self.active_runs_dir / f"{run.run_id}.json", run.to_dict())
