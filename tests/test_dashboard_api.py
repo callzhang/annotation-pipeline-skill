@@ -291,6 +291,32 @@ def test_dashboard_api_posts_feedback_discussion_and_accepts_by_consensus(tmp_pa
     assert store.list_events("task-1")[-1].reason == "feedback consensus accepted by annotator and qc"
 
 
+def test_dashboard_api_posts_human_review_decision(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_post(
+        "/api/tasks/task-1/human-review",
+        json.dumps(
+            {
+                "action": "request_changes",
+                "actor": "algorithm-engineer",
+                "feedback": "Use batch code to apply the new rule.",
+                "correction_mode": "batch_code_update",
+            }
+        ).encode("utf-8"),
+    )
+
+    payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert payload["task"]["status"] == "annotating"
+    assert payload["decision"]["action"] == "request_changes"
+    assert store.list_events("task-1")[-1].reason == "human review requested annotator changes"
+
+
 def test_dashboard_api_returns_config_files_and_can_update_allowed_yaml(tmp_path):
     store = FileStore(tmp_path)
     (tmp_path / "annotation_rules.yaml").write_text("rules:\n  - id: default\n", encoding="utf-8")

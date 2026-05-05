@@ -10,6 +10,7 @@ interface TaskDrawerProps {
   saving: boolean;
   error: string | null;
   onSubmitFeedbackDiscussion: (payload: Record<string, unknown>) => Promise<void>;
+  onSubmitHumanReviewDecision: (payload: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }
 
@@ -20,6 +21,7 @@ export function TaskDrawer({
   saving,
   error,
   onSubmitFeedbackDiscussion,
+  onSubmitHumanReviewDecision,
   onClose,
 }: TaskDrawerProps) {
   if (!task) return null;
@@ -132,9 +134,77 @@ export function TaskDrawer({
               </>
             )}
           </DetailSection>
+
+          {detail.task.status === "human_review" ? (
+            <DetailSection title="Human Review Decision">
+              <HumanReviewDecisionForm saving={saving} onSubmit={onSubmitHumanReviewDecision} />
+            </DetailSection>
+          ) : null}
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function HumanReviewDecisionForm({
+  saving,
+  onSubmit,
+}: {
+  saving: boolean;
+  onSubmit: (payload: Record<string, unknown>) => Promise<void>;
+}) {
+  const [action, setAction] = useState("request_changes");
+  const [correctionMode, setCorrectionMode] = useState("manual_annotation");
+  const [feedback, setFeedback] = useState("");
+
+  async function submit() {
+    await onSubmit({
+      action,
+      correction_mode: correctionMode,
+      feedback,
+      actor: "algorithm-engineer",
+    });
+    setFeedback("");
+  }
+
+  return (
+    <div className="human-review-form">
+      <div className="segmented-row" aria-label="Human Review action">
+        <button
+          className={action === "request_changes" ? "segment selected" : "segment"}
+          type="button"
+          onClick={() => setAction("request_changes")}
+        >
+          Request Changes
+        </button>
+        <button
+          className={action === "accept" ? "segment selected" : "segment"}
+          type="button"
+          onClick={() => setAction("accept")}
+        >
+          Accept
+        </button>
+        <button
+          className={action === "reject" ? "segment selected" : "segment"}
+          type="button"
+          onClick={() => setAction("reject")}
+        >
+          Reject
+        </button>
+      </div>
+      <select value={correctionMode} onChange={(event) => setCorrectionMode(event.target.value)}>
+        <option value="manual_annotation">Manual annotation</option>
+        <option value="batch_code_update">Batch code update</option>
+      </select>
+      <textarea
+        placeholder="Decision feedback for the annotator, QC agent, or project record."
+        value={feedback}
+        onChange={(event) => setFeedback(event.target.value)}
+      />
+      <button className="primary-button" type="button" disabled={saving || !feedback.trim()} onClick={submit}>
+        {saving ? "Saving" : "Submit Decision"}
+      </button>
+    </div>
   );
 }
 

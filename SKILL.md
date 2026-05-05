@@ -71,6 +71,20 @@ Do not put raw secrets in skill docs or committed config. Prefer `api_key_env`.
 
 Human Review is optional and sits after QC. When a task is routed there, remind the user that the goal is to decide whether the produced labels are usable for training data, need manual correction, or need a batch/code update rule.
 
+Record the decision with:
+
+```bash
+annotation-pipeline human-review decide \
+  --project-root ./annotation-project \
+  --task-id <task-id> \
+  --action request_changes \
+  --correction-mode batch_code_update \
+  --actor algorithm-engineer \
+  --feedback "Apply the updated rule before QC retries."
+```
+
+Use `--action accept` for training-ready labels, `--action reject` for unusable tasks, and `--action request_changes` when the annotator should revise the labels with either `manual_annotation` or `batch_code_update`.
+
 ## Feedback Agreement
 
 QC feedback is not a one-way order. The annotator and QC agent may exchange opinions, partially agree, and record a final consensus. When all open feedback items have consensus, the task can pass QC and move to Accepted even if the final resolution differs from the original QC suggestion.

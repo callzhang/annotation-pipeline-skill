@@ -12,9 +12,10 @@ import yaml
 from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry
 from annotation_pipeline_skill.core.runtime import RuntimeConfig, RuntimeSnapshot
 from annotation_pipeline_skill.core.states import TaskStatus
-from annotation_pipeline_skill.core.transitions import transition_task
+from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
+from annotation_pipeline_skill.services.human_review_service import HumanReviewService
 from annotation_pipeline_skill.services.outbox_dispatch_service import build_outbox_summary
 from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
@@ -98,6 +99,9 @@ class DashboardApi:
         route = path.split("?", 1)[0]
         if route == "/api/runtime/run-once":
             return self._runtime_run_once_response()
+        if route.startswith("/api/tasks/") and route.endswith("/human-review"):
+            task_id = route.removeprefix("/api/tasks/").removesuffix("/human-review").strip("/")
+            return self._post_human_review_response(task_id, body)
         if route.startswith("/api/tasks/") and route.endswith("/feedback-discussions"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/feedback-discussions").strip("/")
             return self._post_feedback_discussion_response(task_id, body)
@@ -219,6 +223,27 @@ class DashboardApi:
                 "task": self.store.load_task(task_id).to_dict(),
             },
         )
+
+    def _post_human_review_response(self, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        try:
+            result = HumanReviewService(self.store).decide(
+                task_id=task_id,
+                action=str(payload.get("action") or ""),
+                actor=str(payload.get("actor") or "human-reviewer"),
+                feedback=str(payload.get("feedback") or ""),
+                correction_mode=str(payload.get("correction_mode") or "manual_annotation"),
+            )
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "task_not_found"})
+        except (InvalidTransition, ValueError) as exc:
+            return self._json_response(400, {"error": "invalid_human_review_decision", "detail": str(exc)})
+        return self._json_response(200, result.to_dict())
 
     def _read_artifact_payload(self, relative_path: str) -> Any:
         path = self.store.root / relative_path

@@ -471,8 +471,39 @@ button {
   padding-top: 10px;
 }
 
+.human-review-form {
+  display: grid;
+  gap: 8px;
+}
+
+.segmented-row {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.segment {
+  background: #ffffff;
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  color: #172026;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 680;
+  min-height: 34px;
+  padding: 7px 8px;
+}
+
+.segment.selected {
+  background: #214f55;
+  border-color: #214f55;
+  color: #ffffff;
+}
+
 .agreement-form select,
-.agreement-form textarea {
+.agreement-form textarea,
+.human-review-form select,
+.human-review-form textarea {
   border: 1px solid #cfd9df;
   border-radius: 6px;
   color: #172026;
@@ -480,7 +511,8 @@ button {
   padding: 8px 9px;
 }
 
-.agreement-form textarea {
+.agreement-form textarea,
+.human-review-form textarea {
   min-height: 86px;
   resize: vertical;
 }

@@ -57,6 +57,23 @@ export async function postFeedbackDiscussion(
   return fetchTaskDetail(taskId);
 }
 
+export async function postHumanReviewDecision(
+  taskId: string,
+  payload: Record<string, unknown>,
+): Promise<TaskDetail> {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/human-review`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Human Review API returned ${response.status}`);
+  }
+  await response.json();
+  return fetchTaskDetail(taskId);
+}
+
 export async function fetchConfigSnapshot(): Promise<ConfigSnapshot> {
   const response = await fetch("/api/config");
   if (!response.ok) {

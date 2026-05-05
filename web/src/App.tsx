@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { fetchKanbanSnapshot, fetchProjects, fetchTaskDetail, postFeedbackDiscussion } from "./api";
+import {
+  fetchKanbanSnapshot,
+  fetchProjects,
+  fetchTaskDetail,
+  postFeedbackDiscussion,
+  postHumanReviewDecision,
+} from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
@@ -95,6 +101,21 @@ export default function App() {
     }
   }
 
+  async function submitHumanReviewDecision(payload: Record<string, unknown>) {
+    if (!selectedTask) return;
+    setDetailSaving(true);
+    setDetailError(null);
+    try {
+      const detail = await postHumanReviewDecision(selectedTask.task_id, payload);
+      setSelectedDetail(detail);
+      setSnapshot(await fetchKanbanSnapshot(selectedProjectId));
+    } catch (reason: unknown) {
+      setDetailError(reason instanceof Error ? reason.message : "Unable to save Human Review decision");
+    } finally {
+      setDetailSaving(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -161,6 +182,7 @@ export default function App() {
         saving={detailSaving}
         error={detailError}
         onSubmitFeedbackDiscussion={submitFeedbackDiscussion}
+        onSubmitHumanReviewDecision={submitHumanReviewDecision}
         onClose={() => setSelectedTask(null)}
       />
     </main>

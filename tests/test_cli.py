@@ -285,3 +285,39 @@ def test_cli_outbox_status_reports_counts(tmp_path, capsys):
     assert exit_code == 0
     assert payload["counts"] == {"dead_letter": 0, "pending": 1, "sent": 0}
     assert payload["records"][0]["kind"] == "submit"
+
+
+def test_cli_human_review_request_changes_returns_task_to_annotating(tmp_path, capsys):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    main(["init", "--project-root", str(tmp_path)])
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    exit_code = main(
+        [
+            "human-review",
+            "decide",
+            "--project-root",
+            str(tmp_path),
+            "--task-id",
+            "task-1",
+            "--action",
+            "request_changes",
+            "--actor",
+            "algorithm-engineer",
+            "--feedback",
+            "Run the batch boundary update.",
+            "--correction-mode",
+            "batch_code_update",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["task"]["status"] == "annotating"
+    assert payload["decision"]["correction_mode"] == "batch_code_update"
+    assert store.load_task("task-1").status is TaskStatus.ANNOTATING

@@ -251,6 +251,21 @@ Subagent attempts record provider, model, diagnostics, artifacts, and continuity
 
 QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
 
+Record a Human Review decision from the CLI:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline human-review decide \
+  --project-root ./demo-project \
+  --task-id pipe-000001 \
+  --action request_changes \
+  --correction-mode batch_code_update \
+  --actor algorithm-engineer \
+  --feedback "Apply the updated boundary rule before QC retries."
+```
+
+Human Review actions are `accept`, `reject`, and `request_changes`. Each decision writes an audit event plus a `human_review_decision` artifact. `request_changes` returns the task to `annotating` with feedback for either `manual_annotation` or `batch_code_update`.
+
 Export accepted tasks into a traceable JSONL training package:
 
 ```bash

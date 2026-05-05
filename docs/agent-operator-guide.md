@@ -156,6 +156,21 @@ If runtime status shows stale tasks or due retries that are not draining, inspec
 6. Notify the user when unresolved items need Human Review.
 7. Re-run annotation with feedback when consensus requires label updates, then submit accepted training data.
 
+Human Review decisions are executable state changes, not notes. Use the dashboard task drawer or the CLI:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline human-review decide \
+  --project-root ./demo-project \
+  --task-id <task-id> \
+  --action request_changes \
+  --correction-mode batch_code_update \
+  --actor algorithm-engineer \
+  --feedback "Apply the updated rule before QC retries."
+```
+
+`accept` moves the task to `accepted`, `reject` moves it to `rejected`, and `request_changes` returns it to `annotating`. Every decision writes an audit event and `human_review_decision` artifact so the algorithm engineer can inspect why labels were accepted, rejected, or sent back.
+
 For multimodal projects, keep the core task model generic and add adapters/renderers for images, video, point clouds, or model-specific previews such as bounding boxes from a VC detection model.
 
 ## Training Data Export

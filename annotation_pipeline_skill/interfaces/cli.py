@@ -28,6 +28,7 @@ from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.export_service import TrainingDataExportService
+from annotation_pipeline_skill.services.human_review_service import HumanReviewService
 from annotation_pipeline_skill.services.outbox_dispatch_service import OutboxDispatchService, build_outbox_summary
 from annotation_pipeline_skill.services.readiness_service import build_readiness_report
 from annotation_pipeline_skill.store.file_store import FileStore
@@ -251,6 +252,22 @@ def build_parser() -> argparse.ArgumentParser:
     outbox_drain.add_argument("--max-attempts", type=int, default=3)
     outbox_drain.add_argument("--retry-delay-seconds", type=int, default=60)
     outbox_drain.set_defaults(handler=handle_outbox_drain)
+
+    human_review_parser = subparsers.add_parser("human-review")
+    human_review_subparsers = human_review_parser.add_subparsers(required=True)
+
+    human_review_decide = human_review_subparsers.add_parser("decide")
+    human_review_decide.add_argument("--project-root", type=Path, default=Path.cwd())
+    human_review_decide.add_argument("--task-id", required=True)
+    human_review_decide.add_argument("--action", choices=("accept", "reject", "request_changes"), required=True)
+    human_review_decide.add_argument("--actor", required=True)
+    human_review_decide.add_argument("--feedback", required=True)
+    human_review_decide.add_argument(
+        "--correction-mode",
+        choices=("manual_annotation", "batch_code_update"),
+        default="manual_annotation",
+    )
+    human_review_decide.set_defaults(handler=handle_human_review_decide)
 
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -502,6 +519,19 @@ def handle_outbox_drain(args: argparse.Namespace) -> int:
         retry_delay_seconds=args.retry_delay_seconds,
     )
     print(json.dumps({"result": result, "outbox": build_outbox_summary(store)}, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_human_review_decide(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    result = HumanReviewService(store).decide(
+        task_id=args.task_id,
+        action=args.action,
+        actor=args.actor,
+        feedback=args.feedback,
+        correction_mode=args.correction_mode,
+    )
+    print(json.dumps(result.to_dict(), sort_keys=True, indent=2))
     return 0
 
 
