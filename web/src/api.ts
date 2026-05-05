@@ -9,6 +9,7 @@ import type {
   RuntimeSnapshot,
   TaskDetail,
   ProviderConfigSnapshot,
+  ReadinessReport,
 } from "./types";
 
 function projectQuery(projectId: string | null): string {
@@ -106,6 +107,14 @@ export async function fetchRuntimeMonitor(): Promise<RuntimeMonitorReport> {
     throw new Error(`Runtime monitor API returned ${response.status}`);
   }
   return response.json() as Promise<RuntimeMonitorReport>;
+}
+
+export async function fetchReadinessReport(projectId: string): Promise<ReadinessReport> {
+  const response = await fetch(`/api/readiness?project=${encodeURIComponent(projectId)}`);
+  if (!response.ok) {
+    throw new Error(`Readiness API returned ${response.status}`);
+  }
+  return response.json() as Promise<ReadinessReport>;
 }
 
 export async function runRuntimeOnce(): Promise<RuntimeRunOnceResponse> {

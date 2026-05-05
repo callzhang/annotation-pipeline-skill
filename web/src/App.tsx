@@ -4,13 +4,14 @@ import { ConfigPanel } from "./components/ConfigPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { ProvidersPanel } from "./components/ProvidersPanel";
+import { ReadinessPanel } from "./components/ReadinessPanel";
 import { RuntimePanel } from "./components/RuntimePanel";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
 import type { KanbanSnapshot, ProjectSummary, TaskCard, TaskDetail } from "./types";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "providers" | "config" | "events";
+type ViewMode = "kanban" | "runtime" | "readiness" | "providers" | "config" | "events";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
@@ -130,6 +131,9 @@ export default function App() {
         <button className={viewMode === "runtime" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("runtime")}>
           Runtime
         </button>
+        <button className={viewMode === "readiness" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("readiness")}>
+          Readiness
+        </button>
         <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("providers")}>
           Providers
         </button>
@@ -146,6 +150,7 @@ export default function App() {
         <KanbanBoard snapshot={snapshot} selectedTaskId={selectedTask?.task_id ?? null} onSelectTask={setSelectedTask} />
       ) : null}
       {viewMode === "runtime" ? <RuntimePanel /> : null}
+      {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} /> : null}
       {viewMode === "providers" ? <ProvidersPanel /> : null}
       {viewMode === "config" ? <ConfigPanel /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}

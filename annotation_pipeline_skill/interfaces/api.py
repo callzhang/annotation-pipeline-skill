@@ -18,6 +18,7 @@ from annotation_pipeline_skill.services.dashboard_service import build_kanban_sn
 from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.provider_config_service import build_provider_config_snapshot, save_provider_config
+from annotation_pipeline_skill.services.readiness_service import build_readiness_report
 from annotation_pipeline_skill.store.file_store import FileStore
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError
 
@@ -61,6 +62,10 @@ class DashboardApi:
             return self._provider_config_response()
         if route == "/api/events":
             return self._json_response(200, {"events": self._event_log(project_id=project_id)})
+        if route == "/api/readiness":
+            if not project_id:
+                return self._json_response(400, {"error": "project_required"})
+            return self._json_response(200, build_readiness_report(self.store, project_id))
         if route == "/api/runtime":
             return self._json_response(200, self._runtime_snapshot().to_dict())
         if route == "/api/runtime/monitor":

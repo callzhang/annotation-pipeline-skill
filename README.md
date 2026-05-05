@@ -233,6 +233,17 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 
 The command writes `.annotation-pipeline/exports/<export-id>/training_data.jsonl` and `manifest.json`. The manifest records included and excluded task ids, source files, annotation artifact ids, annotation rules hash, validation summary, output paths, and known limitations. Accepted tasks without a readable `annotation_result` artifact are excluded rather than exported with incomplete data.
 
+Inspect whether the project is ready for an algorithm engineer:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline report readiness \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2
+```
+
+The readiness report summarizes accepted, exported, exportable, Human Review, open feedback, validation blocker, and external outbox counts, plus the recommended next action.
+
 Serve the dashboard API:
 
 ```bash

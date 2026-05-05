@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(mktemp -d /tmp/annotation-export-verify-XXXXXX)"
 INPUT_FILE="$PROJECT_ROOT/input.jsonl"
 MANIFEST_JSON="$PROJECT_ROOT/export-manifest.json"
+READINESS_JSON="$PROJECT_ROOT/readiness.json"
 
 cd "$ROOT_DIR"
 
@@ -51,14 +52,16 @@ store.save_task(task_two)
 PY
 
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline export training-data --project-root "$PROJECT_ROOT" --project-id export-verify --export-id export-1 > "$MANIFEST_JSON"
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline report readiness --project-root "$PROJECT_ROOT" --project-id export-verify > "$READINESS_JSON"
 
-python - "$PROJECT_ROOT" "$MANIFEST_JSON" <<'PY'
+python - "$PROJECT_ROOT" "$MANIFEST_JSON" "$READINESS_JSON" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 project_root = Path(sys.argv[1])
 manifest = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+readiness = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
 store_root = project_root / ".annotation-pipeline"
 training_path = store_root / "exports/export-1/training_data.jsonl"
 rows = [json.loads(line) for line in training_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -71,6 +74,12 @@ if len(rows) != 1 or rows[0]["annotation"] != '{"labels":[{"text":"alpha"}]}':
     raise SystemExit(f"unexpected training rows: {rows}")
 if not (store_root / "exports/export-1/manifest.json").exists():
     raise SystemExit("manifest.json was not saved")
+if readiness["ready_for_training"] is not False:
+    raise SystemExit(f"expected readiness to require blocker repair: {readiness}")
+if readiness["recommended_next_action"] != "repair_export_blockers":
+    raise SystemExit(f"unexpected readiness action: {readiness}")
+if readiness["validation_blockers"] != [{"task_id": "export-verify-000002", "reason": "missing_annotation_result"}]:
+    raise SystemExit(f"unexpected readiness blockers: {readiness['validation_blockers']}")
 
 print(f"training data export verification passed: {project_root}")
 PY

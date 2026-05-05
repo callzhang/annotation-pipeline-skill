@@ -162,6 +162,27 @@ export interface RuntimeRunOnceResponse {
   snapshot: RuntimeSnapshot;
 }
 
+export interface ReadinessReport {
+  project_id: string;
+  ready_for_training: boolean;
+  accepted_count: number;
+  exported_count: number;
+  exportable_count: number;
+  open_feedback_count: number;
+  human_review_count: number;
+  validation_blockers: Array<Record<string, string>>;
+  pending_outbox_count: number;
+  latest_export: {
+    export_id: string;
+    created_at: string;
+    output_paths: string[];
+    included: number;
+    excluded: number;
+  } | null;
+  recommended_next_action: string;
+  next_command: string | null;
+}
+
 export type ProviderName = "openai_responses" | "openai_compatible" | "local_cli";
 export type ProviderFlavor = "deepseek" | "glm" | "minimax";
 export type CliKind = "codex" | "claude";

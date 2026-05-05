@@ -28,6 +28,7 @@ from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.export_service import TrainingDataExportService
+from annotation_pipeline_skill.services.readiness_service import build_readiness_report
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -227,6 +228,14 @@ def build_parser() -> argparse.ArgumentParser:
     training_data.add_argument("--export-id")
     training_data.add_argument("--enqueue-external-submit", action="store_true")
     training_data.set_defaults(handler=handle_export_training_data)
+
+    report_parser = subparsers.add_parser("report")
+    report_subparsers = report_parser.add_subparsers(required=True)
+
+    readiness = report_subparsers.add_parser("readiness")
+    readiness.add_argument("--project-root", type=Path, default=Path.cwd())
+    readiness.add_argument("--project-id", required=True)
+    readiness.set_defaults(handler=handle_report_readiness)
 
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -450,6 +459,12 @@ def handle_export_training_data(args: argparse.Namespace) -> int:
         enqueue_external_submit=args.enqueue_external_submit,
     )
     print(json.dumps(manifest.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_report_readiness(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    print(json.dumps(build_readiness_report(store, args.project_id), sort_keys=True, indent=2))
     return 0
 
 

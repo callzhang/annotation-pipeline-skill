@@ -148,6 +148,22 @@ def test_dashboard_api_returns_runtime_cycles(tmp_path):
     assert payload["cycles"][0]["cycle_id"] == "cycle-1"
 
 
+def test_dashboard_api_returns_readiness_report_for_project(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/readiness?project=pipe")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["project_id"] == "pipe"
+    assert payload["accepted_count"] == 1
+    assert payload["recommended_next_action"] == "repair_export_blockers"
+
+
 def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events_and_feedback(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(

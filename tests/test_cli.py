@@ -250,3 +250,22 @@ def test_cli_export_training_data_writes_manifest(tmp_path, capsys):
     assert payload["export_id"] == "export-1"
     assert payload["task_ids_included"] == ["pipe-000001"]
     assert (tmp_path / ".annotation-pipeline" / "exports" / "export-1" / "training_data.jsonl").exists()
+
+
+def test_cli_report_readiness_returns_project_action(tmp_path, capsys):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    main(["init", "--project-root", str(tmp_path)])
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+
+    exit_code = main(["report", "readiness", "--project-root", str(tmp_path), "--project-id", "pipe"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["project_id"] == "pipe"
+    assert payload["accepted_count"] == 1
+    assert payload["recommended_next_action"] == "repair_export_blockers"

@@ -173,3 +173,14 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 The export service writes `training_data.jsonl` plus `manifest.json` under `.annotation-pipeline/exports/<export-id>/`. The manifest is the audit record for algorithm engineers: it includes included and excluded task ids, source files, annotation artifact ids, annotation rules hash, schema/validator versions, validation summary, output paths, and known limitations.
 
 Accepted tasks are exported only when they still have a readable `annotation_result` artifact. Missing annotation artifacts are recorded as excluded validation failures, and the task remains `accepted` so the operator can repair/export again without losing QC history.
+
+Check the coordinator readiness report before handing data to an algorithm engineer:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline report readiness \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2
+```
+
+The report returns `ready_for_training`, accepted/exported/exportable counts, open feedback count, Human Review count, validation blockers, pending external outbox count, latest export metadata, and a deterministic recommended next action. The dashboard exposes the same information in the Readiness tab for the selected project.
