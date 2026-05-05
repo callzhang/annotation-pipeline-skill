@@ -3,12 +3,13 @@ import { fetchKanbanSnapshot, fetchProjects, fetchTaskDetail, postFeedbackDiscus
 import { ConfigPanel } from "./components/ConfigPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
+import { RuntimePanel } from "./components/RuntimePanel";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
 import type { KanbanSnapshot, ProjectSummary, TaskCard, TaskDetail } from "./types";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "config" | "events";
+type ViewMode = "kanban" | "runtime" | "config" | "events";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
@@ -125,6 +126,9 @@ export default function App() {
         <button className={viewMode === "kanban" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("kanban")}>
           Kanban
         </button>
+        <button className={viewMode === "runtime" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("runtime")}>
+          Runtime
+        </button>
         <button className={viewMode === "config" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("config")}>
           Configuration
         </button>
@@ -137,6 +141,7 @@ export default function App() {
       {viewMode === "kanban" ? (
         <KanbanBoard snapshot={snapshot} selectedTaskId={selectedTask?.task_id ?? null} onSelectTask={setSelectedTask} />
       ) : null}
+      {viewMode === "runtime" ? <RuntimePanel /> : null}
       {viewMode === "config" ? <ConfigPanel /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}
       <TaskDrawer

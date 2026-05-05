@@ -611,6 +611,120 @@ button {
   overflow-wrap: anywhere;
 }
 
+.runtime-panel {
+  display: grid;
+  gap: 14px;
+  margin: 0 auto;
+  max-width: 1680px;
+}
+
+.runtime-header,
+.runtime-card {
+  background: #ffffff;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.runtime-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.runtime-header h2,
+.runtime-card h3 {
+  font-size: 16px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.runtime-header p,
+.runtime-muted {
+  color: #52616b;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 4px 0 0;
+}
+
+.runtime-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.runtime-grid.secondary {
+  grid-template-columns: 2fr repeat(3, minmax(0, 1fr));
+}
+
+.runtime-facts {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.runtime-facts div,
+.runtime-counts div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.runtime-facts dt,
+.runtime-counts span {
+  color: #52616b;
+  font-size: 12px;
+}
+
+.runtime-facts dd {
+  font-size: 13px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.runtime-counts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.runtime-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.runtime-list pre {
+  background: #f4f6f8;
+  border: 1px solid #d7e0e5;
+  margin: 6px 0 0;
+  overflow-x: auto;
+  padding: 8px;
+}
+
+.compact-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+}
+
+.runtime-table {
+  border-collapse: collapse;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.runtime-table th,
+.runtime-table td {
+  border-top: 1px solid #d7e0e5;
+  font-size: 12px;
+  padding: 8px;
+  text-align: left;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     padding: 14px;
@@ -645,6 +759,11 @@ button {
   }
 
   .event-row summary {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-grid,
+  .runtime-grid.secondary {
     grid-template-columns: 1fr;
   }
 
