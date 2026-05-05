@@ -1,4 +1,14 @@
-import type { ConfigSnapshot, EventLog, KanbanSnapshot, ProjectSnapshot, TaskDetail } from "./types";
+import type {
+  ConfigSnapshot,
+  EventLog,
+  KanbanSnapshot,
+  ProjectSnapshot,
+  RuntimeCyclesResponse,
+  RuntimeMonitorReport,
+  RuntimeRunOnceResponse,
+  RuntimeSnapshot,
+  TaskDetail,
+} from "./types";
 
 function projectQuery(projectId: string | null): string {
   return projectId ? `?project=${encodeURIComponent(projectId)}` : "";
@@ -71,4 +81,37 @@ export async function fetchEventLog(projectId: string | null = null): Promise<Ev
     throw new Error(`Event log API returned ${response.status}`);
   }
   return response.json() as Promise<EventLog>;
+}
+
+export async function fetchRuntimeSnapshot(): Promise<RuntimeSnapshot> {
+  const response = await fetch("/api/runtime");
+  if (!response.ok) {
+    throw new Error(`Runtime API returned ${response.status}`);
+  }
+  return response.json() as Promise<RuntimeSnapshot>;
+}
+
+export async function fetchRuntimeCycles(): Promise<RuntimeCyclesResponse> {
+  const response = await fetch("/api/runtime/cycles");
+  if (!response.ok) {
+    throw new Error(`Runtime cycles API returned ${response.status}`);
+  }
+  return response.json() as Promise<RuntimeCyclesResponse>;
+}
+
+export async function fetchRuntimeMonitor(): Promise<RuntimeMonitorReport> {
+  const response = await fetch("/api/runtime/monitor");
+  if (!response.ok) {
+    throw new Error(`Runtime monitor API returned ${response.status}`);
+  }
+  return response.json() as Promise<RuntimeMonitorReport>;
+}
+
+export async function runRuntimeOnce(): Promise<RuntimeRunOnceResponse> {
+  const response = await fetch("/api/runtime/run-once", { method: "POST", body: "{}" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? `Runtime run-once API returned ${response.status}`);
+  }
+  return response.json() as Promise<RuntimeRunOnceResponse>;
 }

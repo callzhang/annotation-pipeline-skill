@@ -84,3 +84,80 @@ export interface ConfigSnapshot {
 export interface EventLog {
   events: Array<Record<string, unknown>>;
 }
+
+export interface RuntimeStatus {
+  healthy: boolean;
+  heartbeat_at: string | null;
+  heartbeat_age_seconds: number | null;
+  active: boolean;
+  errors: string[];
+}
+
+export interface QueueCounts {
+  draft: number;
+  pending: number;
+  annotating: number;
+  validating: number;
+  qc: number;
+  human_review: number;
+  accepted: number;
+  rejected: number;
+  blocked: number;
+  cancelled: number;
+}
+
+export interface ActiveRun {
+  run_id: string;
+  task_id: string;
+  stage: string;
+  attempt_id: string;
+  provider_target: string;
+  started_at: string;
+  heartbeat_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CapacitySnapshot {
+  max_concurrent_tasks: number;
+  max_starts_per_cycle: number;
+  active_count: number;
+  available_slots: number;
+}
+
+export interface RuntimeCycleStats {
+  cycle_id: string;
+  started_at: string;
+  finished_at: string;
+  started: number;
+  accepted: number;
+  failed: number;
+  capacity_available: number;
+  errors: Array<Record<string, unknown>>;
+}
+
+export interface RuntimeSnapshot {
+  generated_at: string;
+  runtime_status: RuntimeStatus;
+  queue_counts: QueueCounts;
+  active_runs: ActiveRun[];
+  capacity: CapacitySnapshot;
+  stale_tasks: string[];
+  due_retries: string[];
+  project_summaries: ProjectSummary[];
+  cycle_stats: RuntimeCycleStats[];
+}
+
+export interface RuntimeCyclesResponse {
+  cycles: RuntimeCycleStats[];
+}
+
+export interface RuntimeMonitorReport {
+  ok: boolean;
+  failures: string[];
+  details: Record<string, Record<string, unknown>>;
+}
+
+export interface RuntimeRunOnceResponse {
+  ok: boolean;
+  snapshot: RuntimeSnapshot;
+}
