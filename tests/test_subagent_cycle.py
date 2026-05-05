@@ -1,31 +1,44 @@
+import json
+
 from annotation_pipeline_skill.core.models import Task
-from annotation_pipeline_skill.core.states import TaskStatus
+from annotation_pipeline_skill.core.states import FeedbackSource, TaskStatus
+from annotation_pipeline_skill.llm.client import LLMGenerateResult
 from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime, SubagentRuntimeResult
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
 class StubLLMClient:
+    def __init__(self, final_text='{"labels":[{"text":"alpha","type":"ENTITY"}]}', provider="test_provider"):
+        self.final_text = final_text
+        self.provider = provider
+        self.requests = []
+
     async def generate(self, request):
-        from annotation_pipeline_skill.llm.client import LLMGenerateResult
+        self.requests.append(request)
 
         return LLMGenerateResult(
             runtime="test_runtime",
-            provider="test_provider",
+            provider=self.provider,
             model="test-model",
             continuity_handle="thread-1",
-            final_text='{"labels":[{"text":"alpha","type":"ENTITY"}]}',
+            final_text=self.final_text,
             usage={"total_tokens": 10},
             raw_response={"id": "test"},
             diagnostics={"queue_wait_ms": 0},
         )
 
 
-def test_subagent_runtime_advances_ready_task_and_records_attempt(tmp_path):
+def test_subagent_runtime_runs_annotation_and_qc_before_accepting(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.PENDING
     store.save_task(task)
-    runtime = SubagentRuntime(store=store, client_factory=lambda target: StubLLMClient())
+    annotation_client = StubLLMClient(final_text='{"labels":[{"text":"alpha","type":"ENTITY"}]}', provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true, "summary": "acceptable"}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
 
     result = runtime.run_once(stage_target="annotation")
 
@@ -34,8 +47,80 @@ def test_subagent_runtime_advances_ready_task_and_records_attempt(tmp_path):
     artifacts = store.list_artifacts("task-1")
     assert isinstance(result, SubagentRuntimeResult)
     assert result.started == 1
+    assert result.accepted == 1
     assert loaded.status is TaskStatus.ACCEPTED
-    assert attempts[0].provider_id == "test_provider"
-    assert attempts[0].model == "test-model"
-    assert artifacts[0].kind == "annotation_result"
+    assert [attempt.stage for attempt in attempts] == ["annotation", "qc"]
+    assert [attempt.provider_id for attempt in attempts] == ["annotator", "qc"]
+    assert [artifact.kind for artifact in artifacts] == ["annotation_result", "qc_result"]
     assert artifacts[0].metadata["continuity_handle"] == "thread-1"
+    assert store.list_feedback("task-1") == []
+    assert '"annotation_result"' in qc_client.requests[0].prompt
+
+
+def test_subagent_runtime_records_qc_feedback_and_returns_task_to_pending(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: StubLLMClient(
+            final_text='{"passed": false, "message": "missing entity", "category": "quality", "severity": "warning", "suggested_action": "annotator_rerun", "target": {"field": "labels"}}',
+            provider="qc",
+        )
+        if target == "qc"
+        else StubLLMClient(final_text='{"labels":[]}', provider="annotator"),
+    )
+
+    result = runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("task-1")
+    feedback = store.list_feedback("task-1")
+    assert result.started == 1
+    assert result.accepted == 0
+    assert result.failed == 0
+    assert loaded.status is TaskStatus.PENDING
+    assert feedback[0].source_stage is FeedbackSource.QC
+    assert feedback[0].message == "missing entity"
+    assert feedback[0].suggested_action == "annotator_rerun"
+    assert store.list_artifacts("task-1")[-1].kind == "qc_result"
+
+
+def test_subagent_runtime_rerun_prompt_includes_feedback_context(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    first_annotation_client = StubLLMClient(final_text='{"labels":[]}', provider="annotator")
+    second_annotation_client = StubLLMClient(
+        final_text='{"labels":[{"text":"alpha","type":"ENTITY"}]}',
+        provider="annotator",
+    )
+    annotation_clients = [first_annotation_client, second_annotation_client]
+    qc_clients = [
+        StubLLMClient(final_text='{"passed": false, "message": "missing entity"}', provider="qc"),
+        StubLLMClient(final_text='{"passed": true, "summary": "fixed"}', provider="qc"),
+    ]
+
+    def client_factory(target):
+        return qc_clients.pop(0) if target == "qc" else annotation_clients.pop(0)
+
+    runtime = SubagentRuntime(store=store, client_factory=client_factory)
+
+    first = runtime.run_once(stage_target="annotation")
+    second = runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("task-1")
+    attempts = store.list_attempts("task-1")
+    artifacts = store.list_artifacts("task-1")
+    assert first.accepted == 0
+    assert second.accepted == 1
+    assert loaded.status is TaskStatus.ACCEPTED
+    assert loaded.current_attempt == 4
+    assert [attempt.stage for attempt in attempts] == ["annotation", "qc", "annotation", "qc"]
+    assert [artifact.kind for artifact in artifacts] == ["annotation_result", "qc_result", "annotation_result", "qc_result"]
+    rerun_prompt = second_annotation_client.requests[0].prompt
+    assert "missing entity" in rerun_prompt
+    assert "feedback_bundle" in rerun_prompt
+    assert "prior_artifacts" in rerun_prompt
+    assert json.loads((tmp_path / artifacts[2].path).read_text(encoding="utf-8"))["text"] == '{"labels":[{"text":"alpha","type":"ENTITY"}]}'

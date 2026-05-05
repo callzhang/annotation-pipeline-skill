@@ -117,6 +117,10 @@ annotation-pipeline run-cycle --runtime subagent --project-root ./demo-project
 
 Subagent attempts record provider, model, artifact metadata, diagnostics, and continuity handles. Treat those records as the audit trail for debugging quality and provider behavior.
 
+The local runtime now runs a real multistage loop. A pending task first creates an annotation attempt and `annotation_result` artifact, then deterministic validation gates it into QC. The QC target creates a QC attempt and `qc_result` artifact. If QC passes, the task becomes `accepted`. If QC fails, the runtime records structured QC feedback and returns the task to `pending` so the next annotation attempt receives the feedback bundle and prior artifacts as context.
+
+QC failure is business feedback, not a scheduler failure. Provider exceptions still count as runtime failures in cycle stats.
+
 ## Verification
 
 Use stable local verification before changing a provider configuration:

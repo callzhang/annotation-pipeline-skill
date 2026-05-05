@@ -7,17 +7,26 @@ from annotation_pipeline_skill.store.file_store import FileStore
 
 
 class StubLLMClient:
+    def __init__(self, final_text: str):
+        self.final_text = final_text
+
     async def generate(self, request):
         return LLMGenerateResult(
             runtime="test_runtime",
             provider="test_provider",
             model="test-model",
             continuity_handle=None,
-            final_text='{"labels":[]}',
+            final_text=self.final_text,
             usage={"total_tokens": 10},
             raw_response={"id": "test"},
             diagnostics={},
         )
+
+
+def passing_client_factory(target):
+    if target == "qc":
+        return StubLLMClient('{"passed": true, "summary": "acceptable"}')
+    return StubLLMClient('{"labels":[]}')
 
 
 class FailingLLMClient:
@@ -33,7 +42,7 @@ def test_local_runtime_scheduler_respects_max_starts_per_cycle(tmp_path):
         store.save_task(task)
     scheduler = LocalRuntimeScheduler(
         store=store,
-        client_factory=lambda target: StubLLMClient(),
+        client_factory=passing_client_factory,
         config=RuntimeConfig(max_concurrent_tasks=4, max_starts_per_cycle=2),
     )
 
@@ -67,7 +76,7 @@ def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
     )
     scheduler = LocalRuntimeScheduler(
         store=store,
-        client_factory=lambda target: StubLLMClient(),
+        client_factory=passing_client_factory,
         config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=2),
     )
 
@@ -85,7 +94,7 @@ def test_local_runtime_scheduler_cleans_active_run_after_success(tmp_path):
     store.save_task(task)
     scheduler = LocalRuntimeScheduler(
         store=store,
-        client_factory=lambda target: StubLLMClient(),
+        client_factory=passing_client_factory,
         config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
     )
 
