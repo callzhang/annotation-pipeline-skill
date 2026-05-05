@@ -22,6 +22,7 @@ from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
 from annotation_pipeline_skill.llm.local_cli import LocalCLIClient
+from annotation_pipeline_skill.llm.openai_compatible import OpenAICompatibleClient
 from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
@@ -443,6 +444,8 @@ def _build_runtime_scheduler(
 def _build_llm_client(profile):
     if profile.provider == "openai_responses":
         return OpenAIResponsesClient(profile)
+    if profile.provider == "openai_compatible":
+        return OpenAICompatibleClient(profile)
     if profile.provider == "local_cli":
         return LocalCLIClient(profile)
     raise ProfileValidationError(f"unsupported provider: {profile.provider}")
