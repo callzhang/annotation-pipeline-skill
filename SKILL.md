@@ -1,6 +1,40 @@
+---
+name: annotation-pipeline-skill
+description: Use when an algorithm engineer needs an agent to start, configure, monitor, or operate an LLM-managed annotation project that produces model-training data.
+---
+
 # annotation-pipeline-skill
 
 Use this skill when an algorithm engineer wants an agent to start, manage, monitor, and configure an LLM-managed annotation project that produces training data for model development.
+
+## First Run
+
+Install from a published source or local checkout:
+
+```bash
+codex skill install annotation-pipeline-skill
+codex skill install /path/to/annotation-pipeline-skill
+```
+
+Initialize a local annotation project:
+
+```bash
+annotation-pipeline init --project-root ./annotation-project
+annotation-pipeline doctor --project-root ./annotation-project
+annotation-pipeline provider doctor --project-root ./annotation-project
+```
+
+Start the operator API when the user needs the Kanban dashboard:
+
+```bash
+annotation-pipeline serve --project-root ./annotation-project --host 127.0.0.1 --port 8765
+```
+
+Before handing off the skill as installable, run:
+
+```bash
+bash scripts/verify_skill_installability.sh
+```
 
 ## What The Agent Operates
 

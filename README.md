@@ -84,6 +84,30 @@ Run the external submit outbox verification with a real local HTTP callback serv
 bash scripts/verify_outbox_dispatch.sh
 ```
 
+Run the skill installability verification before publishing or handing the skill to another agent:
+
+```bash
+bash scripts/verify_skill_installability.sh
+```
+
+## Install As A Skill
+
+Install from a local checkout while developing:
+
+```bash
+codex skill install /home/derek/Projects/annotation-pipeline-skill
+```
+
+After installation, verify the command entrypoint and initialize a project:
+
+```bash
+annotation-pipeline --help
+annotation-pipeline init --project-root ./demo-project
+annotation-pipeline doctor --project-root ./demo-project
+annotation-pipeline provider doctor --project-root ./demo-project
+annotation-pipeline serve --project-root ./demo-project --host 127.0.0.1 --port 8765
+```
+
 ## Run The Dashboard
 
 Start the Python dashboard API against a file-store root:
