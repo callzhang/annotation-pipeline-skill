@@ -1,0 +1,142 @@
+from datetime import datetime, timedelta, timezone
+
+from annotation_pipeline_skill.core.runtime import (
+    ActiveRun,
+    CapacitySnapshot,
+    QueueCounts,
+    RuntimeConfig,
+    RuntimeCycleStats,
+    RuntimeSnapshot,
+    RuntimeStatus,
+)
+
+
+def test_runtime_config_uses_safe_defaults():
+    config = RuntimeConfig()
+
+    assert config.max_concurrent_tasks == 4
+    assert config.max_starts_per_cycle == 2
+    assert config.stale_after_seconds == 600
+    assert config.retry_delay_seconds == 3600
+    assert config.loop_interval_seconds == 5
+
+
+def test_active_run_round_trips_through_dict():
+    started_at = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    run = ActiveRun(
+        run_id="run-1",
+        task_id="task-1",
+        stage="annotation",
+        attempt_id="attempt-1",
+        provider_target="annotation",
+        started_at=started_at,
+        heartbeat_at=started_at + timedelta(seconds=3),
+        metadata={"pid": 123},
+    )
+
+    loaded = ActiveRun.from_dict(run.to_dict())
+
+    assert loaded == run
+
+
+def test_runtime_snapshot_round_trips_through_dict():
+    generated_at = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    snapshot = RuntimeSnapshot(
+        generated_at=generated_at,
+        runtime_status=RuntimeStatus(
+            healthy=True,
+            heartbeat_at=generated_at,
+            heartbeat_age_seconds=0,
+            active=True,
+            errors=[],
+        ),
+        queue_counts=QueueCounts(pending=2, annotating=1, validating=0, qc=0, human_review=0, accepted=3, rejected=0),
+        active_runs=[
+            ActiveRun(
+                run_id="run-1",
+                task_id="task-1",
+                stage="annotation",
+                attempt_id="attempt-1",
+                provider_target="annotation",
+                started_at=generated_at,
+                heartbeat_at=generated_at,
+            )
+        ],
+        capacity=CapacitySnapshot(max_concurrent_tasks=4, max_starts_per_cycle=2, active_count=1, available_slots=3),
+        stale_tasks=[],
+        due_retries=["task-2"],
+        project_summaries=[{"project_id": "demo", "task_count": 6}],
+        cycle_stats=[
+            RuntimeCycleStats(
+                cycle_id="cycle-1",
+                started_at=generated_at,
+                finished_at=generated_at,
+                started=1,
+                accepted=1,
+                failed=0,
+                capacity_available=3,
+                errors=[],
+            )
+        ],
+    )
+
+    loaded = RuntimeSnapshot.from_dict(snapshot.to_dict())
+
+    assert loaded == snapshot
+
+
+def test_unhealthy_runtime_status_with_missing_heartbeat_round_trips_through_dict():
+    status = RuntimeStatus.from_dict(
+        {
+            "healthy": False,
+            "active": False,
+            "errors": ["scheduler runtime heartbeat missing"],
+        }
+    )
+
+    loaded = RuntimeStatus.from_dict(status.to_dict())
+
+    assert loaded == RuntimeStatus(
+        healthy=False,
+        heartbeat_at=None,
+        heartbeat_age_seconds=None,
+        active=False,
+        errors=["scheduler runtime heartbeat missing"],
+    )
+
+
+def test_runtime_snapshot_loads_with_omitted_empty_list_fields():
+    generated_at = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+
+    loaded = RuntimeSnapshot.from_dict(
+        {
+            "generated_at": generated_at.isoformat(),
+            "runtime_status": RuntimeStatus(
+                healthy=True,
+                heartbeat_at=generated_at,
+                heartbeat_age_seconds=0,
+                active=True,
+            ).to_dict(),
+            "queue_counts": QueueCounts(
+                pending=0,
+                annotating=0,
+                validating=0,
+                qc=0,
+                human_review=0,
+                accepted=0,
+                rejected=0,
+            ).to_dict(),
+            "capacity": CapacitySnapshot(
+                max_concurrent_tasks=4,
+                max_starts_per_cycle=2,
+                active_count=0,
+                available_slots=4,
+            ).to_dict(),
+        }
+    )
+
+    assert loaded.active_runs == []
+    assert loaded.stale_tasks == []
+    assert loaded.due_retries == []
+    assert loaded.project_summaries == []
+    assert loaded.cycle_stats == []
