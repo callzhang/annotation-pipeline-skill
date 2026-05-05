@@ -85,6 +85,35 @@ def test_runtime_snapshot_round_trips_through_dict():
     assert loaded == snapshot
 
 
+def test_queue_counts_surfaces_all_task_status_counts():
+    counts = QueueCounts(
+        draft=1,
+        pending=2,
+        annotating=3,
+        validating=4,
+        qc=5,
+        human_review=6,
+        accepted=7,
+        rejected=8,
+        blocked=9,
+        cancelled=10,
+    )
+
+    assert counts.to_dict() == {
+        "draft": 1,
+        "pending": 2,
+        "annotating": 3,
+        "validating": 4,
+        "qc": 5,
+        "human_review": 6,
+        "accepted": 7,
+        "rejected": 8,
+        "blocked": 9,
+        "cancelled": 10,
+    }
+    assert QueueCounts.from_dict(counts.to_dict()) == counts
+
+
 def test_unhealthy_runtime_status_with_missing_heartbeat_round_trips_through_dict():
     status = RuntimeStatus.from_dict(
         {

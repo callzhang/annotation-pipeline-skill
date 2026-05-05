@@ -155,9 +155,13 @@ class QueueCounts:
     human_review: int
     accepted: int
     rejected: int
+    draft: int = 0
+    blocked: int = 0
+    cancelled: int = 0
 
     def to_dict(self) -> dict:
         return {
+            "draft": self.draft,
             "pending": self.pending,
             "annotating": self.annotating,
             "validating": self.validating,
@@ -165,11 +169,14 @@ class QueueCounts:
             "human_review": self.human_review,
             "accepted": self.accepted,
             "rejected": self.rejected,
+            "blocked": self.blocked,
+            "cancelled": self.cancelled,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> QueueCounts:
         return cls(
+            draft=data["draft"],
             pending=data["pending"],
             annotating=data["annotating"],
             validating=data["validating"],
@@ -177,6 +184,8 @@ class QueueCounts:
             human_review=data["human_review"],
             accepted=data["accepted"],
             rejected=data["rejected"],
+            blocked=data["blocked"],
+            cancelled=data["cancelled"],
         )
 
 
