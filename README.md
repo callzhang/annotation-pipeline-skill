@@ -72,6 +72,12 @@ Run the multi-cycle runtime progress verification with a deterministic fake Code
 bash scripts/verify_runtime_progress.sh
 ```
 
+Run the training data export verification:
+
+```bash
+bash scripts/verify_export_training_data.sh
+```
+
 ## Run The Dashboard
 
 Start the Python dashboard API against a file-store root:
@@ -214,6 +220,18 @@ targets:
 Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis. Local Codex runs are isolated and do not reuse prior CLI sessions; feedback and prior artifacts are passed explicitly in the next prompt.
 
 QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
+
+Export accepted tasks into a traceable JSONL training package:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline export training-data \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --export-id export-001
+```
+
+The command writes `.annotation-pipeline/exports/<export-id>/training_data.jsonl` and `manifest.json`. The manifest records included and excluded task ids, source files, annotation artifact ids, annotation rules hash, validation summary, output paths, and known limitations. Accepted tasks without a readable `annotation_result` artifact are excluded rather than exported with incomplete data.
 
 Serve the dashboard API:
 

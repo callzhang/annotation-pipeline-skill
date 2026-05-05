@@ -9,6 +9,7 @@ from annotation_pipeline_skill.core.models import (
     ArtifactRef,
     Attempt,
     AuditEvent,
+    ExportManifest,
     FeedbackDiscussionEntry,
     FeedbackRecord,
     OutboxRecord,
@@ -29,6 +30,7 @@ class FileStore:
         self.attempts_dir = self.root / "attempts"
         self.artifacts_dir = self.root / "artifacts"
         self.outbox_dir = self.root / "outbox"
+        self.exports_dir = self.root / "exports"
         self.runtime_dir = self.root / "runtime"
         self.active_runs_dir = self.runtime_dir / "active_runs"
         self.runtime_cycles_path = self.runtime_dir / "cycle_stats.jsonl"
@@ -42,6 +44,7 @@ class FileStore:
             self.attempts_dir,
             self.artifacts_dir,
             self.outbox_dir,
+            self.exports_dir,
             self.runtime_dir,
             self.active_runs_dir,
         ):
@@ -99,6 +102,17 @@ class FileStore:
         return [
             OutboxRecord.from_dict(self._read_json(path))
             for path in sorted(self.outbox_dir.glob("*.json"))
+        ]
+
+    def save_export_manifest(self, manifest: ExportManifest) -> None:
+        export_dir = self.exports_dir / manifest.export_id
+        export_dir.mkdir(parents=True, exist_ok=True)
+        self._write_json(export_dir / "manifest.json", manifest.to_dict())
+
+    def list_export_manifests(self) -> list[ExportManifest]:
+        return [
+            ExportManifest.from_dict(self._read_json(path))
+            for path in sorted(self.exports_dir.glob("*/manifest.json"))
         ]
 
     def save_active_run(self, run: ActiveRun) -> None:

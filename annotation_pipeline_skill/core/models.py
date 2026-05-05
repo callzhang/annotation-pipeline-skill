@@ -114,6 +114,91 @@ class ArtifactRef:
 
 
 @dataclass
+class ExportManifest:
+    export_id: str
+    project_id: str
+    created_at: datetime
+    output_paths: list[str]
+    task_ids_included: list[str]
+    task_ids_excluded: list[dict]
+    artifact_ids: list[str]
+    source_files: list[str]
+    annotation_rules_hash: str | None
+    schema_version: str
+    validator_version: str
+    validation_summary: dict
+    known_limitations: list[str] = field(default_factory=list)
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        project_id: str,
+        output_paths: list[str],
+        task_ids_included: list[str],
+        task_ids_excluded: list[dict],
+        artifact_ids: list[str],
+        source_files: list[str],
+        annotation_rules_hash: str | None,
+        schema_version: str,
+        validator_version: str,
+        validation_summary: dict,
+        known_limitations: list[str] | None = None,
+        export_id: str | None = None,
+    ) -> ExportManifest:
+        return cls(
+            export_id=export_id or f"export-{uuid4().hex}",
+            project_id=project_id,
+            created_at=utc_now(),
+            output_paths=output_paths,
+            task_ids_included=task_ids_included,
+            task_ids_excluded=task_ids_excluded,
+            artifact_ids=artifact_ids,
+            source_files=source_files,
+            annotation_rules_hash=annotation_rules_hash,
+            schema_version=schema_version,
+            validator_version=validator_version,
+            validation_summary=validation_summary,
+            known_limitations=known_limitations or [],
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "export_id": self.export_id,
+            "project_id": self.project_id,
+            "created_at": _dt_to_str(self.created_at),
+            "output_paths": self.output_paths,
+            "task_ids_included": self.task_ids_included,
+            "task_ids_excluded": self.task_ids_excluded,
+            "artifact_ids": self.artifact_ids,
+            "source_files": self.source_files,
+            "annotation_rules_hash": self.annotation_rules_hash,
+            "schema_version": self.schema_version,
+            "validator_version": self.validator_version,
+            "validation_summary": self.validation_summary,
+            "known_limitations": self.known_limitations,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ExportManifest:
+        return cls(
+            export_id=data["export_id"],
+            project_id=data["project_id"],
+            created_at=_dt_from_str(data["created_at"]),
+            output_paths=list(data.get("output_paths", [])),
+            task_ids_included=list(data.get("task_ids_included", [])),
+            task_ids_excluded=list(data.get("task_ids_excluded", [])),
+            artifact_ids=list(data.get("artifact_ids", [])),
+            source_files=list(data.get("source_files", [])),
+            annotation_rules_hash=data.get("annotation_rules_hash"),
+            schema_version=data["schema_version"],
+            validator_version=data["validator_version"],
+            validation_summary=data.get("validation_summary", {}),
+            known_limitations=list(data.get("known_limitations", [])),
+        )
+
+
+@dataclass
 class Attempt:
     attempt_id: str
     task_id: str

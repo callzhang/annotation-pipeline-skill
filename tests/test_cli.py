@@ -17,6 +17,7 @@ def test_cli_init_creates_project_layout(tmp_path):
     assert (config_root / "llm_profiles.yaml").exists()
     assert (config_root / "annotators.yaml").exists()
     assert (config_root / "tasks").is_dir()
+    assert (config_root / "exports").is_dir()
 
 
 def test_cli_init_writes_runtime_config(tmp_path):
@@ -195,3 +196,57 @@ def test_cli_create_batched_jsonl_tasks_does_not_cross_group_boundaries(tmp_path
     assert exit_code == 0
     assert [task.source_ref["row_count"] for task in tasks] == [2, 1, 2]
     assert [task.metadata["sources"] for task in tasks] == [["a"], ["a"], ["b"]]
+
+
+def test_cli_export_training_data_writes_manifest(tmp_path, capsys):
+    from annotation_pipeline_skill.core.models import ArtifactRef
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    main(["init", "--project-root", str(tmp_path)])
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    source = tmp_path / "input.jsonl"
+    source.write_text(json.dumps({"text": "alpha"}) + "\n", encoding="utf-8")
+    main(
+        [
+            "create-tasks",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "pipe",
+        ]
+    )
+    task = store.load_task("pipe-000001")
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+    payload_path = store.root / "artifact_payloads/pipe-000001/pipe-000001-attempt-1_annotation_result.json"
+    payload_path.parent.mkdir(parents=True)
+    payload_path.write_text(json.dumps({"text": '{"labels":[]}'}), encoding="utf-8")
+    store.append_artifact(
+        ArtifactRef.new(
+            task_id="pipe-000001",
+            kind="annotation_result",
+            path="artifact_payloads/pipe-000001/pipe-000001-attempt-1_annotation_result.json",
+            content_type="application/json",
+        )
+    )
+
+    exit_code = main(
+        [
+            "export",
+            "training-data",
+            "--project-root",
+            str(tmp_path),
+            "--project-id",
+            "pipe",
+            "--export-id",
+            "export-1",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["export_id"] == "export-1"
+    assert payload["task_ids_included"] == ["pipe-000001"]
+    assert (tmp_path / ".annotation-pipeline" / "exports" / "export-1" / "training_data.jsonl").exists()

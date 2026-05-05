@@ -27,6 +27,7 @@ from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
+from annotation_pipeline_skill.services.export_service import TrainingDataExportService
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -216,6 +217,17 @@ def build_parser() -> argparse.ArgumentParser:
     provider_targets.add_argument("--project-root", type=Path, default=Path.cwd())
     provider_targets.set_defaults(handler=handle_provider_targets)
 
+    export_parser = subparsers.add_parser("export")
+    export_subparsers = export_parser.add_subparsers(required=True)
+
+    training_data = export_subparsers.add_parser("training-data")
+    training_data.add_argument("--project-root", type=Path, default=Path.cwd())
+    training_data.add_argument("--project-id", required=True)
+    training_data.add_argument("--output-dir", type=Path)
+    training_data.add_argument("--export-id")
+    training_data.add_argument("--enqueue-external-submit", action="store_true")
+    training_data.set_defaults(handler=handle_export_training_data)
+
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -235,6 +247,7 @@ def handle_init(args: argparse.Namespace) -> int:
         "attempts",
         "artifacts",
         "outbox",
+        "exports",
         "runtime",
         "snapshots",
     ):
@@ -251,7 +264,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
         load_project_config(args.project_root)
     except ConfigValidationError:
         return 1
-    required_dirs = ("tasks", "events", "feedback", "feedback_discussions", "attempts", "artifacts", "outbox")
+    required_dirs = ("tasks", "events", "feedback", "feedback_discussions", "attempts", "artifacts", "outbox", "exports")
     config_root = args.project_root / ".annotation-pipeline"
     return 0 if all((config_root / name).is_dir() for name in required_dirs) else 1
 
@@ -423,6 +436,20 @@ def handle_provider_targets(args: argparse.Namespace) -> int:
             "base_url": profile.base_url,
         }
     print(json.dumps(payload, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_export_training_data(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    export_id = args.export_id
+    output_dir = args.output_dir or store.exports_dir / (export_id or args.project_id)
+    manifest = TrainingDataExportService(store).export_jsonl(
+        project_id=args.project_id,
+        output_dir=output_dir,
+        export_id=export_id,
+        enqueue_external_submit=args.enqueue_external_submit,
+    )
+    print(json.dumps(manifest.to_dict(), sort_keys=True, indent=2))
     return 0
 
 

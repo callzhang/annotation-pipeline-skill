@@ -157,3 +157,19 @@ If runtime status shows stale tasks or due retries that are not draining, inspec
 7. Re-run annotation with feedback when consensus requires label updates, then submit accepted training data.
 
 For multimodal projects, keep the core task model generic and add adapters/renderers for images, video, point clouds, or model-specific previews such as bounding boxes from a VC detection model.
+
+## Training Data Export
+
+After tasks reach `accepted`, export the project into a JSONL package:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline export training-data \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --export-id export-001
+```
+
+The export service writes `training_data.jsonl` plus `manifest.json` under `.annotation-pipeline/exports/<export-id>/`. The manifest is the audit record for algorithm engineers: it includes included and excluded task ids, source files, annotation artifact ids, annotation rules hash, schema/validator versions, validation summary, output paths, and known limitations.
+
+Accepted tasks are exported only when they still have a readable `annotation_result` artifact. Missing annotation artifacts are recorded as excluded validation failures, and the task remains `accepted` so the operator can repair/export again without losing QC history.
