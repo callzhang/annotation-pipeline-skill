@@ -101,12 +101,41 @@ runtime:
     reasoning_effort: none
     timeout_seconds: 900
     no_progress_timeout_seconds: 30
+  local_claude:
+    provider: local_cli
+    cli_kind: claude
+    cli_binary: claude
+    model: claude-sonnet-4-5
+    permission_mode: dontAsk
+    timeout_seconds: 900
+    no_progress_timeout_seconds: 30
   openai_default:
     provider: openai_responses
     model: gpt-5.4-mini
     api_key_env: OPENAI_API_KEY
     base_url: https://api.openai.com/v1
     reasoning_effort: medium
+    timeout_seconds: 300
+  deepseek_default:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    timeout_seconds: 300
+  glm_default:
+    provider: openai_compatible
+    provider_flavor: glm
+    model: glm-4.5
+    api_key_env: ZHIPUAI_API_KEY
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    timeout_seconds: 300
+  minimax_default:
+    provider: openai_compatible
+    provider_flavor: minimax
+    model: MiniMax-M1
+    api_key_env: MINIMAX_API_KEY
+    base_url: https://api.minimax.io/v1
     timeout_seconds: 300
 targets:
   annotation: local_codex
@@ -382,14 +411,17 @@ def handle_provider_targets(args: argparse.Namespace) -> int:
         registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
     except (OSError, ProfileValidationError):
         return 1
-    payload = {
-        target: {
-            "profile": registry.resolve(target).name,
-            "provider": registry.resolve(target).provider,
-            "model": registry.resolve(target).model,
+    payload = {}
+    for target in sorted(registry.targets):
+        profile = registry.resolve(target)
+        payload[target] = {
+            "profile": profile.name,
+            "provider": profile.provider,
+            "provider_flavor": profile.provider_flavor,
+            "cli_kind": profile.cli_kind,
+            "model": profile.model,
+            "base_url": profile.base_url,
         }
-        for target in sorted(registry.targets)
-    }
     print(json.dumps(payload, sort_keys=True, indent=2))
     return 0
 

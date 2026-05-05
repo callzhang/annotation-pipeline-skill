@@ -23,6 +23,8 @@ annotation-pipeline provider doctor --project-root ./demo-project
 annotation-pipeline provider targets --project-root ./demo-project
 ```
 
+The dashboard UI exposes the same configuration under the Configuration tab. Open `Subagent Providers` to edit `.annotation-pipeline/llm_profiles.yaml`, then save from the UI. This is the operator path for changing annotation, QC, coordinator, Human Review, or future model-assist provider targets without editing code.
+
 ## Provider Profiles
 
 OpenAI Responses API profile:
@@ -50,6 +52,55 @@ profiles:
 ```
 
 The local CLI adapter uses an isolated Codex home, strips desktop session context, preserves auth/config needed to run, and records continuity handles from JSON events.
+
+Local Claude CLI profile:
+
+```yaml
+profiles:
+  local_claude:
+    provider: local_cli
+    cli_kind: claude
+    cli_binary: claude
+    model: claude-sonnet-4-5
+    permission_mode: dontAsk
+```
+
+OpenAI-compatible API profiles for DeepSeek, GLM, and MiniMax:
+
+```yaml
+profiles:
+  deepseek_default:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+
+  glm_default:
+    provider: openai_compatible
+    provider_flavor: glm
+    model: glm-4.5
+    api_key_env: ZHIPUAI_API_KEY
+    base_url: https://open.bigmodel.cn/api/paas/v4
+
+  minimax_default:
+    provider: openai_compatible
+    provider_flavor: minimax
+    model: MiniMax-M1
+    api_key_env: MINIMAX_API_KEY
+    base_url: https://api.minimax.io/v1
+```
+
+Switch QC to DeepSeek by editing targets:
+
+```yaml
+targets:
+  annotation: local_codex
+  qc: deepseek_default
+  coordinator: local_codex
+```
+
+Provider selection is explicit. Do not rely on model-name prefixes to infer providers.
 
 ## Run A Cycle
 

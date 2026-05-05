@@ -1,3 +1,5 @@
+import json
+
 from annotation_pipeline_skill.interfaces.cli import main
 
 
@@ -37,3 +39,27 @@ targets:
     )
 
     assert main(["provider", "doctor", "--project-root", str(tmp_path)]) == 1
+
+
+def test_provider_targets_exposes_ui_relevant_profile_fields(tmp_path, capsys):
+    main(["init", "--project-root", str(tmp_path)])
+
+    assert main(["provider", "targets", "--project-root", str(tmp_path)]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["annotation"] == {
+        "base_url": None,
+        "cli_kind": "codex",
+        "model": "gpt-5.4-mini",
+        "profile": "local_codex",
+        "provider": "local_cli",
+        "provider_flavor": None,
+    }
+    assert payload["qc"] == {
+        "base_url": "https://api.openai.com/v1",
+        "cli_kind": None,
+        "model": "gpt-5.4-mini",
+        "profile": "openai_default",
+        "provider": "openai_responses",
+        "provider_flavor": None,
+    }
