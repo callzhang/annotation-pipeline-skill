@@ -4,7 +4,7 @@
 
 **Goal:** Add explicit, UI-configurable support for Codex CLI, Claude CLI, DeepSeek API, GLM API, and MiniMax API provider profiles.
 
-**Architecture:** Keep provider choice in `llm_profiles.yaml` and route through `LLMRegistry`. Add an OpenAI-compatible chat client for DeepSeek, GLM, and MiniMax while preserving the existing OpenAI Responses client and isolated local Codex execution. Extend the existing React Configuration UI by making initialized YAML and provider target diagnostics complete enough for operators to configure providers without code edits.
+**Architecture:** Keep provider choice in `llm_profiles.yaml` and route through `LLMRegistry`. Add an OpenAI-compatible chat client for DeepSeek, GLM, and MiniMax while preserving the existing OpenAI Responses client and isolated local Codex execution. Extend the React UI with a structured Providers tab, while preserving raw YAML editing in the Configuration tab.
 
 **Tech Stack:** Python dataclasses and PyYAML for profile loading, OpenAI Python SDK `AsyncOpenAI` for Responses and OpenAI-compatible chat completions, asyncio subprocesses for local CLIs, pytest for backend tests, Vite React TypeScript for UI configuration.
 
@@ -22,6 +22,9 @@
 - Modify `tests/test_provider_cli.py`: assert target diagnostics include UI-relevant fields.
 - Create `scripts/verify_runtime_codex_smoke.sh`: run a real local Codex one-task smoke with diagnostics.
 - Modify `docs/agent-operator-guide.md`: document UI-configurable provider profiles and smoke verification.
+- Create `annotation_pipeline_skill/services/provider_config_service.py`: provide structured provider snapshots, YAML writeback, and deterministic local doctor checks.
+- Create `web/src/components/ProvidersPanel.tsx`: provide form controls for provider profiles and stage targets.
+- Create `web/src/providers.ts`: share frontend provider helper logic.
 
 ### Task 1: Profile Schema
 
@@ -192,6 +195,40 @@ Expected: exits 0 if local Codex is installed and authenticated; otherwise exits
 - [ ] **Step 5: Commit**
 
 Run: `git add scripts/verify_runtime_codex_smoke.sh docs/agent-operator-guide.md && git commit -m "test: add real codex runtime smoke"`
+
+### Task 6: Structured Provider UI Completion
+
+**Files:**
+- Create: `annotation_pipeline_skill/services/provider_config_service.py`
+- Modify: `annotation_pipeline_skill/interfaces/api.py`
+- Create: `tests/test_provider_config_api.py`
+- Create: `web/src/providers.ts`
+- Create: `web/src/providers.test.ts`
+- Create: `web/src/components/ProvidersPanel.tsx`
+- Modify: `web/src/App.tsx`
+- Modify: `web/src/api.ts`
+- Modify: `web/src/types.ts`
+- Modify: `web/src/styles.css`
+
+- [x] **Step 1: Write backend provider API tests**
+
+Tests cover `GET /api/providers` returning profiles, targets, limits, and diagnostics, plus `PUT /api/providers` writing valid structured provider config back to `llm_profiles.yaml`.
+
+- [x] **Step 2: Implement backend provider config service**
+
+`build_provider_config_snapshot()` loads `llm_profiles.yaml`, serializes profiles, and runs local checks for CLI binaries and API key env vars. `save_provider_config()` validates structured payloads through `LLMRegistry` before writing YAML.
+
+- [x] **Step 3: Write frontend helper tests**
+
+Tests cover creating provider profiles, stripping diagnostics from save payloads, and formatting scan-friendly profile titles.
+
+- [x] **Step 4: Implement Providers tab**
+
+The Providers tab supports adding, editing, deleting provider profiles, changing stage targets, editing local CLI concurrency, saving to YAML, and refreshing provider doctor status.
+
+- [x] **Step 5: Verify**
+
+Run backend tests, frontend tests, frontend build, runtime progress verification, runtime e2e verification, and real Codex smoke.
 
 ## Self-Review
 

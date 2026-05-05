@@ -78,6 +78,13 @@ cycles = request("/api/runtime/cycles")
 if "cycles" not in cycles:
     raise SystemExit("missing cycles in /api/runtime/cycles")
 
+providers = request("/api/providers")
+for key in ("config_valid", "profiles", "targets", "diagnostics"):
+    if key not in providers:
+        raise SystemExit(f"missing {key} in /api/providers")
+if providers["config_valid"] is not True:
+    raise SystemExit("/api/providers did not return a valid provider config")
+
 run_once = request("/api/runtime/run-once", method="POST")
 if run_once.get("ok") is not True or "snapshot" not in run_once:
     raise SystemExit("invalid /api/runtime/run-once response")

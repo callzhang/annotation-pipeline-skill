@@ -17,7 +17,9 @@ from annotation_pipeline_skill.services.feedback_service import build_feedback_c
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
 from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
+from annotation_pipeline_skill.services.provider_config_service import build_provider_config_snapshot, save_provider_config
 from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.llm.profiles import ProfileValidationError
 
 
 CONFIG_FILE_DEFINITIONS: dict[str, str] = {
@@ -55,6 +57,8 @@ class DashboardApi:
             return self._json_response(200, build_kanban_snapshot(self.store, project_id=project_id))
         if route == "/api/config":
             return self._json_response(200, {"files": self._config_files()})
+        if route == "/api/providers":
+            return self._provider_config_response()
         if route == "/api/events":
             return self._json_response(200, {"events": self._event_log(project_id=project_id)})
         if route == "/api/runtime":
@@ -78,6 +82,8 @@ class DashboardApi:
         if route.startswith("/api/config/"):
             config_id = route.removeprefix("/api/config/")
             return self._update_config_response(config_id, body)
+        if route == "/api/providers":
+            return self._update_provider_config_response(body)
         return self._json_response(404, {"error": "not_found"})
 
     def handle_post(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
@@ -97,6 +103,32 @@ class DashboardApi:
             return self._json_response(409, {"error": "runtime_runner_unavailable"})
         snapshot = self.runtime_once()
         return self._json_response(200, {"ok": True, "snapshot": snapshot.to_dict()})
+
+    def _provider_config_response(self) -> tuple[int, dict[str, str], bytes]:
+        try:
+            return self._json_response(200, build_provider_config_snapshot(self.store.root))
+        except (OSError, ProfileValidationError) as exc:
+            return self._json_response(
+                400,
+                {
+                    "config_valid": False,
+                    "error": "invalid_provider_config",
+                    "detail": str(exc),
+                },
+            )
+
+    def _update_provider_config_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        try:
+            snapshot = save_provider_config(self.store.root, payload)
+        except (OSError, ProfileValidationError) as exc:
+            return self._json_response(400, {"error": "invalid_provider_config", "detail": str(exc)})
+        return self._json_response(200, snapshot)
 
     def _json_response(self, status: int, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")

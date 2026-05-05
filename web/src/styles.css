@@ -135,6 +135,10 @@ button {
   color: #ffffff;
 }
 
+.view-tab.danger {
+  color: #7a2b12;
+}
+
 .primary-button:disabled {
   cursor: wait;
   opacity: 0.7;
@@ -725,6 +729,169 @@ button {
   text-align: left;
 }
 
+.providers-panel {
+  display: grid;
+  gap: 14px;
+  margin: 0 auto;
+  max-width: 1680px;
+}
+
+.provider-actions,
+.provider-add-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.providers-layout {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 360px minmax(0, 1fr);
+}
+
+.provider-list,
+.provider-editor,
+.provider-targets {
+  background: #ffffff;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.provider-list {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-list select,
+.provider-form-grid input,
+.provider-form-grid select,
+.target-grid input,
+.target-grid select {
+  background: #ffffff;
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  color: #172026;
+  font: inherit;
+  min-height: 34px;
+  padding: 6px 9px;
+  width: 100%;
+}
+
+.provider-list-item {
+  background: #ffffff;
+  border: 1px solid #d9e1e6;
+  border-radius: 6px;
+  color: #172026;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  min-height: 68px;
+  padding: 10px;
+  text-align: left;
+}
+
+.provider-list-item.selected {
+  border-color: #2f6f73;
+  box-shadow: 0 0 0 1px #2f6f73;
+}
+
+.provider-list-item span {
+  font-size: 13px;
+  font-weight: 720;
+  overflow-wrap: anywhere;
+}
+
+.provider-status {
+  font-size: 11px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.provider-status.ok {
+  color: #1f5a43;
+}
+
+.provider-status.error {
+  color: #7a2b12;
+}
+
+.provider-section-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.provider-section-header h3,
+.provider-diagnostics h3,
+.provider-targets h3 {
+  font-size: 15px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.provider-form-grid,
+.target-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.provider-form-grid label,
+.target-grid label {
+  display: grid;
+  gap: 5px;
+}
+
+.provider-form-grid span,
+.target-grid span {
+  color: #52616b;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.provider-diagnostics {
+  border-top: 1px solid #d7e0e5;
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.provider-check {
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: 1fr auto;
+  padding: 10px;
+}
+
+.provider-check.ok {
+  background: #e5f3ed;
+  border-color: #9bc8b7;
+}
+
+.provider-check.error {
+  background: #f7e6df;
+  border-color: #e5b29c;
+}
+
+.provider-check span,
+.provider-check strong {
+  font-size: 12px;
+}
+
+.provider-check p {
+  color: #52616b;
+  font-size: 12px;
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     padding: 14px;
@@ -755,6 +922,12 @@ button {
   }
 
   .config-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .providers-layout,
+  .provider-form-grid,
+  .target-grid {
     grid-template-columns: 1fr;
   }
 

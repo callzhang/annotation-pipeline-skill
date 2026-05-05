@@ -49,7 +49,7 @@ targets:
 
 ## UI Configurability
 
-The Vite React UI remains the primary operator UI. The Configuration tab must expose `llm_profiles.yaml` so users can configure:
+The Vite React UI remains the primary operator UI. The Providers tab must expose structured controls for normal provider operations, and the Configuration tab must still expose raw `llm_profiles.yaml` for advanced inspection. Users can configure:
 
 - Provider profiles.
 - API key environment variable names.
@@ -58,9 +58,19 @@ The Vite React UI remains the primary operator UI. The Configuration tab must ex
 - Stage target bindings for annotation, QC, and coordinator agents.
 - Runtime limits such as local CLI concurrency.
 
-The UI should not hide provider configuration behind code-only defaults. The initialized project config must include editable examples for all five provider categories so a user can switch targets by editing YAML in the UI and saving it.
+The UI should not hide provider configuration behind code-only defaults. The initialized project config must include editable examples for all five provider categories so a user can switch targets from the Providers tab or by editing YAML in the Configuration tab and saving it.
 
 Provider target display should include enough fields to confirm active configuration without opening YAML: profile, provider, provider flavor, CLI kind, model, and base URL when configured.
+
+Provider doctor should expose local deterministic checks to the UI:
+
+- LLM profile schema validity.
+- Stage target references.
+- Local CLI binary availability.
+- API key environment variable presence.
+- API base URL configuration.
+
+External provider reachability probes are intentionally not run by default because they require credentials and network access. They should be added as an explicit action later.
 
 ## Runtime Behavior
 
@@ -86,6 +96,8 @@ Unit tests must cover:
 - OpenAI-compatible chat completion request construction and result parsing.
 - Claude CLI command construction and JSON stream parsing.
 - Provider target output showing UI-relevant fields.
+- Provider config API structured read/write and local doctor checks.
+- Frontend provider helper behavior for profile creation, save payloads, and operator-facing labels.
 
 Integration verification must cover:
 

@@ -161,3 +161,45 @@ export interface RuntimeRunOnceResponse {
   ok: boolean;
   snapshot: RuntimeSnapshot;
 }
+
+export type ProviderName = "openai_responses" | "openai_compatible" | "local_cli";
+export type ProviderFlavor = "deepseek" | "glm" | "minimax";
+export type CliKind = "codex" | "claude";
+
+export interface ProviderProfileConfig {
+  name: string;
+  provider: ProviderName;
+  provider_flavor: ProviderFlavor | null;
+  cli_kind: CliKind | null;
+  cli_binary: string | null;
+  model: string;
+  api_key_env: string | null;
+  base_url: string | null;
+  reasoning_effort: string | null;
+  permission_mode: string | null;
+  timeout_seconds: number | null;
+  max_retries: number | null;
+  concurrency_limit: number | null;
+  no_progress_timeout_seconds: number | null;
+}
+
+export interface ProviderCheck {
+  id: string;
+  status: "ok" | "warning" | "error";
+  message: string;
+}
+
+export interface ProviderDiagnostic {
+  status: "ok" | "warning" | "error";
+  checks: ProviderCheck[];
+}
+
+export interface ProviderConfigSnapshot {
+  config_valid: boolean;
+  profiles: ProviderProfileConfig[];
+  targets: Record<string, string>;
+  limits: {
+    local_cli_global_concurrency: number | null;
+  };
+  diagnostics: Record<string, ProviderDiagnostic>;
+}

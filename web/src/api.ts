@@ -8,6 +8,7 @@ import type {
   RuntimeRunOnceResponse,
   RuntimeSnapshot,
   TaskDetail,
+  ProviderConfigSnapshot,
 } from "./types";
 
 function projectQuery(projectId: string | null): string {
@@ -114,4 +115,30 @@ export async function runRuntimeOnce(): Promise<RuntimeRunOnceResponse> {
     throw new Error(payload?.error ?? `Runtime run-once API returned ${response.status}`);
   }
   return response.json() as Promise<RuntimeRunOnceResponse>;
+}
+
+export async function fetchProviderConfig(): Promise<ProviderConfigSnapshot> {
+  const response = await fetch("/api/providers");
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(payload?.detail ?? payload?.error ?? `Provider API returned ${response.status}`);
+  }
+  return response.json() as Promise<ProviderConfigSnapshot>;
+}
+
+export async function saveProviderConfig(payload: {
+  profiles: ProviderConfigSnapshot["profiles"];
+  targets: ProviderConfigSnapshot["targets"];
+  limits: ProviderConfigSnapshot["limits"];
+}): Promise<ProviderConfigSnapshot> {
+  const response = await fetch("/api/providers", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Provider save returned ${response.status}`);
+  }
+  return response.json() as Promise<ProviderConfigSnapshot>;
 }

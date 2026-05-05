@@ -23,7 +23,12 @@ annotation-pipeline provider doctor --project-root ./demo-project
 annotation-pipeline provider targets --project-root ./demo-project
 ```
 
-The dashboard UI exposes the same configuration under the Configuration tab. Open `Subagent Providers` to edit `.annotation-pipeline/llm_profiles.yaml`, then save from the UI. This is the operator path for changing annotation, QC, coordinator, Human Review, or future model-assist provider targets without editing code.
+The dashboard UI exposes provider configuration in two ways:
+
+- Use the Providers tab for normal operation. It provides form controls for profile kind, CLI binary, API key environment variable, base URL, model, timeout, stage target bindings, and local CLI concurrency.
+- Use the Configuration tab for raw YAML inspection or advanced edits. Open `Subagent Providers` to edit `.annotation-pipeline/llm_profiles.yaml` directly.
+
+The Providers tab is the operator path for changing annotation, QC, coordinator, Human Review, or future model-assist provider targets without editing code. Click Validate to run local provider doctor checks for schema validity, missing API key env vars, and missing local CLI binaries.
 
 ## Provider Profiles
 
