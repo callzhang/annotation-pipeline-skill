@@ -75,6 +75,19 @@ def test_dashboard_api_returns_runtime_snapshot(tmp_path):
     assert "queue_counts" in payload
 
 
+def test_dashboard_api_returns_runtime_monitor_report(tmp_path):
+    store = FileStore(tmp_path)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/runtime/monitor")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["ok"] is False
+    assert payload["failures"] == ["runtime_unhealthy"]
+    assert payload["details"]["runtime_unhealthy"]["errors"] == ["heartbeat_missing"]
+
+
 def test_dashboard_api_runs_one_runtime_cycle_with_injected_runner(tmp_path):
     store = FileStore(tmp_path)
     called = {"count": 0}

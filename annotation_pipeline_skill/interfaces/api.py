@@ -15,6 +15,7 @@ from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
+from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.store.file_store import FileStore
 
@@ -58,6 +59,8 @@ class DashboardApi:
             return self._json_response(200, {"events": self._event_log(project_id=project_id)})
         if route == "/api/runtime":
             return self._json_response(200, self._runtime_snapshot().to_dict())
+        if route == "/api/runtime/monitor":
+            return self._json_response(200, validate_runtime_snapshot(self._runtime_snapshot()))
         if route == "/api/runtime/cycles":
             return self._json_response(
                 200,
