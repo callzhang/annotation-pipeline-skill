@@ -12,6 +12,7 @@ const baseReport: ReadinessReport = {
   human_review_count: 0,
   validation_blockers: [],
   pending_outbox_count: 0,
+  dead_letter_outbox_count: 0,
   latest_export: null,
   recommended_next_action: "export_training_data",
   next_command: "annotation-pipeline export training-data --project-id pipe",
@@ -32,6 +33,7 @@ describe("readiness helpers", () => {
       "Human Review",
       "Blockers",
       "Outbox",
+      "Dead letters",
     ]);
   });
 });

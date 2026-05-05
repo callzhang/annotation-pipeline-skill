@@ -164,6 +164,22 @@ def test_dashboard_api_returns_readiness_report_for_project(tmp_path):
     assert payload["recommended_next_action"] == "repair_export_blockers"
 
 
+def test_dashboard_api_returns_outbox_summary(tmp_path):
+    from annotation_pipeline_skill.core.models import OutboxRecord
+    from annotation_pipeline_skill.core.states import OutboxKind
+
+    store = FileStore(tmp_path)
+    store.save_outbox(OutboxRecord.new(task_id="task-1", kind=OutboxKind.SUBMIT, payload={"result": {}}))
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/outbox")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["counts"] == {"dead_letter": 0, "pending": 1, "sent": 0}
+    assert payload["records"][0]["task_id"] == "task-1"
+
+
 def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events_and_feedback(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(

@@ -39,6 +39,11 @@ def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
         for record in store.list_outbox()
         if record.task_id in {task.task_id for task in tasks} and record.status is OutboxStatus.PENDING
     )
+    dead_letter_outbox_count = sum(
+        1
+        for record in store.list_outbox()
+        if record.task_id in {task.task_id for task in tasks} and record.status is OutboxStatus.DEAD_LETTER
+    )
     latest_export = _latest_export(manifests)
     ready_for_training = (
         bool(accepted_tasks)
@@ -47,6 +52,7 @@ def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
         and not open_feedback
         and not validation_blockers
         and pending_outbox_count == 0
+        and dead_letter_outbox_count == 0
     )
 
     recommended_next_action = _recommended_next_action(
@@ -56,6 +62,7 @@ def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
         human_review_count=len(human_review_tasks),
         open_feedback_count=len(open_feedback),
         pending_outbox_count=pending_outbox_count,
+        dead_letter_outbox_count=dead_letter_outbox_count,
         ready_for_training=ready_for_training,
     )
 
@@ -69,6 +76,7 @@ def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
         "human_review_count": len(human_review_tasks),
         "validation_blockers": validation_blockers,
         "pending_outbox_count": pending_outbox_count,
+        "dead_letter_outbox_count": dead_letter_outbox_count,
         "latest_export": latest_export,
         "recommended_next_action": recommended_next_action,
         "next_command": _next_command(project_id, recommended_next_action),
@@ -110,6 +118,7 @@ def _recommended_next_action(
     human_review_count: int,
     open_feedback_count: int,
     pending_outbox_count: int,
+    dead_letter_outbox_count: int,
     ready_for_training: bool,
 ) -> str:
     if human_review_count:
@@ -124,6 +133,8 @@ def _recommended_next_action(
         return "export_training_data"
     if pending_outbox_count:
         return "drain_external_outbox"
+    if dead_letter_outbox_count:
+        return "inspect_dead_letter_outbox"
     if ready_for_training:
         return "deliver_training_data"
     return "inspect_project_state"

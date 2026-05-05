@@ -28,6 +28,7 @@ from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.export_service import TrainingDataExportService
+from annotation_pipeline_skill.services.outbox_dispatch_service import OutboxDispatchService, build_outbox_summary
 from annotation_pipeline_skill.services.readiness_service import build_readiness_report
 from annotation_pipeline_skill.store.file_store import FileStore
 
@@ -236,6 +237,20 @@ def build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--project-root", type=Path, default=Path.cwd())
     readiness.add_argument("--project-id", required=True)
     readiness.set_defaults(handler=handle_report_readiness)
+
+    outbox_parser = subparsers.add_parser("outbox")
+    outbox_subparsers = outbox_parser.add_subparsers(required=True)
+
+    outbox_status = outbox_subparsers.add_parser("status")
+    outbox_status.add_argument("--project-root", type=Path, default=Path.cwd())
+    outbox_status.set_defaults(handler=handle_outbox_status)
+
+    outbox_drain = outbox_subparsers.add_parser("drain")
+    outbox_drain.add_argument("--project-root", type=Path, default=Path.cwd())
+    outbox_drain.add_argument("--max-items", type=int, default=10)
+    outbox_drain.add_argument("--max-attempts", type=int, default=3)
+    outbox_drain.add_argument("--retry-delay-seconds", type=int, default=60)
+    outbox_drain.set_defaults(handler=handle_outbox_drain)
 
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -465,6 +480,28 @@ def handle_export_training_data(args: argparse.Namespace) -> int:
 def handle_report_readiness(args: argparse.Namespace) -> int:
     store = FileStore(args.project_root / ".annotation-pipeline")
     print(json.dumps(build_readiness_report(store, args.project_id), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_outbox_status(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    print(json.dumps(build_outbox_summary(store), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_outbox_drain(args: argparse.Namespace) -> int:
+    config_root = args.project_root / ".annotation-pipeline"
+    callbacks_data = _read_yaml(config_root / "callbacks.yaml")
+    store = FileStore(config_root)
+    result = OutboxDispatchService(
+        store,
+        callbacks=callbacks_data.get("callbacks", {}),
+    ).drain(
+        max_items=args.max_items,
+        max_attempts=args.max_attempts,
+        retry_delay_seconds=args.retry_delay_seconds,
+    )
+    print(json.dumps({"result": result, "outbox": build_outbox_summary(store)}, sort_keys=True, indent=2))
     return 0
 
 

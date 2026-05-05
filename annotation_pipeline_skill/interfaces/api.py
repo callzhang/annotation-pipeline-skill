@@ -15,6 +15,7 @@ from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
+from annotation_pipeline_skill.services.outbox_dispatch_service import build_outbox_summary
 from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.provider_config_service import build_provider_config_snapshot, save_provider_config
@@ -66,6 +67,8 @@ class DashboardApi:
             if not project_id:
                 return self._json_response(400, {"error": "project_required"})
             return self._json_response(200, build_readiness_report(self.store, project_id))
+        if route == "/api/outbox":
+            return self._json_response(200, build_outbox_summary(self.store))
         if route == "/api/runtime":
             return self._json_response(200, self._runtime_snapshot().to_dict())
         if route == "/api/runtime/monitor":

@@ -184,3 +184,24 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 The report returns `ready_for_training`, accepted/exported/exportable counts, open feedback count, Human Review count, validation blockers, pending external outbox count, latest export metadata, and a deterministic recommended next action. The dashboard exposes the same information in the Readiness tab for the selected project.
+
+## External Outbox
+
+When export uses `--enqueue-external-submit`, accepted external tasks create `submit` outbox records. Inspect them before handoff:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline outbox status --project-root ./demo-project
+```
+
+Drain due pending records through the configured callback endpoints:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline outbox drain \
+  --project-root ./demo-project \
+  --max-items 10 \
+  --max-attempts 3
+```
+
+The dispatcher sends JSON POST requests to `callbacks.yaml`. A successful response marks the record `sent` and writes an audit event. Retryable failures keep the record `pending` with `retry_count`, `next_retry_at`, and `last_error`. Permanent failures or exhausted retries move to `dead_letter`; readiness reports those as blockers until an operator resolves them.

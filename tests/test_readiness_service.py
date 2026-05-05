@@ -34,6 +34,7 @@ def test_readiness_report_recommends_export_when_accepted_tasks_are_exportable(t
         "human_review_count": 0,
         "validation_blockers": [],
         "pending_outbox_count": 0,
+        "dead_letter_outbox_count": 0,
         "latest_export": None,
         "recommended_next_action": "export_training_data",
         "next_command": "annotation-pipeline export training-data --project-id pipe",
@@ -131,3 +132,37 @@ def test_readiness_report_waits_for_external_outbox_after_export(tmp_path):
     assert report["ready_for_training"] is False
     assert report["pending_outbox_count"] == 1
     assert report["recommended_next_action"] == "drain_external_outbox"
+
+
+def test_readiness_report_blocks_on_dead_letter_outbox(tmp_path):
+    from annotation_pipeline_skill.core.models import OutboxRecord
+    from annotation_pipeline_skill.core.states import OutboxStatus
+
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+    store.save_export_manifest(
+        ExportManifest.new(
+            project_id="pipe",
+            output_paths=["exports/export-1/training_data.jsonl"],
+            task_ids_included=["task-1"],
+            task_ids_excluded=[],
+            artifact_ids=[],
+            source_files=[],
+            annotation_rules_hash=None,
+            schema_version="jsonl-training-v1",
+            validator_version="local-export-v1",
+            validation_summary={"included": 1},
+            export_id="export-1",
+        )
+    )
+    record = OutboxRecord.new(task_id="task-1", kind=OutboxKind.SUBMIT, payload={"export_id": "export-1"})
+    record.status = OutboxStatus.DEAD_LETTER
+    store.save_outbox(record)
+
+    report = build_readiness_report(store, project_id="pipe")
+
+    assert report["ready_for_training"] is False
+    assert report["dead_letter_outbox_count"] == 1
+    assert report["recommended_next_action"] == "inspect_dead_letter_outbox"

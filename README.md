@@ -78,6 +78,12 @@ Run the training data export verification:
 bash scripts/verify_export_training_data.sh
 ```
 
+Run the external submit outbox verification with a real local HTTP callback server:
+
+```bash
+bash scripts/verify_outbox_dispatch.sh
+```
+
 ## Run The Dashboard
 
 Start the Python dashboard API against a file-store root:
@@ -243,6 +249,20 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 The readiness report summarizes accepted, exported, exportable, Human Review, open feedback, validation blocker, and external outbox counts, plus the recommended next action.
+
+Inspect and drain callback/submit outbox records:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline outbox status --project-root ./demo-project
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline outbox drain \
+  --project-root ./demo-project \
+  --max-items 10
+```
+
+`outbox drain` POSTs JSON to the enabled `callbacks.yaml` endpoint for each due pending record. Successful callbacks are marked `sent`; retryable failures keep the record `pending` with `retry_count`, `next_retry_at`, and `last_error`; permanent failures or exhausted retries move to `dead_letter`.
 
 Serve the dashboard API:
 

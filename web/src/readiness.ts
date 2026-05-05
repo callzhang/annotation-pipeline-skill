@@ -7,6 +7,7 @@ const actionLabels: Record<string, string> = {
   run_annotation_runtime: "Run annotation runtime",
   export_training_data: "Export training data",
   drain_external_outbox: "Drain external outbox",
+  inspect_dead_letter_outbox: "Inspect dead-letter outbox",
   deliver_training_data: "Deliver training data",
   inspect_project_state: "Inspect project state",
 };
@@ -24,5 +25,6 @@ export function readinessFacts(report: ReadinessReport): Array<{ label: string; 
     { label: "Human Review", value: report.human_review_count },
     { label: "Blockers", value: report.validation_blockers.length },
     { label: "Outbox", value: report.pending_outbox_count },
+    { label: "Dead letters", value: report.dead_letter_outbox_count },
   ];
 }

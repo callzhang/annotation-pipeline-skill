@@ -172,6 +172,7 @@ export interface ReadinessReport {
   human_review_count: number;
   validation_blockers: Array<Record<string, string>>;
   pending_outbox_count: number;
+  dead_letter_outbox_count: number;
   latest_export: {
     export_id: string;
     created_at: string;

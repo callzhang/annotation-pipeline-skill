@@ -269,3 +269,19 @@ def test_cli_report_readiness_returns_project_action(tmp_path, capsys):
     assert payload["project_id"] == "pipe"
     assert payload["accepted_count"] == 1
     assert payload["recommended_next_action"] == "repair_export_blockers"
+
+
+def test_cli_outbox_status_reports_counts(tmp_path, capsys):
+    from annotation_pipeline_skill.core.models import OutboxRecord
+    from annotation_pipeline_skill.core.states import OutboxKind
+
+    main(["init", "--project-root", str(tmp_path)])
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    store.save_outbox(OutboxRecord.new(task_id="task-1", kind=OutboxKind.SUBMIT, payload={}))
+
+    exit_code = main(["outbox", "status", "--project-root", str(tmp_path)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["counts"] == {"dead_letter": 0, "pending": 1, "sent": 0}
+    assert payload["records"][0]["kind"] == "submit"
