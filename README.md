@@ -139,6 +139,21 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 
 Provider configuration lives at `.annotation-pipeline/llm_profiles.yaml`.
 
+Inspect and run the monitored local runtime:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline runtime status --project-root ./demo-project
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline runtime once --project-root ./demo-project
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline runtime run --project-root ./demo-project --max-cycles 3
+```
+
+The runtime writes `.annotation-pipeline/runtime/runtime_snapshot.json`, heartbeat data, active-run records, and cycle stats. The snapshot is the local read model for runtime health, queue counts, capacity, stale tasks, and due retries.
+
 OpenAI Responses API example:
 
 ```yaml

@@ -61,6 +61,14 @@ annotation-pipeline run-cycle --runtime subagent --project-root ./demo-project
 
 Subagent attempts record provider, model, artifact metadata, diagnostics, and continuity handles. Treat those records as the audit trail for debugging quality and provider behavior.
 
+## Runtime Operations
+
+Use `annotation-pipeline runtime status --project-root <project>` before starting work. A healthy project has a fresh heartbeat, no stale active runs, and capacity that is not exceeded.
+
+Use `annotation-pipeline runtime once --project-root <project>` for one monitored cycle. Use `annotation-pipeline runtime run --project-root <project>` when the agent should keep the local project moving.
+
+If runtime status shows stale tasks or due retries that are not draining, inspect task detail and event logs before changing annotation rules or provider config.
+
 ## Operating Loop
 
 1. Pull or create tasks.
