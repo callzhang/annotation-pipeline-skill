@@ -112,6 +112,23 @@ annotation-pipeline run-cycle --runtime subagent --project-root ./demo-project
 
 Subagent attempts record provider, model, artifact metadata, diagnostics, and continuity handles. Treat those records as the audit trail for debugging quality and provider behavior.
 
+## Verification
+
+Use stable local verification before changing a provider configuration:
+
+```bash
+bash scripts/verify_runtime_progress.sh
+bash scripts/verify_runtime_e2e.sh
+```
+
+Use the real Codex smoke after configuring local Codex auth:
+
+```bash
+bash scripts/verify_runtime_codex_smoke.sh
+```
+
+This script runs one real `local_codex` task. If Codex is missing, unauthenticated, or the runtime cycle fails, it prints the project path, runtime stderr/stdout, cycle stats, task JSON, events, attempts, and artifacts for diagnosis.
+
 ## Runtime Operations
 
 Use `annotation-pipeline runtime status --project-root <project>` before starting work. A healthy project has a fresh heartbeat, no stale active runs, and capacity that is not exceeded.
