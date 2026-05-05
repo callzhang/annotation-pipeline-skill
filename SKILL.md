@@ -44,6 +44,7 @@ Core responsibilities:
 
 - Initialize the local project with `annotation-pipeline init`.
 - Ingest raw JSONL tasks with `annotation-pipeline create-tasks`.
+- Pull external HTTP tasks with `annotation-pipeline external pull` when `.annotation-pipeline/external_tasks.yaml` is configured.
 - Run subagent cycles for LLM-backed annotation work.
 - Monitor queues and surface tasks that need Human Review.
 - Record QC feedback and annotator/QC discussion so both sides can agree on the final label decision.

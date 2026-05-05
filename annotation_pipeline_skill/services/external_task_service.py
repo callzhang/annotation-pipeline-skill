@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 from hashlib import sha256
+from urllib.request import Request, urlopen
 
 from annotation_pipeline_skill.core.models import ExternalTaskRef, OutboxRecord, Task
-from annotation_pipeline_skill.core.states import OutboxKind
+from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
+from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -36,8 +40,65 @@ class ExternalTaskService:
                 idempotency_key=idempotency_key,
             ),
         )
+        event = transition_task(
+            task,
+            TaskStatus.PENDING,
+            actor="external_task_service",
+            reason="created from external task pull",
+            stage="prepare",
+            metadata={"system_id": system_id, "external_task_id": external_task_id},
+        )
         self.store.save_task(task)
+        self.store.append_event(event)
         return task
+
+    def pull_http_tasks(
+        self,
+        *,
+        pipeline_id: str,
+        source_id: str,
+        config: dict,
+        limit: int,
+    ) -> dict:
+        if not config.get("enabled"):
+            raise ValueError(f"external task source {source_id} is disabled")
+        pull_url = str(config["pull_url"])
+        system_id = str(config.get("system_id") or source_id)
+        response = self._post_json(
+            pull_url,
+            {"limit": limit},
+            secret_env=config.get("auth_secret_env"),
+        )
+        tasks_data = response["tasks"]
+        created = 0
+        existing = 0
+        task_ids = []
+        for item in tasks_data:
+            external_task_id = str(item["external_task_id"])
+            idempotency_key = f"{system_id}:{external_task_id}"
+            existed = (self.store.tasks_dir / f"{self._task_id_for_external(idempotency_key)}.json").exists()
+            task = self.upsert_pulled_task(
+                pipeline_id=pipeline_id,
+                system_id=system_id,
+                external_task_id=external_task_id,
+                payload=dict(item["payload"]),
+                source_url=pull_url,
+            )
+            task_ids.append(task.task_id)
+            if existed:
+                existing += 1
+            else:
+                created += 1
+                self.enqueue_status(task, status=task.status.value)
+        return {
+            "source_id": source_id,
+            "system_id": system_id,
+            "requested_limit": limit,
+            "received": len(tasks_data),
+            "created": created,
+            "existing": existing,
+            "task_ids": task_ids,
+        }
 
     def enqueue_status(self, task: Task, status: str) -> OutboxRecord:
         record = OutboxRecord.new(
@@ -74,3 +135,18 @@ class ExternalTaskService:
     def _task_id_for_external(self, idempotency_key: str) -> str:
         digest = sha256(idempotency_key.encode("utf-8")).hexdigest()[:16]
         return f"external-{digest}"
+
+    def _post_json(self, url: str, payload: dict, secret_env: str | None = None) -> dict:
+        headers = {"content-type": "application/json", "accept": "application/json"}
+        if secret_env:
+            token = os.environ[secret_env]
+            headers["authorization"] = f"Bearer {token}"
+        request = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(request, timeout=30) as response:
+            body = response.read()
+        return json.loads(body.decode("utf-8"))

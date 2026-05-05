@@ -17,7 +17,7 @@ Implemented in the first backend foundation slice:
 - Append-only feedback records.
 - Annotator/QC feedback discussion records with consensus-based acceptance.
 - Compact feedback bundle builder.
-- Idempotent external task pull mapping.
+- Idempotent external HTTP task pull with status outbox creation.
 - Local outbox records for status and submit operations.
 - CLI init, doctor, JSONL task creation, subagent cycle, and dashboard serving commands.
 - Configurable subagent runtime through `llm_profiles.yaml`.
@@ -28,7 +28,6 @@ Not implemented yet:
 
 - Streamlit dashboard. This project will not use Streamlit.
 - Production distributed runtime.
-- Real external HTTP task API calls.
 - Real multimodal preview renderers.
 
 ## Design Docs
@@ -76,6 +75,12 @@ Run the training data export verification:
 
 ```bash
 bash scripts/verify_export_training_data.sh
+```
+
+Run the external task pull verification with a real local HTTP task server:
+
+```bash
+bash scripts/verify_external_pull.sh
 ```
 
 Run the external submit outbox verification with a real local HTTP callback server:
@@ -175,6 +180,30 @@ line boundaries and row count, and includes an all-row QC policy in task
 metadata.
 
 You can import multiple JSONL sources into the same project root by using a different `--pipeline-id` for each logical annotation project. The dashboard exposes those pipeline IDs as projects, so switching projects filters the Kanban board and event log without moving or rewriting task data.
+
+Pull tasks from an external HTTP task API by configuring `.annotation-pipeline/external_tasks.yaml`:
+
+```yaml
+external_tasks:
+  default:
+    enabled: true
+    system_id: vendor-system
+    pull_url: http://127.0.0.1:9000/tasks/pull
+    auth_secret_env: EXTERNAL_TASK_API_TOKEN
+```
+
+Then run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline external pull \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --source-id default \
+  --limit 100
+```
+
+The pull contract is a JSON `POST` to `pull_url` with `{"limit": 100}`. The response must be `{"tasks":[{"external_task_id":"...","payload":{...}}]}`. New external tasks become `pending`, receive an audit event, and enqueue a status outbox record. Re-pulling the same external id is idempotent.
 
 Validate subagent provider profiles:
 

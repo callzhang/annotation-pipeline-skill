@@ -1,9 +1,37 @@
 import json
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import annotation_pipeline_skill.config.loader as config_loader
 import annotation_pipeline_skill.interfaces.cli as cli
 from annotation_pipeline_skill.interfaces.cli import main
 from annotation_pipeline_skill.store.file_store import FileStore
+
+
+@contextmanager
+def external_pull_server(response_payload):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.dumps(response_payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/pull"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_cli_init_creates_project_layout(tmp_path):
@@ -321,3 +349,43 @@ def test_cli_human_review_request_changes_returns_task_to_annotating(tmp_path, c
     assert payload["task"]["status"] == "annotating"
     assert payload["decision"]["correction_mode"] == "batch_code_update"
     assert store.load_task("task-1").status is TaskStatus.ANNOTATING
+
+
+def test_cli_external_pull_uses_configured_http_source(tmp_path, capsys):
+    main(["init", "--project-root", str(tmp_path)])
+    config_path = tmp_path / ".annotation-pipeline" / "external_tasks.yaml"
+    with external_pull_server({"tasks": [{"external_task_id": "ext-1", "payload": {"text": "alpha"}}]}) as pull_url:
+        config_path.write_text(
+            "\n".join(
+                [
+                    "external_tasks:",
+                    "  default:",
+                    "    enabled: true",
+                    "    system_id: vendor",
+                    f"    pull_url: {pull_url}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        exit_code = main(
+            [
+                "external",
+                "pull",
+                "--project-root",
+                str(tmp_path),
+                "--project-id",
+                "pipe",
+                "--source-id",
+                "default",
+                "--limit",
+                "1",
+            ]
+        )
+
+    payload = json.loads(capsys.readouterr().out)
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    assert exit_code == 0
+    assert payload["created"] == 1
+    assert store.list_tasks()[0].pipeline_id == "pipe"

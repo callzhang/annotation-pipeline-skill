@@ -173,6 +173,32 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 
 For multimodal projects, keep the core task model generic and add adapters/renderers for images, video, point clouds, or model-specific previews such as bounding boxes from a VC detection model.
 
+## External Task Pull
+
+Configure `.annotation-pipeline/external_tasks.yaml` before pulling from an external task API:
+
+```yaml
+external_tasks:
+  default:
+    enabled: true
+    system_id: vendor-system
+    pull_url: http://127.0.0.1:9000/tasks/pull
+    auth_secret_env: EXTERNAL_TASK_API_TOKEN
+```
+
+Pull into a project:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline external pull \
+  --project-root ./demo-project \
+  --project-id memory-ner-v2 \
+  --source-id default \
+  --limit 100
+```
+
+The external service must return `{"tasks":[{"external_task_id":"...","payload":{...}}]}`. New tasks become `pending`, get a prepare-stage audit event, and create status outbox records for callback delivery. Re-pulling the same external id returns the existing internal task and does not create duplicate outbox records.
+
 ## Training Data Export
 
 After tasks reach `accepted`, export the project into a JSONL package:

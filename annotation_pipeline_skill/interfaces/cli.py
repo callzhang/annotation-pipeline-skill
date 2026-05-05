@@ -27,6 +27,7 @@ from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
+from annotation_pipeline_skill.services.external_task_service import ExternalTaskService
 from annotation_pipeline_skill.services.export_service import TrainingDataExportService
 from annotation_pipeline_skill.services.human_review_service import HumanReviewService
 from annotation_pipeline_skill.services.outbox_dispatch_service import OutboxDispatchService, build_outbox_summary
@@ -85,6 +86,9 @@ runtime:
     "external_tasks.yaml": """external_tasks:
   default:
     enabled: false
+    system_id: external
+    pull_url: null
+    auth_secret_env: null
 """,
     "callbacks.yaml": """callbacks:
   status:
@@ -268,6 +272,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="manual_annotation",
     )
     human_review_decide.set_defaults(handler=handle_human_review_decide)
+
+    external_parser = subparsers.add_parser("external")
+    external_subparsers = external_parser.add_subparsers(required=True)
+
+    external_pull = external_subparsers.add_parser("pull")
+    external_pull.add_argument("--project-root", type=Path, default=Path.cwd())
+    external_pull.add_argument("--project-id", required=True)
+    external_pull.add_argument("--source-id", default="default")
+    external_pull.add_argument("--limit", type=int, default=100)
+    external_pull.set_defaults(handler=handle_external_pull)
 
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -532,6 +546,20 @@ def handle_human_review_decide(args: argparse.Namespace) -> int:
         correction_mode=args.correction_mode,
     )
     print(json.dumps(result.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_external_pull(args: argparse.Namespace) -> int:
+    config_root = args.project_root / ".annotation-pipeline"
+    external_data = _read_yaml(config_root / "external_tasks.yaml").get("external_tasks", {})
+    store = FileStore(config_root)
+    result = ExternalTaskService(store).pull_http_tasks(
+        pipeline_id=args.project_id,
+        source_id=args.source_id,
+        config=dict(external_data[args.source_id]),
+        limit=args.limit,
+    )
+    print(json.dumps(result, sort_keys=True, indent=2))
     return 0
 
 
