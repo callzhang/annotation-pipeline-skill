@@ -125,6 +125,14 @@ QC failure is business feedback, not a scheduler failure. Provider exceptions st
 
 ## Verification
 
+Before publishing the skill or asking another agent to install it, run the clean handoff verification:
+
+```bash
+bash scripts/verify_agent_handoff.sh
+```
+
+This script copies the repo into a temporary `CODEX_HOME/skills/annotation-pipeline-skill`, runs the CLI from that installed skill directory, starts the API, checks project-scoped dashboard endpoints, records Coordinator rule and long-tail issue records, and exports a training-data package. Use it as the default installability gate.
+
 Use stable local verification before changing a provider configuration:
 
 ```bash
@@ -158,6 +166,19 @@ bash scripts/verify_runtime_deepseek_smoke.sh
 ```
 
 The smoke passes when the final task status is `pending` or `accepted`. Pending means DeepSeek returned QC feedback and the task is ready for another annotation cycle; accepted means QC passed.
+
+## Handoff Checklist
+
+Before telling the algorithm engineer that data is ready:
+
+- Provider routing is explicit in `.annotation-pipeline/llm_profiles.yaml`, and `provider doctor` either passes or the Coordinator report records the blocker.
+- Runtime status has no stale active runs, stale heartbeat, retry drain failure, or capacity violation.
+- Human Review tasks are resolved or explicitly left for the user with task ids and feedback.
+- Open QC feedback has consensus, has been returned to annotation, or is captured as a Coordinator long-tail issue.
+- Rule changes discovered during QC, Human Review, or model-training feedback are recorded as Coordinator rule updates.
+- `export training-data` has written `training_data.jsonl` and `manifest.json`, and `report readiness` explains any remaining blockers.
+
+If any item fails, do not hide it in chat. Record it in the Coordinator tab or with `annotation-pipeline coordinator ...` so the next agent can continue without relying on conversation history.
 
 ## Runtime Operations
 
