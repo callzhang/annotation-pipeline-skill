@@ -63,6 +63,78 @@ def test_dashboard_api_returns_404_for_unknown_route(tmp_path):
     assert json.loads(body.decode("utf-8")) == {"error": "not_found"}
 
 
+def test_dashboard_api_returns_runtime_snapshot(tmp_path):
+    store = FileStore(tmp_path)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/runtime")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert "runtime_status" in payload
+    assert "queue_counts" in payload
+
+
+def test_dashboard_api_runs_one_runtime_cycle_with_injected_runner(tmp_path):
+    store = FileStore(tmp_path)
+    called = {"count": 0}
+
+    def run_once():
+        called["count"] += 1
+        from annotation_pipeline_skill.core.runtime import RuntimeConfig
+        from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
+
+        snapshot = build_runtime_snapshot(store, RuntimeConfig())
+        store.save_runtime_snapshot(snapshot)
+        return snapshot
+
+    api = DashboardApi(store, runtime_once=run_once)
+
+    status, _headers, body = api.handle_post("/api/runtime/run-once", b"{}")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert called["count"] == 1
+    assert payload["ok"] is True
+    assert "runtime_status" in payload["snapshot"]
+
+
+def test_dashboard_api_returns_409_when_runtime_runner_is_unavailable(tmp_path):
+    api = DashboardApi(FileStore(tmp_path))
+
+    status, _headers, body = api.handle_post("/api/runtime/run-once", b"{}")
+
+    assert status == 409
+    assert json.loads(body.decode("utf-8")) == {"error": "runtime_runner_unavailable"}
+
+
+def test_dashboard_api_returns_runtime_cycles(tmp_path):
+    from datetime import datetime, timezone
+    from annotation_pipeline_skill.core.runtime import RuntimeCycleStats
+
+    store = FileStore(tmp_path)
+    now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    store.append_runtime_cycle_stats(
+        RuntimeCycleStats(
+            cycle_id="cycle-1",
+            started_at=now,
+            finished_at=now,
+            started=0,
+            accepted=0,
+            failed=0,
+            capacity_available=4,
+            errors=[],
+        )
+    )
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/runtime/cycles")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["cycles"][0]["cycle_id"] == "cycle-1"
+
+
 def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events_and_feedback(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(

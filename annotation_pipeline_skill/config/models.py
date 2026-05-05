@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from annotation_pipeline_skill.core.runtime import RuntimeConfig
+
 
 @dataclass(frozen=True)
 class AnnotatorConfig:
@@ -24,3 +26,4 @@ class ProjectConfig:
     external_tasks: dict
     callbacks: dict
     workflow: dict
+    runtime: RuntimeConfig

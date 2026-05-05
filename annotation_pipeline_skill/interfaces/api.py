@@ -4,16 +4,18 @@ import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 import yaml
 
 from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry
+from annotation_pipeline_skill.core.runtime import RuntimeConfig, RuntimeSnapshot
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
+from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -28,8 +30,16 @@ CONFIG_FILE_DEFINITIONS: dict[str, str] = {
 
 
 class DashboardApi:
-    def __init__(self, store: FileStore):
+    def __init__(
+        self,
+        store: FileStore,
+        *,
+        runtime_once: Callable[[], RuntimeSnapshot] | None = None,
+        runtime_config: RuntimeConfig | None = None,
+    ):
         self.store = store
+        self.runtime_once = runtime_once
+        self.runtime_config = runtime_config or RuntimeConfig()
 
     def handle_get(self, path: str) -> tuple[int, dict[str, str], bytes]:
         parsed_path = urlparse(path)
@@ -46,6 +56,13 @@ class DashboardApi:
             return self._json_response(200, {"files": self._config_files()})
         if route == "/api/events":
             return self._json_response(200, {"events": self._event_log(project_id=project_id)})
+        if route == "/api/runtime":
+            return self._json_response(200, self._runtime_snapshot().to_dict())
+        if route == "/api/runtime/cycles":
+            return self._json_response(
+                200,
+                {"cycles": [stats.to_dict() for stats in self.store.list_runtime_cycle_stats()]},
+            )
         if route.startswith("/api/tasks/"):
             task_id = route.removeprefix("/api/tasks/")
             if not task_id:
@@ -62,10 +79,21 @@ class DashboardApi:
 
     def handle_post(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         route = path.split("?", 1)[0]
+        if route == "/api/runtime/run-once":
+            return self._runtime_run_once_response()
         if route.startswith("/api/tasks/") and route.endswith("/feedback-discussions"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/feedback-discussions").strip("/")
             return self._post_feedback_discussion_response(task_id, body)
         return self._json_response(404, {"error": "not_found"})
+
+    def _runtime_snapshot(self) -> RuntimeSnapshot:
+        return self.store.load_runtime_snapshot() or build_runtime_snapshot(self.store, self.runtime_config)
+
+    def _runtime_run_once_response(self) -> tuple[int, dict[str, str], bytes]:
+        if self.runtime_once is None:
+            return self._json_response(409, {"error": "runtime_runner_unavailable"})
+        snapshot = self.runtime_once()
+        return self._json_response(200, {"ok": True, "snapshot": snapshot.to_dict()})
 
     def _json_response(self, status: int, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -234,8 +262,18 @@ def make_handler(api: DashboardApi) -> type[BaseHTTPRequestHandler]:
     return DashboardRequestHandler
 
 
-def serve_dashboard_api(store: FileStore, host: str, port: int) -> None:
-    server = ThreadingHTTPServer((host, port), make_handler(DashboardApi(store)))
+def serve_dashboard_api(
+    store: FileStore,
+    host: str,
+    port: int,
+    *,
+    runtime_once: Callable[[], RuntimeSnapshot] | None = None,
+    runtime_config: RuntimeConfig | None = None,
+) -> None:
+    server = ThreadingHTTPServer(
+        (host, port),
+        make_handler(DashboardApi(store, runtime_once=runtime_once, runtime_config=runtime_config)),
+    )
     server.serve_forever()
 
 

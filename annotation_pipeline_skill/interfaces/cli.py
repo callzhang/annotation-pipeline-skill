@@ -2,9 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from annotation_pipeline_skill.config.loader import ConfigValidationError, load_project_config
+from annotation_pipeline_skill.config.loader import (
+    ConfigValidationError,
+    _read_yaml,
+    build_project_config_from_data,
+    load_project_config,
+    load_runtime_config,
+    validate_project_config,
+)
+from annotation_pipeline_skill.config.models import ProjectConfig
+from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.models import Task
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
@@ -12,8 +23,17 @@ from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
 from annotation_pipeline_skill.llm.local_cli import LocalCLIClient
 from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
-from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
+from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.store.file_store import FileStore
+
+
+@dataclass(frozen=True)
+class RuntimeCliContext:
+    project_root: Path
+    config: ProjectConfig
+    store: FileStore
+    registry: object
 
 
 CONFIG_FILES: dict[str, str] = {
@@ -24,6 +44,12 @@ CONFIG_FILES: dict[str, str] = {
     target: qc
 human_review:
   required: false
+runtime:
+  max_concurrent_tasks: 4
+  max_starts_per_cycle: 2
+  stale_after_seconds: 600
+  retry_delay_seconds: 3600
+  loop_interval_seconds: 5
 """,
     "annotators.yaml": """annotators:
   text_annotator:
@@ -125,6 +151,24 @@ def build_parser() -> argparse.ArgumentParser:
     cycle_parser.add_argument("--stage-target", default="annotation")
     cycle_parser.set_defaults(handler=handle_run_cycle)
 
+    runtime_parser = subparsers.add_parser("runtime")
+    runtime_subparsers = runtime_parser.add_subparsers(required=True)
+
+    runtime_once = runtime_subparsers.add_parser("once")
+    runtime_once.add_argument("--project-root", type=Path, default=Path.cwd())
+    runtime_once.add_argument("--stage-target", default="annotation")
+    runtime_once.set_defaults(handler=handle_runtime_once)
+
+    runtime_run = runtime_subparsers.add_parser("run")
+    runtime_run.add_argument("--project-root", type=Path, default=Path.cwd())
+    runtime_run.add_argument("--stage-target", default="annotation")
+    runtime_run.add_argument("--max-cycles", type=int, default=None)
+    runtime_run.set_defaults(handler=handle_runtime_run)
+
+    runtime_status = runtime_subparsers.add_parser("status")
+    runtime_status.add_argument("--project-root", type=Path, default=Path.cwd())
+    runtime_status.set_defaults(handler=handle_runtime_status)
+
     provider_parser = subparsers.add_parser("provider")
     provider_subparsers = provider_parser.add_subparsers(required=True)
 
@@ -205,11 +249,42 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
 
 
 def handle_run_cycle(args: argparse.Namespace) -> int:
-    load_project_config(args.project_root)
+    context = _runtime_context(args.project_root)
+    runtime_config = context.config.runtime
+    if args.limit is not None:
+        runtime_config = replace(
+            runtime_config,
+            max_starts_per_cycle=min(runtime_config.max_starts_per_cycle, args.limit),
+        )
+    _build_runtime_scheduler(context, runtime_config).run_once(stage_target=args.stage_target)
+    return 0
+
+
+def handle_runtime_once(args: argparse.Namespace) -> int:
+    context = _runtime_context(args.project_root)
+    snapshot = _build_runtime_scheduler(context).run_once(stage_target=args.stage_target)
+    print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_runtime_status(args: argparse.Namespace) -> int:
+    runtime_config = load_runtime_config(args.project_root)
     store = FileStore(args.project_root / ".annotation-pipeline")
-    registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
-    runtime = SubagentRuntime(store=store, client_factory=lambda target: _build_llm_client(registry.resolve(target)))
-    runtime.run_once(stage_target=args.stage_target, limit=args.limit)
+    snapshot = store.load_runtime_snapshot() or build_runtime_snapshot(store, runtime_config)
+    print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_runtime_run(args: argparse.Namespace) -> int:
+    context = _runtime_context(args.project_root)
+    scheduler = _build_runtime_scheduler(context)
+    cycles = 0
+    while args.max_cycles is None or cycles < args.max_cycles:
+        snapshot = scheduler.run_once(stage_target=args.stage_target)
+        print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
+        cycles += 1
+        if args.max_cycles is None or cycles < args.max_cycles:
+            time.sleep(context.config.runtime.loop_interval_seconds)
     return 0
 
 
@@ -239,8 +314,50 @@ def handle_provider_targets(args: argparse.Namespace) -> int:
 
 
 def handle_serve(args: argparse.Namespace) -> int:
-    serve_dashboard_api(FileStore(args.project_root / ".annotation-pipeline"), host=args.host, port=args.port)
+    context = _runtime_context(args.project_root)
+    scheduler = _build_runtime_scheduler(context)
+    serve_dashboard_api(
+        context.store,
+        host=args.host,
+        port=args.port,
+        runtime_once=scheduler.run_once,
+        runtime_config=context.config.runtime,
+    )
     return 0
+
+
+def _runtime_context(project_root: Path) -> RuntimeCliContext:
+    project_root = Path(project_root)
+    config_root = project_root / ".annotation-pipeline"
+    annotators_data = _read_yaml(config_root / "annotators.yaml")
+    external_data = _read_yaml(config_root / "external_tasks.yaml")
+    callbacks_data = _read_yaml(config_root / "callbacks.yaml")
+    workflow_data = _read_yaml(config_root / "workflow.yaml")
+    registry = load_llm_registry(config_root / "llm_profiles.yaml")
+    config = build_project_config_from_data(
+        annotators_data=annotators_data,
+        external_data=external_data,
+        callbacks_data=callbacks_data,
+        workflow_data=workflow_data,
+    )
+    validate_project_config(config, config_root, llm_registry=registry)
+    return RuntimeCliContext(
+        project_root=project_root,
+        config=config,
+        store=FileStore(config_root),
+        registry=registry,
+    )
+
+
+def _build_runtime_scheduler(
+    context: RuntimeCliContext,
+    config: RuntimeConfig | None = None,
+) -> LocalRuntimeScheduler:
+    return LocalRuntimeScheduler(
+        store=context.store,
+        client_factory=lambda target: _build_llm_client(context.registry.resolve(target)),
+        config=config or context.config.runtime,
+    )
 
 
 def _build_llm_client(profile):

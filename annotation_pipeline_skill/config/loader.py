@@ -8,6 +8,7 @@ from annotation_pipeline_skill.config.models import (
     AnnotatorConfig,
     ProjectConfig,
 )
+from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
 
 
@@ -22,22 +23,44 @@ def load_project_config(project_root: Path | str) -> ProjectConfig:
     callbacks_data = _read_yaml(config_root / "callbacks.yaml")
     workflow_data = _read_yaml(config_root / "workflow.yaml")
 
-    annotators = _load_annotators(annotators_data.get("annotators", {}))
-    config = ProjectConfig(
-        annotators=annotators,
-        external_tasks=external_data.get("external_tasks", {}),
-        callbacks=callbacks_data.get("callbacks", {}),
-        workflow=workflow_data,
+    config = build_project_config_from_data(
+        annotators_data=annotators_data,
+        external_data=external_data,
+        callbacks_data=callbacks_data,
+        workflow_data=workflow_data,
     )
     validate_project_config(config, config_root)
     return config
 
 
-def validate_project_config(config: ProjectConfig, config_root: Path) -> None:
-    try:
-        llm_registry = load_llm_registry(config_root / "llm_profiles.yaml")
-    except (OSError, ProfileValidationError) as exc:
-        raise ConfigValidationError(str(exc)) from exc
+def build_project_config_from_data(
+    *,
+    annotators_data: dict,
+    external_data: dict,
+    callbacks_data: dict,
+    workflow_data: dict,
+) -> ProjectConfig:
+    return ProjectConfig(
+        annotators=_load_annotators(annotators_data.get("annotators", {})),
+        external_tasks=external_data.get("external_tasks", {}),
+        callbacks=callbacks_data.get("callbacks", {}),
+        workflow=workflow_data,
+        runtime=RuntimeConfig.from_dict(workflow_data.get("runtime") or {}),
+    )
+
+
+def load_runtime_config(project_root: Path | str) -> RuntimeConfig:
+    config_root = Path(project_root) / ".annotation-pipeline"
+    workflow_data = _read_yaml(config_root / "workflow.yaml")
+    return RuntimeConfig.from_dict(workflow_data.get("runtime") or {})
+
+
+def validate_project_config(config: ProjectConfig, config_root: Path, llm_registry=None) -> None:
+    if llm_registry is None:
+        try:
+            llm_registry = load_llm_registry(config_root / "llm_profiles.yaml")
+        except (OSError, ProfileValidationError) as exc:
+            raise ConfigValidationError(str(exc)) from exc
     for annotator_id, annotator in config.annotators.items():
         if annotator.provider_target and annotator.provider_target not in llm_registry.targets:
             raise ConfigValidationError(
