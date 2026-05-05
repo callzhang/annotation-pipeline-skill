@@ -90,7 +90,7 @@ class RuntimeCycleStats:
     accepted: int
     failed: int
     capacity_available: int
-    errors: list[str] = field(default_factory=list)
+    errors: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {

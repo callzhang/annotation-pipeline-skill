@@ -33,13 +33,16 @@ class SubagentRuntime:
         failed = 0
         for task in pending_tasks:
             try:
-                self._run_task(task, stage_target)
+                self.run_task(task, stage_target)
             except Exception:
                 failed += 1
                 raise
             if task.status is TaskStatus.ACCEPTED:
                 accepted += 1
         return SubagentRuntimeResult(started=len(pending_tasks), accepted=accepted, failed=failed)
+
+    def run_task(self, task: Task, stage_target: str = "annotation") -> None:
+        self._run_task(task, stage_target)
 
     def _run_task(self, task: Task, stage_target: str) -> None:
         attempt_id = f"{task.task_id}-attempt-{task.current_attempt + 1}"

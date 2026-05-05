@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import get_args, get_origin, get_type_hints
 
 from annotation_pipeline_skill.core.runtime import (
     ActiveRun,
@@ -83,6 +84,34 @@ def test_runtime_snapshot_round_trips_through_dict():
     loaded = RuntimeSnapshot.from_dict(snapshot.to_dict())
 
     assert loaded == snapshot
+
+
+def test_runtime_cycle_stats_errors_are_structured_dicts():
+    error_type = get_type_hints(RuntimeCycleStats)["errors"]
+    assert get_origin(error_type) is list
+    assert get_args(error_type) == (dict,)
+
+    generated_at = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    stats = RuntimeCycleStats(
+        cycle_id="cycle-1",
+        started_at=generated_at,
+        finished_at=generated_at,
+        started=1,
+        accepted=0,
+        failed=1,
+        capacity_available=1,
+        errors=[
+            {
+                "task_id": "task-1",
+                "error_type": "RuntimeError",
+                "message": "provider unavailable",
+            }
+        ],
+    )
+
+    loaded = RuntimeCycleStats.from_dict(stats.to_dict())
+
+    assert loaded == stats
 
 
 def test_queue_counts_surfaces_all_task_status_counts():
