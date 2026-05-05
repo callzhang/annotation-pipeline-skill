@@ -211,7 +211,7 @@ targets:
   annotation: local_codex
 ```
 
-Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis.
+Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis. Local Codex runs are isolated and do not reuse prior CLI sessions; feedback and prior artifacts are passed explicitly in the next prompt.
 
 QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
 

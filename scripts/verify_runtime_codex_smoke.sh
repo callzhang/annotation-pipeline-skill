@@ -21,9 +21,47 @@ printf '{"text":"Codex smoke test row","source_dataset":"codex-smoke"}\n' > "$IN
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline init --project-root "$PROJECT_ROOT"
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline create-tasks --project-root "$PROJECT_ROOT" --source "$INPUT_FILE" --pipeline-id codex-smoke --batch-size 1
 
+cat > "$PROJECT_ROOT/.annotation-pipeline/llm_profiles.yaml" <<'YAML'
+profiles:
+  local_codex:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4-mini
+    reasoning_effort: none
+    timeout_seconds: 900
+    no_progress_timeout_seconds: 30
+targets:
+  annotation: local_codex
+  qc: local_codex
+  coordinator: local_codex
+limits:
+  local_cli_global_concurrency: 4
+YAML
+
 set +e
-UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline runtime once --project-root "$PROJECT_ROOT" > "$RUN_JSON" 2> "$RUN_ERR"
-RUNTIME_EXIT="$?"
+RUNTIME_EXIT="0"
+for cycle_index in 1 2 3; do
+  CYCLE_JSON="$PROJECT_ROOT/runtime-once-$cycle_index.json"
+  CYCLE_ERR="$PROJECT_ROOT/runtime-once-$cycle_index.stderr"
+  UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline runtime once --project-root "$PROJECT_ROOT" > "$CYCLE_JSON" 2> "$CYCLE_ERR"
+  RUNTIME_EXIT="$?"
+  cp "$CYCLE_JSON" "$RUN_JSON"
+  cp "$CYCLE_ERR" "$RUN_ERR"
+  if [[ "$RUNTIME_EXIT" != "0" ]]; then
+    break
+  fi
+  ACCEPTED_COUNT="$(python - "$CYCLE_JSON" <<'PY'
+import json
+import sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+print(payload.get("queue_counts", {}).get("accepted", 0))
+PY
+)"
+  if [[ "$ACCEPTED_COUNT" == "1" ]]; then
+    break
+  fi
+done
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline runtime status --project-root "$PROJECT_ROOT" > "$STATUS_JSON" 2> "$STATUS_ERR"
 STATUS_EXIT="$?"
 set -e
@@ -88,15 +126,10 @@ if not isinstance(snapshot, dict) or not isinstance(status, dict):
     dump_diagnostics("runtime output was not valid JSON")
     raise SystemExit(1)
 
-latest_cycle = snapshot.get("cycle_stats", [{}])[-1] if snapshot.get("cycle_stats") else {}
-if latest_cycle.get("failed") != 0:
-    dump_diagnostics("latest runtime cycle recorded failures")
-    raise SystemExit(1)
-if latest_cycle.get("accepted") != 1:
-    dump_diagnostics(f"expected latest cycle accepted=1, got {latest_cycle.get('accepted')!r}")
-    raise SystemExit(1)
-if snapshot.get("queue_counts", {}).get("accepted") != 1:
-    dump_diagnostics(f"expected accepted queue count 1, got {snapshot.get('queue_counts')!r}")
+cycles = snapshot.get("cycle_stats", [])
+latest_cycle = cycles[-1] if cycles else {}
+if any(cycle.get("failed") != 0 for cycle in cycles):
+    dump_diagnostics("runtime cycle recorded provider failures")
     raise SystemExit(1)
 if status.get("capacity", {}).get("active_count") != 0:
     dump_diagnostics(f"expected no active runs, got {status.get('capacity')!r}")
@@ -111,9 +144,35 @@ if len(task_files) != 1 or len(attempt_files) != 1 or len(artifact_files) != 1 o
     raise SystemExit(1)
 
 task = json.loads(read_text(task_files[0]))
-if task.get("status") != "accepted":
-    dump_diagnostics(f"expected accepted task, got {task.get('status')!r}")
+if task.get("status") not in {"accepted", "pending"}:
+    dump_diagnostics(f"expected accepted task or pending task with QC feedback, got {task.get('status')!r}")
     raise SystemExit(1)
 
-print(f"real codex runtime smoke passed: {project_root}")
+attempts = [json.loads(line) for line in read_text(attempt_files[0]).splitlines() if line.strip()]
+stages = {attempt.get("stage") for attempt in attempts}
+providers = {attempt.get("provider_id") for attempt in attempts}
+statuses = {attempt.get("status") for attempt in attempts}
+if "annotation" not in stages or "qc" not in stages:
+    dump_diagnostics(f"expected both annotation and qc attempts, got stages {sorted(stages)}")
+    raise SystemExit(1)
+if providers != {"local_codex"}:
+    dump_diagnostics(f"expected all attempts to use local_codex, got providers {sorted(providers)}")
+    raise SystemExit(1)
+if statuses != {"succeeded"}:
+    dump_diagnostics(f"expected all attempts to succeed, got statuses {sorted(statuses)}")
+    raise SystemExit(1)
+
+artifacts = [json.loads(line) for line in read_text(artifact_files[0]).splitlines() if line.strip()]
+kinds = {artifact.get("kind") for artifact in artifacts}
+if "annotation_result" not in kinds or "qc_result" not in kinds:
+    dump_diagnostics(f"expected annotation_result and qc_result artifacts, got kinds {sorted(kinds)}")
+    raise SystemExit(1)
+
+if task.get("status") == "pending":
+    feedback_files = sorted((store_root / "feedback").glob("*.jsonl"))
+    if len(feedback_files) != 1 or not read_text(feedback_files[0]).strip():
+        dump_diagnostics("expected QC feedback for pending smoke task")
+        raise SystemExit(1)
+
+print(f"real codex runtime smoke passed: {project_root} ({task.get('status')})")
 PY

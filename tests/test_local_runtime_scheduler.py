@@ -34,6 +34,17 @@ class FailingLLMClient:
         raise RuntimeError("provider unavailable")
 
 
+class DiagnosticProviderError(RuntimeError):
+    def __init__(self):
+        super().__init__("local CLI provider failed")
+        self.diagnostics = {"stderr": "resume thread not found", "returncode": 1}
+
+
+class FailingDiagnosticLLMClient:
+    async def generate(self, request):
+        raise DiagnosticProviderError()
+
+
 def test_local_runtime_scheduler_respects_max_starts_per_cycle(tmp_path):
     store = FileStore(tmp_path)
     for index in range(1, 4):
@@ -128,5 +139,28 @@ def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
             "task_id": "task-1",
             "error_type": "RuntimeError",
             "message": "provider unavailable",
+        }
+    ]
+
+
+def test_local_runtime_scheduler_preserves_provider_failure_diagnostics(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    scheduler = LocalRuntimeScheduler(
+        store=store,
+        client_factory=lambda target: FailingDiagnosticLLMClient(),
+        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
+    )
+
+    snapshot = scheduler.run_once(stage_target="annotation")
+
+    assert snapshot.cycle_stats[-1].errors == [
+        {
+            "task_id": "task-1",
+            "error_type": "DiagnosticProviderError",
+            "message": "local CLI provider failed",
+            "diagnostics": {"stderr": "resume thread not found", "returncode": 1},
         }
     ]

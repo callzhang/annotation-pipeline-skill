@@ -50,13 +50,15 @@ class LocalRuntimeScheduler:
                     accepted += 1
             except Exception as exc:
                 failed += 1
-                errors.append(
-                    {
-                        "task_id": task.task_id,
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                    }
-                )
+                error = {
+                    "task_id": task.task_id,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                diagnostics = getattr(exc, "diagnostics", None)
+                if isinstance(diagnostics, dict):
+                    error["diagnostics"] = diagnostics
+                errors.append(error)
             finally:
                 self.store.delete_active_run(run.run_id)
 

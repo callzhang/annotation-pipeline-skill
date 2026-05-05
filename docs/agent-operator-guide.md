@@ -56,7 +56,7 @@ profiles:
     reasoning_effort: none
 ```
 
-The local CLI adapter uses an isolated Codex home, strips desktop session context, preserves auth/config needed to run, and records continuity handles from JSON events.
+The local CLI adapter uses an isolated Codex home, strips desktop session context, preserves auth/config needed to run, and records continuity handles from JSON events for audit. Because each Codex invocation uses a disposable isolated home, the runtime does not call `codex exec resume` with a previous thread id. Reruns receive context through the explicit feedback bundle and prior artifacts in the prompt.
 
 Local Claude CLI profile:
 
@@ -115,7 +115,7 @@ Use configured subagents:
 annotation-pipeline run-cycle --runtime subagent --project-root ./demo-project
 ```
 
-Subagent attempts record provider, model, artifact metadata, diagnostics, and continuity handles. Treat those records as the audit trail for debugging quality and provider behavior.
+Subagent attempts record provider, model, artifact metadata, diagnostics, and continuity handles. Treat those records as the audit trail for debugging quality and provider behavior, not as a guarantee that every provider supports persistent session resume.
 
 The local runtime now runs a real multistage loop. A pending task first creates an annotation attempt and `annotation_result` artifact, then deterministic validation gates it into QC. The QC target creates a QC attempt and `qc_result` artifact. If QC passes, the task becomes `accepted`. If QC fails, the runtime records structured QC feedback and returns the task to `pending` so the next annotation attempt receives the feedback bundle and prior artifacts as context.
 

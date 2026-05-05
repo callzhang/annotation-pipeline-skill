@@ -244,11 +244,12 @@ class LocalCLIClient:
         raise ValueError(f"unsupported local cli kind: {self.profile.cli_kind}")
 
     async def _generate_codex(self, request: LLMGenerateRequest) -> LLMGenerateResult:
+        codex_continuity_handle = None
         command, prompt_file = build_codex_command(
             binary=self.profile.cli_binary or "codex",
             prompt=request.prompt or _messages_to_prompt(request.input_items),
             developer_instructions=request.instructions,
-            continuity_handle=request.continuity_handle,
+            continuity_handle=codex_continuity_handle,
             model=self.profile.model,
             reasoning_effort=self.profile.reasoning_effort,
         )
@@ -257,7 +258,7 @@ class LocalCLIClient:
                 {**os.environ, **request.env},
                 model=self.profile.model,
                 reasoning_effort=self.profile.reasoning_effort,
-                continuity_handle=request.continuity_handle,
+                continuity_handle=codex_continuity_handle,
             ) as (env, _home):
                 process = await asyncio.create_subprocess_exec(
                     *command,
@@ -274,6 +275,8 @@ class LocalCLIClient:
             result = parse_codex_json_events(lines, provider=self.profile.name, model=self.profile.model)
             diagnostics = dict(result.diagnostics or {})
             diagnostics["returncode"] = process.returncode
+            if request.continuity_handle:
+                diagnostics["continuity_resume_disabled"] = True
             if stderr:
                 diagnostics["stderr"] = stderr.decode("utf-8", errors="replace")[-4000:]
             if process.returncode != 0:

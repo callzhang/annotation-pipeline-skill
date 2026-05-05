@@ -1,7 +1,12 @@
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
+from annotation_pipeline_skill.llm.client import LLMGenerateRequest
 from annotation_pipeline_skill.llm.local_cli import (
+    LocalCLIClient,
     build_claude_command,
     build_codex_command,
     codex_shell_environment,
@@ -178,3 +183,54 @@ def test_local_cli_profile_import_contract():
     )
 
     assert profile.cli_kind == "codex"
+
+
+@pytest.mark.asyncio
+async def test_local_codex_client_does_not_resume_inside_disposable_home(tmp_path: Path, monkeypatch):
+    captured: dict[str, object] = {}
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("prompt", encoding="utf-8")
+
+    def fake_build_codex_command(**kwargs):
+        captured["continuity_handle"] = kwargs["continuity_handle"]
+        return ["codex", "exec", "--json", "prompt"], prompt_file
+
+    @contextmanager
+    def fake_isolated_codex_home(env, *, model, reasoning_effort, continuity_handle):
+        captured["home_continuity_handle"] = continuity_handle
+        yield {"PATH": env.get("PATH", "")}, tmp_path
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (
+                b'{"type":"thread.started","thread_id":"thread-new"}\n'
+                b'{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}\n',
+                b"",
+            )
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return FakeProcess()
+
+    import annotation_pipeline_skill.llm.local_cli as local_cli
+
+    monkeypatch.setattr(local_cli, "build_codex_command", fake_build_codex_command)
+    monkeypatch.setattr(local_cli, "isolated_codex_home", fake_isolated_codex_home)
+    monkeypatch.setattr(local_cli.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    client = LocalCLIClient(
+        LLMProfile(
+            name="local_codex",
+            provider="local_cli",
+            model="gpt-5.4-mini",
+            cli_kind="codex",
+            cli_binary="codex",
+        )
+    )
+
+    result = await client.generate(LLMGenerateRequest(prompt="prompt", continuity_handle="thread-old"))
+
+    assert result.continuity_handle == "thread-new"
+    assert captured["continuity_handle"] is None
+    assert captured["home_continuity_handle"] is None
