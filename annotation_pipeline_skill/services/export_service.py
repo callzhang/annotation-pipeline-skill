@@ -10,6 +10,18 @@ from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
+REQUIRED_TRAINING_ROW_FIELDS = [
+    "task_id",
+    "pipeline_id",
+    "source_ref",
+    "modality",
+    "annotation_requirements",
+    "annotation",
+    "annotation_artifact_id",
+    "annotation_artifact_path",
+]
+
+
 class TrainingDataExportService:
     def __init__(self, store: FileStore):
         self.store = store
@@ -33,7 +45,8 @@ class TrainingDataExportService:
         ]
         rows: list[dict[str, Any]] = []
         included: list[str] = []
-        excluded: list[dict[str, str]] = []
+        excluded: list[dict[str, Any]] = []
+        row_errors: list[dict[str, Any]] = []
         artifact_ids: list[str] = []
         source_files = sorted(
             {
@@ -53,6 +66,17 @@ class TrainingDataExportService:
                 excluded.append({"task_id": task.task_id, "reason": "missing_annotation_payload"})
                 continue
             row = self._training_row(task, annotation_artifact, annotation_payload)
+            validation_errors = self._validate_training_row(row)
+            if validation_errors:
+                row_errors.append({"task_id": task.task_id, "errors": validation_errors})
+                excluded.append(
+                    {
+                        "task_id": task.task_id,
+                        "reason": "invalid_training_row",
+                        "errors": validation_errors,
+                    }
+                )
+                continue
             rows.append(row)
             included.append(task.task_id)
             artifact_ids.append(annotation_artifact.artifact_id)
@@ -72,12 +96,14 @@ class TrainingDataExportService:
             artifact_ids=artifact_ids,
             source_files=source_files,
             annotation_rules_hash=self._annotation_rules_hash(),
-            schema_version="jsonl-training-v1",
-            validator_version="local-export-v1",
+            schema_version="jsonl-training-v2",
+            validator_version="local-export-v2",
             validation_summary={
                 "accepted_tasks": len(accepted_tasks),
                 "included": len(included),
                 "excluded": len(excluded),
+                "required_fields": REQUIRED_TRAINING_ROW_FIELDS,
+                "row_errors": row_errors,
                 "errors": excluded,
             },
             known_limitations=["text-first JSONL sink; multimodal preview artifacts are referenced, not rendered"],
@@ -110,6 +136,41 @@ class TrainingDataExportService:
             "annotation_artifact_id": artifact.artifact_id,
             "annotation_artifact_path": artifact.path,
         }
+
+    def _validate_training_row(self, row: dict[str, Any]) -> list[str]:
+        errors = [
+            f"missing_{field}"
+            for field in REQUIRED_TRAINING_ROW_FIELDS
+            if field not in row
+        ]
+        if not isinstance(row.get("task_id"), str) or not row.get("task_id"):
+            errors.append("task_id_required")
+        if not isinstance(row.get("pipeline_id"), str) or not row.get("pipeline_id"):
+            errors.append("pipeline_id_required")
+        if not isinstance(row.get("source_ref"), dict) or not row.get("source_ref"):
+            errors.append("source_ref_required")
+        if not isinstance(row.get("annotation_artifact_id"), str) or not row.get("annotation_artifact_id"):
+            errors.append("annotation_artifact_id_required")
+        if not isinstance(row.get("annotation_artifact_path"), str) or not row.get("annotation_artifact_path"):
+            errors.append("annotation_artifact_path_required")
+
+        annotation = row.get("annotation")
+        if annotation in (None, "", [], {}):
+            errors.append("annotation_required")
+        elif isinstance(annotation, str):
+            self._validate_annotation_json_string(annotation, errors)
+        elif not isinstance(annotation, (dict, list)):
+            errors.append("annotation_must_be_json_value")
+        return errors
+
+    def _validate_annotation_json_string(self, value: str, errors: list[str]) -> None:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            errors.append("annotation_string_must_be_json")
+            return
+        if parsed in (None, "", [], {}):
+            errors.append("annotation_json_must_not_be_empty")
 
     def _enqueue_submit(self, task: Task, *, export_id: str, row: dict[str, Any]) -> None:
         record = OutboxRecord.new(

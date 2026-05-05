@@ -103,6 +103,45 @@ def test_readiness_report_marks_project_ready_after_export(tmp_path):
     assert report["recommended_next_action"] == "deliver_training_data"
 
 
+def test_readiness_report_surfaces_latest_export_invalid_row_blockers(tmp_path):
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+    store.save_export_manifest(
+        ExportManifest.new(
+            project_id="pipe",
+            output_paths=["exports/export-1/training_data.jsonl"],
+            task_ids_included=[],
+            task_ids_excluded=[
+                {
+                    "task_id": "task-1",
+                    "reason": "invalid_training_row",
+                    "errors": ["annotation_string_must_be_json"],
+                }
+            ],
+            artifact_ids=[],
+            source_files=[],
+            annotation_rules_hash=None,
+            schema_version="jsonl-training-v2",
+            validator_version="local-export-v2",
+            validation_summary={"included": 0, "excluded": 1},
+            export_id="export-1",
+        )
+    )
+
+    report = build_readiness_report(store, project_id="pipe")
+
+    assert report["validation_blockers"] == [
+        {
+            "task_id": "task-1",
+            "reason": "invalid_training_row",
+            "errors": ["annotation_string_must_be_json"],
+        }
+    ]
+    assert report["recommended_next_action"] == "repair_export_blockers"
+
+
 def test_readiness_report_waits_for_external_outbox_after_export(tmp_path):
     from annotation_pipeline_skill.core.models import OutboxRecord
 

@@ -307,6 +307,8 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 
 The command writes `.annotation-pipeline/exports/<export-id>/training_data.jsonl` and `manifest.json`. The manifest records included and excluded task ids, source files, annotation artifact ids, annotation rules hash, validation summary, output paths, and known limitations. Accepted tasks without a readable `annotation_result` artifact are excluded rather than exported with incomplete data.
 
+Export schema `jsonl-training-v2` requires each row to include `task_id`, `pipeline_id`, `source_ref`, `modality`, `annotation_requirements`, `annotation`, `annotation_artifact_id`, and `annotation_artifact_path`. String annotations must be non-empty JSON strings; invalid rows are excluded with `invalid_training_row` and detailed `row_errors` in the manifest.
+
 Inspect whether the project is ready for an algorithm engineer:
 
 ```bash

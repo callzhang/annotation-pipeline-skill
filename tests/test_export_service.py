@@ -68,10 +68,23 @@ def test_export_service_writes_training_jsonl_and_manifest_for_accepted_tasks(tm
     assert manifest.task_ids_excluded == [{"task_id": "task-2", "reason": "missing_annotation_result"}]
     assert manifest.artifact_ids == [artifact.artifact_id]
     assert manifest.source_files == ["input.jsonl"]
+    assert manifest.schema_version == "jsonl-training-v2"
+    assert manifest.validator_version == "local-export-v2"
     assert manifest.validation_summary == {
         "accepted_tasks": 2,
         "included": 1,
         "excluded": 1,
+        "required_fields": [
+            "task_id",
+            "pipeline_id",
+            "source_ref",
+            "modality",
+            "annotation_requirements",
+            "annotation",
+            "annotation_artifact_id",
+            "annotation_artifact_path",
+        ],
+        "row_errors": [],
         "errors": [{"task_id": "task-2", "reason": "missing_annotation_result"}],
     }
     assert store.list_export_manifests() == [manifest]
@@ -144,4 +157,43 @@ def test_export_service_excludes_accepted_task_when_artifact_payload_is_missing(
 
     assert manifest.task_ids_included == []
     assert manifest.task_ids_excluded == [{"task_id": "task-1", "reason": "missing_annotation_payload"}]
+    assert (store.root / "exports/export-1/training_data.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_export_service_excludes_invalid_training_row_when_annotation_is_not_json(tmp_path):
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+    payload_path = store.root / "artifact_payloads/task-1/task-1-attempt-1_annotation_result.json"
+    payload_path.parent.mkdir(parents=True)
+    payload_path.write_text(json.dumps({"text": "not json"}), encoding="utf-8")
+    artifact = ArtifactRef.new(
+        task_id="task-1",
+        kind="annotation_result",
+        path="artifact_payloads/task-1/task-1-attempt-1_annotation_result.json",
+        content_type="application/json",
+    )
+    store.append_artifact(artifact)
+
+    manifest = TrainingDataExportService(store).export_jsonl(
+        project_id="pipe",
+        output_dir=store.root / "exports/export-1",
+        export_id="export-1",
+    )
+
+    assert manifest.task_ids_included == []
+    assert manifest.task_ids_excluded == [
+        {
+            "task_id": "task-1",
+            "reason": "invalid_training_row",
+            "errors": ["annotation_string_must_be_json"],
+        }
+    ]
+    assert manifest.validation_summary["row_errors"] == [
+        {
+            "task_id": "task-1",
+            "errors": ["annotation_string_must_be_json"],
+        }
+    ]
     assert (store.root / "exports/export-1/training_data.jsonl").read_text(encoding="utf-8") == ""

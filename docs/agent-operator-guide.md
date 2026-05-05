@@ -213,6 +213,8 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 
 The export service writes `training_data.jsonl` plus `manifest.json` under `.annotation-pipeline/exports/<export-id>/`. The manifest is the audit record for algorithm engineers: it includes included and excluded task ids, source files, annotation artifact ids, annotation rules hash, schema/validator versions, validation summary, output paths, and known limitations.
 
+Schema `jsonl-training-v2` validates that every exported row has the required training fields and that string annotations are non-empty JSON strings. Invalid rows are excluded and reported as `invalid_training_row` with `row_errors`, so the algorithm engineer does not receive silently malformed training data.
+
 Accepted tasks are exported only when they still have a readable `annotation_result` artifact. Missing annotation artifacts are recorded as excluded validation failures, and the task remains `accepted` so the operator can repair/export again without losing QC history.
 
 Check the coordinator readiness report before handing data to an algorithm engineer:

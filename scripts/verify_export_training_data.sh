@@ -9,7 +9,7 @@ READINESS_JSON="$PROJECT_ROOT/readiness.json"
 
 cd "$ROOT_DIR"
 
-printf '{"text":"alpha","source_dataset":"demo"}\n{"text":"beta","source_dataset":"demo"}\n' > "$INPUT_FILE"
+printf '{"text":"alpha","source_dataset":"demo"}\n{"text":"beta","source_dataset":"demo"}\n{"text":"gamma","source_dataset":"demo"}\n' > "$INPUT_FILE"
 
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline init --project-root "$PROJECT_ROOT"
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline create-tasks --project-root "$PROJECT_ROOT" --source "$INPUT_FILE" --pipeline-id export-verify --batch-size 1
@@ -49,6 +49,22 @@ store.append_artifact(
 task_two = store.load_task("export-verify-000002")
 task_two.status = TaskStatus.ACCEPTED
 store.save_task(task_two)
+
+task_three = store.load_task("export-verify-000003")
+task_three.status = TaskStatus.ACCEPTED
+store.save_task(task_three)
+invalid_payload_path = store.root / "artifact_payloads/export-verify-000003/export-verify-000003-attempt-1_annotation_result.json"
+invalid_payload_path.parent.mkdir(parents=True, exist_ok=True)
+invalid_payload_path.write_text(json.dumps({"task_id": task_three.task_id, "text": "not json"}), encoding="utf-8")
+store.append_artifact(
+    ArtifactRef.new(
+        task_id=task_three.task_id,
+        kind="annotation_result",
+        path=str(invalid_payload_path.relative_to(store.root)),
+        content_type="application/json",
+        metadata={"provider": "verify"},
+    )
+)
 PY
 
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run --with-editable . annotation-pipeline export training-data --project-root "$PROJECT_ROOT" --project-id export-verify --export-id export-1 > "$MANIFEST_JSON"
@@ -68,8 +84,24 @@ rows = [json.loads(line) for line in training_path.read_text(encoding="utf-8").s
 
 if manifest["task_ids_included"] != ["export-verify-000001"]:
     raise SystemExit(f"unexpected included tasks: {manifest['task_ids_included']}")
-if manifest["task_ids_excluded"] != [{"task_id": "export-verify-000002", "reason": "missing_annotation_result"}]:
+expected_excluded = [
+    {"task_id": "export-verify-000002", "reason": "missing_annotation_result"},
+    {
+        "task_id": "export-verify-000003",
+        "reason": "invalid_training_row",
+        "errors": ["annotation_string_must_be_json"],
+    },
+]
+if manifest["task_ids_excluded"] != expected_excluded:
     raise SystemExit(f"unexpected excluded tasks: {manifest['task_ids_excluded']}")
+if manifest["schema_version"] != "jsonl-training-v2":
+    raise SystemExit(f"unexpected schema version: {manifest['schema_version']}")
+if manifest["validator_version"] != "local-export-v2":
+    raise SystemExit(f"unexpected validator version: {manifest['validator_version']}")
+if manifest["validation_summary"]["row_errors"] != [
+    {"task_id": "export-verify-000003", "errors": ["annotation_string_must_be_json"]}
+]:
+    raise SystemExit(f"unexpected row errors: {manifest['validation_summary']['row_errors']}")
 if len(rows) != 1 or rows[0]["annotation"] != '{"labels":[{"text":"alpha"}]}':
     raise SystemExit(f"unexpected training rows: {rows}")
 if not (store_root / "exports/export-1/manifest.json").exists():
@@ -78,7 +110,7 @@ if readiness["ready_for_training"] is not False:
     raise SystemExit(f"expected readiness to require blocker repair: {readiness}")
 if readiness["recommended_next_action"] != "repair_export_blockers":
     raise SystemExit(f"unexpected readiness action: {readiness}")
-if readiness["validation_blockers"] != [{"task_id": "export-verify-000002", "reason": "missing_annotation_result"}]:
+if readiness["validation_blockers"] != expected_excluded:
     raise SystemExit(f"unexpected readiness blockers: {readiness['validation_blockers']}")
 
 print(f"training data export verification passed: {project_root}")

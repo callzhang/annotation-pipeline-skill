@@ -14,11 +14,16 @@ def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
     human_review_tasks = [task for task in tasks if task.status is TaskStatus.HUMAN_REVIEW]
     manifests = [manifest for manifest in store.list_export_manifests() if manifest.project_id == project_id]
     exported_task_ids = _exported_task_ids(manifests)
-    validation_blockers = []
+    latest_manifest = _latest_export_manifest(manifests)
+    latest_exclusions = _excluded_tasks_by_id(latest_manifest) if latest_manifest else {}
+    validation_blockers: list[dict[str, Any]] = []
     exportable_task_ids = []
 
     for task in accepted_tasks:
         if task.task_id in exported_task_ids:
+            continue
+        if task.task_id in latest_exclusions:
+            validation_blockers.append(latest_exclusions[task.task_id])
             continue
         artifact = _latest_annotation_artifact(store, task)
         if artifact is None:
@@ -97,10 +102,23 @@ def _exported_task_ids(manifests: list[ExportManifest]) -> set[str]:
     return task_ids
 
 
-def _latest_export(manifests: list[ExportManifest]) -> dict[str, Any] | None:
+def _latest_export_manifest(manifests: list[ExportManifest]) -> ExportManifest | None:
     if not manifests:
         return None
-    manifest = sorted(manifests, key=lambda item: item.created_at)[-1]
+    return sorted(manifests, key=lambda item: item.created_at)[-1]
+
+
+def _excluded_tasks_by_id(manifest: ExportManifest) -> dict[str, dict[str, Any]]:
+    return {
+        str(item["task_id"]): item
+        for item in manifest.task_ids_excluded
+    }
+
+
+def _latest_export(manifests: list[ExportManifest]) -> dict[str, Any] | None:
+    manifest = _latest_export_manifest(manifests)
+    if manifest is None:
+        return None
     return {
         "export_id": manifest.export_id,
         "created_at": manifest.created_at.isoformat(),
@@ -114,7 +132,7 @@ def _recommended_next_action(
     *,
     accepted_count: int,
     exportable_count: int,
-    validation_blockers: list[dict[str, str]],
+    validation_blockers: list[dict[str, Any]],
     human_review_count: int,
     open_feedback_count: int,
     pending_outbox_count: int,
