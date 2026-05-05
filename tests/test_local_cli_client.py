@@ -2,9 +2,11 @@ import os
 from pathlib import Path
 
 from annotation_pipeline_skill.llm.local_cli import (
+    build_claude_command,
     build_codex_command,
     codex_shell_environment,
     isolated_codex_home,
+    parse_claude_stream_events,
     parse_codex_json_events,
 )
 from annotation_pipeline_skill.llm.profiles import LLMProfile
@@ -131,6 +133,39 @@ def test_parse_codex_json_events_extracts_thread_and_final_text():
     assert result.continuity_handle == "thread-1"
     assert result.final_text == "final answer"
     assert result.usage == {"input_tokens": 11, "output_tokens": 2}
+
+
+def test_build_claude_command_uses_stream_json_and_stdin_prompt():
+    command = build_claude_command(
+        binary="claude",
+        model="claude-sonnet-4-5",
+        permission_mode="dontAsk",
+    )
+
+    assert command[:2] == ["claude", "-p"]
+    assert "--no-session-persistence" in command
+    assert "--output-format" in command
+    assert "stream-json" in command
+    assert command[command.index("--model") + 1] == "claude-sonnet-4-5"
+    assert command[command.index("--permission-mode") + 1] == "dontAsk"
+    assert command[-1] == "-"
+
+
+def test_parse_claude_stream_events_extracts_text_and_usage():
+    result = parse_claude_stream_events(
+        [
+            '{"type":"system","session_id":"session-1"}',
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"final answer"}]}}',
+            '{"type":"result","usage":{"input_tokens":5,"output_tokens":2}}',
+        ],
+        provider="local_cli",
+        model="claude-sonnet-4-5",
+    )
+
+    assert result.continuity_handle == "session-1"
+    assert result.final_text == "final answer"
+    assert result.usage == {"input_tokens": 5, "output_tokens": 2}
+    assert result.raw_response[1]["type"] == "assistant"
 
 
 def test_local_cli_profile_import_contract():

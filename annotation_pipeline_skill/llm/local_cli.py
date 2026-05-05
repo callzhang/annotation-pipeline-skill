@@ -81,6 +81,28 @@ def build_codex_command(
     return command, prompt_file
 
 
+def build_claude_command(
+    *,
+    binary: str,
+    model: str,
+    permission_mode: str | None,
+) -> list[str]:
+    command = [
+        binary,
+        "-p",
+        "--no-session-persistence",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--model",
+        model,
+    ]
+    if permission_mode:
+        command.extend(["--permission-mode", permission_mode])
+    command.append("-")
+    return command
+
+
 @contextmanager
 def isolated_codex_home(
     env: Mapping[str, str],
@@ -164,13 +186,64 @@ def parse_codex_json_events(
     )
 
 
+def parse_claude_stream_events(
+    lines: list[str],
+    *,
+    provider: str,
+    model: str,
+) -> LLMGenerateResult:
+    session_id: str | None = None
+    final_text_parts: list[str] = []
+    raw_events: list[dict[str, Any]] = []
+    usage: dict[str, Any] | None = None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            final_text_parts.append(stripped)
+            continue
+        if not isinstance(event, dict):
+            continue
+        raw_events.append(event)
+        if isinstance(event.get("session_id"), str):
+            session_id = event["session_id"]
+        event_type = event.get("type")
+        if event_type == "assistant":
+            text = _claude_event_text(event)
+            if text:
+                final_text_parts.append(text)
+        event_usage = event.get("usage")
+        if event_type == "result" and isinstance(event_usage, dict):
+            usage = event_usage
+
+    return LLMGenerateResult(
+        runtime="local_cli",
+        provider=provider,
+        model=model,
+        continuity_handle=session_id,
+        final_text="\n".join(final_text_parts),
+        usage=usage,
+        raw_response=raw_events,
+        diagnostics={"line_count": len(lines), "event_count": len(raw_events)},
+    )
+
+
 class LocalCLIClient:
     def __init__(self, profile: LLMProfile):
         self.profile = profile
 
     async def generate(self, request: LLMGenerateRequest) -> LLMGenerateResult:
-        if self.profile.cli_kind != "codex":
-            raise ValueError(f"unsupported local cli kind: {self.profile.cli_kind}")
+        if self.profile.cli_kind == "codex":
+            return await self._generate_codex(request)
+        if self.profile.cli_kind == "claude":
+            return await self._generate_claude(request)
+        raise ValueError(f"unsupported local cli kind: {self.profile.cli_kind}")
+
+    async def _generate_codex(self, request: LLMGenerateRequest) -> LLMGenerateResult:
         command, prompt_file = build_codex_command(
             binary=self.profile.cli_binary or "codex",
             prompt=request.prompt or _messages_to_prompt(request.input_items),
@@ -218,6 +291,47 @@ class LocalCLIClient:
         finally:
             prompt_file.unlink(missing_ok=True)
 
+    async def _generate_claude(self, request: LLMGenerateRequest) -> LLMGenerateResult:
+        command = build_claude_command(
+            binary=self.profile.cli_binary or "claude",
+            model=self.profile.model,
+            permission_mode=self.profile.permission_mode,
+        )
+        prompt = request.prompt or _messages_to_prompt(request.input_items)
+        if request.instructions:
+            prompt = f"{request.instructions}\n\n{prompt}"
+        env = {**os.environ, **request.env}
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=str(request.cwd) if request.cwd else None,
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(prompt.encode("utf-8")),
+            timeout=self.profile.timeout_seconds,
+        )
+        lines = stdout.decode("utf-8", errors="replace").splitlines()
+        result = parse_claude_stream_events(lines, provider=self.profile.name, model=self.profile.model)
+        diagnostics = dict(result.diagnostics or {})
+        diagnostics["returncode"] = process.returncode
+        if stderr:
+            diagnostics["stderr"] = stderr.decode("utf-8", errors="replace")[-4000:]
+        if process.returncode != 0:
+            raise LocalCLIExecutionError("local CLI provider failed", diagnostics)
+        return LLMGenerateResult(
+            runtime=result.runtime,
+            provider=result.provider,
+            model=result.model,
+            continuity_handle=result.continuity_handle,
+            final_text=result.final_text,
+            usage=result.usage,
+            raw_response=result.raw_response,
+            diagnostics=diagnostics,
+        )
+
 
 def _write_isolated_codex_config(path: Path, *, model: str, reasoning_effort: str | None) -> None:
     lines = []
@@ -229,3 +343,24 @@ def _write_isolated_codex_config(path: Path, *, model: str, reasoning_effort: st
 
 def _messages_to_prompt(input_items: list[dict[str, Any]]) -> str:
     return "\n".join(str(item.get("content", item)) for item in input_items)
+
+
+def _claude_event_text(event: dict[str, Any]) -> str:
+    message = event.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+    else:
+        content = event.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    texts: list[str] = []
+    for part in content:
+        if isinstance(part, dict):
+            text = part.get("text") or part.get("content")
+        else:
+            text = getattr(part, "text", None) or getattr(part, "content", None)
+        if isinstance(text, str):
+            texts.append(text)
+    return "\n".join(texts)
