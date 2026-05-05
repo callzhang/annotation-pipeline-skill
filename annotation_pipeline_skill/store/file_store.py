@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -8,10 +9,12 @@ from annotation_pipeline_skill.core.models import (
     ArtifactRef,
     Attempt,
     AuditEvent,
+    FeedbackDiscussionEntry,
     FeedbackRecord,
     OutboxRecord,
     Task,
 )
+from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeCycleStats, RuntimeSnapshot
 
 T = TypeVar("T")
 
@@ -22,16 +25,25 @@ class FileStore:
         self.tasks_dir = self.root / "tasks"
         self.events_dir = self.root / "events"
         self.feedback_dir = self.root / "feedback"
+        self.feedback_discussions_dir = self.root / "feedback_discussions"
         self.attempts_dir = self.root / "attempts"
         self.artifacts_dir = self.root / "artifacts"
         self.outbox_dir = self.root / "outbox"
+        self.runtime_dir = self.root / "runtime"
+        self.active_runs_dir = self.runtime_dir / "active_runs"
+        self.runtime_cycles_path = self.runtime_dir / "cycle_stats.jsonl"
+        self.runtime_heartbeat_path = self.runtime_dir / "heartbeat.json"
+        self.runtime_snapshot_path = self.runtime_dir / "runtime_snapshot.json"
         for directory in (
             self.tasks_dir,
             self.events_dir,
             self.feedback_dir,
+            self.feedback_discussions_dir,
             self.attempts_dir,
             self.artifacts_dir,
             self.outbox_dir,
+            self.runtime_dir,
+            self.active_runs_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -59,6 +71,15 @@ class FileStore:
     def list_feedback(self, task_id: str) -> list[FeedbackRecord]:
         return self._read_jsonl(self.feedback_dir / f"{task_id}.jsonl", FeedbackRecord.from_dict)
 
+    def append_feedback_discussion(self, entry: FeedbackDiscussionEntry) -> None:
+        self._append_jsonl(self.feedback_discussions_dir / f"{entry.task_id}.jsonl", entry.to_dict())
+
+    def list_feedback_discussions(self, task_id: str) -> list[FeedbackDiscussionEntry]:
+        return self._read_jsonl(
+            self.feedback_discussions_dir / f"{task_id}.jsonl",
+            FeedbackDiscussionEntry.from_dict,
+        )
+
     def append_attempt(self, attempt: Attempt) -> None:
         self._append_jsonl(self.attempts_dir / f"{attempt.task_id}.jsonl", attempt.to_dict())
 
@@ -79,6 +100,44 @@ class FileStore:
             OutboxRecord.from_dict(self._read_json(path))
             for path in sorted(self.outbox_dir.glob("*.json"))
         ]
+
+    def save_active_run(self, run: ActiveRun) -> None:
+        self._write_json(self.active_runs_dir / f"{run.run_id}.json", run.to_dict())
+
+    def list_active_runs(self) -> list[ActiveRun]:
+        return [
+            ActiveRun.from_dict(self._read_json(path))
+            for path in sorted(self.active_runs_dir.glob("*.json"))
+        ]
+
+    def delete_active_run(self, run_id: str) -> None:
+        (self.active_runs_dir / f"{run_id}.json").unlink(missing_ok=True)
+
+    def save_runtime_heartbeat(self, heartbeat_at: datetime) -> None:
+        self._write_json(
+            self.runtime_heartbeat_path,
+            {"heartbeat_at": heartbeat_at.isoformat()},
+        )
+
+    def load_runtime_heartbeat(self) -> datetime | None:
+        if not self.runtime_heartbeat_path.exists():
+            return None
+        payload = self._read_json(self.runtime_heartbeat_path)
+        return datetime.fromisoformat(payload["heartbeat_at"])
+
+    def append_runtime_cycle_stats(self, stats: RuntimeCycleStats) -> None:
+        self._append_jsonl(self.runtime_cycles_path, stats.to_dict())
+
+    def list_runtime_cycle_stats(self) -> list[RuntimeCycleStats]:
+        return self._read_jsonl(self.runtime_cycles_path, RuntimeCycleStats.from_dict)
+
+    def save_runtime_snapshot(self, snapshot: RuntimeSnapshot) -> None:
+        self._write_json(self.runtime_snapshot_path, snapshot.to_dict())
+
+    def load_runtime_snapshot(self) -> RuntimeSnapshot | None:
+        if not self.runtime_snapshot_path.exists():
+            return None
+        return RuntimeSnapshot.from_dict(self._read_json(self.runtime_snapshot_path))
 
     def _write_json(self, path: Path, data: dict) -> None:
         path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")

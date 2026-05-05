@@ -6,24 +6,24 @@ from annotation_pipeline_skill.config.loader import ConfigValidationError, load_
 def write_config(root):
     config_root = root / ".annotation-pipeline"
     config_root.mkdir()
-    (config_root / "providers.yaml").write_text(
+    (config_root / "llm_profiles.yaml").write_text(
         """
-providers:
-  general_llm:
-    kind: openai_compatible
-    models: [general-large]
-    default_model: general-large
-    secret_ref: env:GENERAL_LLM_API_KEY
+profiles:
+  local_codex:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4-mini
+targets:
+  annotation: local_codex
 """,
         encoding="utf-8",
     )
-    (config_root / "stage_routes.yaml").write_text(
+    (config_root / "workflow.yaml").write_text(
         """
-stage_routes:
+stages:
   annotation:
-    primary_provider: general_llm
-    primary_model: general-large
-    primary_effort: medium
+    target: annotation
 human_review:
   required: false
 """,
@@ -38,7 +38,7 @@ annotators:
     annotation_types: [entity_span]
     input_artifact_kinds: [raw_slice]
     output_artifact_kinds: [annotation_result]
-    provider_route_id: annotation
+    provider_target: annotation
     enabled: true
 """,
         encoding="utf-8",
@@ -58,25 +58,28 @@ def test_load_project_config_reads_yaml_files(tmp_path):
 
     config = load_project_config(tmp_path)
 
-    assert config.providers["general_llm"].default_model == "general-large"
-    assert config.stage_routes["annotation"].primary_provider == "general_llm"
+    assert config.workflow["stages"]["annotation"]["target"] == "annotation"
     assert config.annotators["text_annotator"].modalities == ["text"]
-    assert config.human_review_required is False
+    assert config.annotators["text_annotator"].provider_target == "annotation"
 
 
-def test_load_project_config_rejects_missing_route_provider(tmp_path):
+def test_load_project_config_rejects_missing_provider_target(tmp_path):
     write_config(tmp_path)
-    route_file = tmp_path / ".annotation-pipeline" / "stage_routes.yaml"
-    route_file.write_text(
+    annotators_file = tmp_path / ".annotation-pipeline" / "annotators.yaml"
+    annotators_file.write_text(
         """
-stage_routes:
-  annotation:
-    primary_provider: missing_provider
-    primary_model: general-large
-    primary_effort: medium
+annotators:
+  text_annotator:
+    display_name: Text Annotator
+    modalities: [text]
+    annotation_types: [entity_span]
+    input_artifact_kinds: [raw_slice]
+    output_artifact_kinds: [annotation_result]
+    provider_target: missing_target
+    enabled: true
 """,
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigValidationError, match="missing_provider"):
+    with pytest.raises(ConfigValidationError, match="missing_target"):
         load_project_config(tmp_path)

@@ -399,6 +399,89 @@ class FeedbackRecord:
 
 
 @dataclass
+class FeedbackDiscussionEntry:
+    entry_id: str
+    task_id: str
+    feedback_id: str
+    role: str
+    stance: str
+    message: str
+    agreed_points: list[str]
+    disputed_points: list[str]
+    proposed_resolution: str | None
+    consensus: bool
+    created_at: datetime
+    created_by: str
+    metadata: dict = field(default_factory=dict)
+
+    @classmethod
+    def new(
+        cls,
+        task_id: str,
+        feedback_id: str,
+        role: str,
+        stance: str,
+        message: str,
+        created_by: str,
+        agreed_points: list[str] | None = None,
+        disputed_points: list[str] | None = None,
+        proposed_resolution: str | None = None,
+        consensus: bool = False,
+        metadata: dict | None = None,
+    ) -> FeedbackDiscussionEntry:
+        return cls(
+            entry_id=f"discussion-{uuid4().hex}",
+            task_id=task_id,
+            feedback_id=feedback_id,
+            role=role,
+            stance=stance,
+            message=message,
+            agreed_points=agreed_points or [],
+            disputed_points=disputed_points or [],
+            proposed_resolution=proposed_resolution,
+            consensus=consensus,
+            created_at=utc_now(),
+            created_by=created_by,
+            metadata=metadata or {},
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "entry_id": self.entry_id,
+            "task_id": self.task_id,
+            "feedback_id": self.feedback_id,
+            "role": self.role,
+            "stance": self.stance,
+            "message": self.message,
+            "agreed_points": self.agreed_points,
+            "disputed_points": self.disputed_points,
+            "proposed_resolution": self.proposed_resolution,
+            "consensus": self.consensus,
+            "created_at": _dt_to_str(self.created_at),
+            "created_by": self.created_by,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FeedbackDiscussionEntry:
+        return cls(
+            entry_id=data["entry_id"],
+            task_id=data["task_id"],
+            feedback_id=data["feedback_id"],
+            role=data["role"],
+            stance=data["stance"],
+            message=data["message"],
+            agreed_points=list(data.get("agreed_points", [])),
+            disputed_points=list(data.get("disputed_points", [])),
+            proposed_resolution=data.get("proposed_resolution"),
+            consensus=bool(data.get("consensus", False)),
+            created_at=_dt_from_str(data["created_at"]),
+            created_by=data["created_by"],
+            metadata=data.get("metadata", {}),
+        )
+
+
+@dataclass
 class OutboxRecord:
     record_id: str
     task_id: str

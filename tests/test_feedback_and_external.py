@@ -1,7 +1,7 @@
-from annotation_pipeline_skill.core.models import FeedbackRecord
+from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry, FeedbackRecord
 from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, OutboxKind
 from annotation_pipeline_skill.services.external_task_service import ExternalTaskService
-from annotation_pipeline_skill.services.feedback_service import build_feedback_bundle
+from annotation_pipeline_skill.services.feedback_service import build_feedback_bundle, build_feedback_consensus_summary
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -15,7 +15,7 @@ def test_feedback_bundle_orders_records_by_creation_time(tmp_path):
         category="format",
         message="Bad JSON shape",
         target={"path": "$"},
-        suggested_action="bulk_code_repair",
+        suggested_action="batch_code_update",
         created_by="validator",
     )
     second = FeedbackRecord.new(
@@ -37,6 +37,53 @@ def test_feedback_bundle_orders_records_by_creation_time(tmp_path):
     assert [item["message"] for item in bundle["items"]] == ["Bad JSON shape", "Box is too loose"]
 
 
+def test_feedback_bundle_includes_discussion_and_consensus(tmp_path):
+    store = FileStore(tmp_path)
+    feedback = FeedbackRecord.new(
+        task_id="task-1",
+        attempt_id="attempt-1",
+        source_stage=FeedbackSource.QC,
+        severity=FeedbackSeverity.WARNING,
+        category="boundary",
+        message="Span boundary is too wide.",
+        target={"entity": "OpenAI"},
+        suggested_action="manual_annotation",
+        created_by="qc-agent",
+    )
+    annotator_reply = FeedbackDiscussionEntry.new(
+        task_id="task-1",
+        feedback_id=feedback.feedback_id,
+        role="annotator",
+        stance="partial_agree",
+        message="I agree the span should exclude punctuation, but the label is correct.",
+        agreed_points=["exclude trailing punctuation"],
+        disputed_points=["label should remain ORG"],
+        proposed_resolution="Update span only.",
+        created_by="annotator-agent",
+    )
+    qc_reply = FeedbackDiscussionEntry.new(
+        task_id="task-1",
+        feedback_id=feedback.feedback_id,
+        role="qc",
+        stance="agree",
+        message="Agreed. Span-only update is sufficient.",
+        agreed_points=["exclude trailing punctuation", "label should remain ORG"],
+        proposed_resolution="Update span only.",
+        consensus=True,
+        created_by="qc-agent",
+    )
+    store.append_feedback(feedback)
+    store.append_feedback_discussion(annotator_reply)
+    store.append_feedback_discussion(qc_reply)
+
+    bundle = build_feedback_bundle(store, "task-1")
+    summary = build_feedback_consensus_summary(store, "task-1")
+
+    assert bundle["items"][0]["discussion"][0]["stance"] == "partial_agree"
+    assert bundle["items"][0]["consensus"] is True
+    assert summary["can_accept_by_consensus"] is True
+
+
 def test_external_task_pull_is_idempotent_and_creates_status_outbox(tmp_path):
     store = FileStore(tmp_path)
     service = ExternalTaskService(store)
@@ -53,7 +100,7 @@ def test_external_task_pull_is_idempotent_and_creates_status_outbox(tmp_path):
         external_task_id="42",
         payload={"text": "hello again"},
     )
-    record = service.enqueue_status(first, status="ready")
+    record = service.enqueue_status(first, status="pending")
 
     assert first.task_id == second.task_id
     assert record.kind is OutboxKind.STATUS

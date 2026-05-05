@@ -2,7 +2,7 @@
 
 Local-first foundation for a reusable annotation pipeline skill.
 
-This repository is building toward a task-type-agnostic annotation manager with durable tasks, attempts, audit events, QC feedback, optional Human Review, repair flows, external task API integration, and a Vite + React + TypeScript Kanban dashboard.
+This repository is building toward a task-type-agnostic annotation manager with durable tasks, attempts, audit events, QC feedback, optional Human Review, feedback-driven annotation updates, external task API integration, and a Vite + React + TypeScript Kanban dashboard.
 
 ## Current Slice
 
@@ -12,21 +12,22 @@ Implemented in the first backend foundation slice:
 - Core task, attempt, artifact, feedback, external task, outbox, and audit event models.
 - Validated task state transitions.
 - File-system JSON/JSONL store.
-- YAML-backed provider, route, annotator, and external-task config loading.
+- YAML-backed subagent provider, workflow, annotator, and external-task config loading.
 - Structured annotator capability selection.
 - Append-only feedback records.
+- Annotator/QC feedback discussion records with consensus-based acceptance.
 - Compact feedback bundle builder.
 - Idempotent external task pull mapping.
 - Local outbox records for status and submit operations.
-- CLI init, doctor, JSONL task creation, local cycle, merge, and dashboard serving commands.
-- Deterministic local fake runtime cycle.
+- CLI init, doctor, JSONL task creation, subagent cycle, and dashboard serving commands.
+- Configurable subagent runtime through `llm_profiles.yaml`.
+- OpenAI Responses API and local LLM CLI provider profiles.
 - Backend Kanban snapshot data shape.
 
 Not implemented yet:
 
 - Streamlit dashboard. This project will not use Streamlit.
-- Vite + React + TypeScript frontend.
-- Real provider clients.
+- Production distributed runtime.
 - Real external HTTP task API calls.
 - Real multimodal preview renderers.
 
@@ -35,6 +36,8 @@ Not implemented yet:
 - Product design: `PRODUCT_DESIGN.md`
 - Technical architecture: `TECHNICAL_ARCHITECTURE.md`
 - Test plan: `VERIFY_MANAGER_CYCLES_TEST_PLAN.md`
+- Agent operator guide: `docs/agent-operator-guide.md`
+- Algorithm engineer user story: `docs/algorithm-engineer-user-story.md`
 - Current spec: `docs/superpowers/specs/2026-04-24-annotation-pipeline-skill-design.md`
 - Current implementation plan: `docs/superpowers/plans/2026-04-24-core-foundation.md`
 
@@ -94,7 +97,7 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline doctor --project-root ./demo-project
 ```
 
-Create ready tasks from JSONL:
+Create pending tasks from JSONL:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
@@ -123,30 +126,82 @@ Each generated task stores the batch rows in `source_ref.payload.rows`, records
 line boundaries and row count, and includes an all-row QC policy in task
 metadata.
 
-Run one deterministic local fake cycle:
+You can import multiple JSONL sources into the same project root by using a different `--pipeline-id` for each logical annotation project. The dashboard exposes those pipeline IDs as projects, so switching projects filters the Kanban board and event log without moving or rewriting task data.
+
+Validate subagent provider profiles:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline provider doctor --project-root ./demo-project
+```
+
+Inspect configured stage targets:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline provider targets --project-root ./demo-project
+```
+
+Run one configured subagent cycle:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline run-cycle --project-root ./demo-project
 ```
 
-Run a deterministic fake cycle and immediately merge accepted tasks:
+The explicit runtime form is also accepted:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
-  annotation-pipeline run-cycle --project-root ./demo-project --auto-merge
+  annotation-pipeline run-cycle --runtime subagent --project-root ./demo-project
 ```
 
-Merge tasks that already passed QC and reached `accepted`:
+Provider configuration lives at `.annotation-pipeline/llm_profiles.yaml`.
+
+Inspect and run the monitored local runtime:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
-  annotation-pipeline merge-accepted --project-root ./demo-project
+  annotation-pipeline runtime status --project-root ./demo-project
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline runtime once --project-root ./demo-project
+
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline runtime run --project-root ./demo-project --max-cycles 3
 ```
 
-Merged tasks move through the validated `accepted -> merged` transition, append
-an audit event, and enqueue a pending `submit` outbox record for downstream
-merge sinks or external task APIs.
+The runtime writes `.annotation-pipeline/runtime/runtime_snapshot.json`, heartbeat data, active-run records, and cycle stats. The snapshot is the local read model for runtime health, queue counts, capacity, stale tasks, and due retries.
+
+OpenAI Responses API example:
+
+```yaml
+profiles:
+  openai_default:
+    provider: openai_responses
+    model: gpt-5.4-mini
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+targets:
+  qc: openai_default
+```
+
+Local LLM CLI example:
+
+```yaml
+profiles:
+  local_codex:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4-mini
+targets:
+  annotation: local_codex
+```
+
+Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis.
+
+QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
 
 Serve the dashboard API:
 

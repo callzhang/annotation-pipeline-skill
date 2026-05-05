@@ -12,6 +12,8 @@
 
 ## Scope
 
+Update: the subagent runtime slice now adds `llm_profiles.yaml`, OpenAI Responses API profiles, local LLM CLI profiles, `provider doctor`, `provider targets`, and `run-cycle --runtime subagent`. Coordinator packaging should build on those provider targets instead of the older placeholder `providers.yaml`-only routing model.
+
 This plan packages the existing project as an agent skill and adds the smallest coordinator layer needed for another agent to operate it responsibly. It does not implement real provider model calls, real external HTTP integrations, production auth, frontend configuration editing, active learning loops, or RL training loops.
 
 The intended user persona is an algorithm engineer. The skill must guide the agent toward producing training datasets for model training, not just running annotation jobs. Later cycles can evolve this into an active learning and RL workflow management platform.

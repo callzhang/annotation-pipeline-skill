@@ -3,14 +3,15 @@ import { cardSubtitle, countCards, visibleColumns } from "./kanban";
 import type { KanbanSnapshot } from "./types";
 
 const snapshot: KanbanSnapshot = {
+  project_id: null,
   columns: [
     {
-      id: "ready",
-      title: "Ready",
+      id: "pending",
+      title: "Pending",
       cards: [
         {
           task_id: "task-1",
-          status: "ready",
+          status: "pending",
           modality: "text",
           annotation_types: ["entity_span"],
           selected_annotator_id: null,
@@ -33,7 +34,7 @@ describe("kanban helpers", () => {
   });
 
   it("keeps empty operational columns visible", () => {
-    expect(visibleColumns(snapshot).map((column) => column.id)).toEqual(["ready", "human_review"]);
+    expect(visibleColumns(snapshot).map((column) => column.id)).toEqual(["pending", "human_review"]);
   });
 
   it("builds a compact card subtitle from modality and annotation types", () => {
