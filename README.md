@@ -60,6 +60,12 @@ npm test -- --run
 npm run build
 ```
 
+Run the runtime end-to-end verification:
+
+```bash
+bash scripts/verify_runtime_e2e.sh
+```
+
 ## Run The Dashboard
 
 Start the Python dashboard API against a file-store root:
