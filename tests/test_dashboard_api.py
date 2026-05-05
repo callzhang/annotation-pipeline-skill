@@ -180,6 +180,27 @@ def test_dashboard_api_returns_outbox_summary(tmp_path):
     assert payload["records"][0]["task_id"] == "task-1"
 
 
+def test_dashboard_api_filters_outbox_summary_by_project(tmp_path):
+    from annotation_pipeline_skill.core.models import OutboxRecord
+    from annotation_pipeline_skill.core.states import OutboxKind
+
+    store = FileStore(tmp_path)
+    alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
+    beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
+    store.save_task(alpha)
+    store.save_task(beta)
+    store.save_outbox(OutboxRecord.new(task_id="alpha-1", kind=OutboxKind.SUBMIT, payload={}))
+    store.save_outbox(OutboxRecord.new(task_id="beta-1", kind=OutboxKind.SUBMIT, payload={}))
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/outbox?project=project-beta")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["counts"] == {"dead_letter": 0, "pending": 1, "sent": 0}
+    assert [record["task_id"] for record in payload["records"]] == ["beta-1"]
+
+
 def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events_and_feedback(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(

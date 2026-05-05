@@ -248,3 +248,5 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 The dispatcher sends JSON POST requests to `callbacks.yaml`. A successful response marks the record `sent` and writes an audit event. Retryable failures keep the record `pending` with `retry_count`, `next_retry_at`, and `last_error`. Permanent failures or exhausted retries move to `dead_letter`; readiness reports those as blockers until an operator resolves them.
+
+The dashboard Outbox tab shows the same records and follows the selected project filter. Use it with the Readiness tab: pending outbox records mean the export is not delivered yet, and dead-letter records require operator inspection before the training data handoff.

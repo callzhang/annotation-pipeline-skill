@@ -170,7 +170,7 @@ export interface ReadinessReport {
   exportable_count: number;
   open_feedback_count: number;
   human_review_count: number;
-  validation_blockers: Array<Record<string, string>>;
+  validation_blockers: Array<Record<string, unknown>>;
   pending_outbox_count: number;
   dead_letter_outbox_count: number;
   latest_export: {
@@ -182,6 +182,27 @@ export interface ReadinessReport {
   } | null;
   recommended_next_action: string;
   next_command: string | null;
+}
+
+export interface OutboxRecord {
+  record_id: string;
+  task_id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  status: string;
+  retry_count: number;
+  created_at: string;
+  next_retry_at: string | null;
+  last_error: string | null;
+}
+
+export interface OutboxSummary {
+  counts: {
+    pending: number;
+    sent: number;
+    dead_letter: number;
+  };
+  records: OutboxRecord[];
 }
 
 export type ProviderName = "openai_responses" | "openai_compatible" | "local_cli";

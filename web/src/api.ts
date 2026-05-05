@@ -10,6 +10,7 @@ import type {
   TaskDetail,
   ProviderConfigSnapshot,
   ReadinessReport,
+  OutboxSummary,
 } from "./types";
 
 function projectQuery(projectId: string | null): string {
@@ -132,6 +133,14 @@ export async function fetchReadinessReport(projectId: string): Promise<Readiness
     throw new Error(`Readiness API returned ${response.status}`);
   }
   return response.json() as Promise<ReadinessReport>;
+}
+
+export async function fetchOutboxSummary(projectId: string | null = null): Promise<OutboxSummary> {
+  const response = await fetch(`/api/outbox${projectQuery(projectId)}`);
+  if (!response.ok) {
+    throw new Error(`Outbox API returned ${response.status}`);
+  }
+  return response.json() as Promise<OutboxSummary>;
 }
 
 export async function runRuntimeOnce(): Promise<RuntimeRunOnceResponse> {

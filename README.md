@@ -134,6 +134,8 @@ npm run dev
 The Vite dev server proxies `/api` to `http://127.0.0.1:8765`.
 Use `VITE_API_TARGET=http://127.0.0.1:<port>` when the API runs on another port.
 
+The dashboard includes Kanban, Runtime, Readiness, Outbox, Providers, Configuration, and Event Log views. The Outbox view can follow the selected project and shows pending, sent, and dead-letter callback records with retry/error details.
+
 ## CLI Workflow
 
 Initialize a local annotation project:

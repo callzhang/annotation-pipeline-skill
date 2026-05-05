@@ -9,6 +9,7 @@ import {
 import { ConfigPanel } from "./components/ConfigPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
+import { OutboxPanel } from "./components/OutboxPanel";
 import { ProvidersPanel } from "./components/ProvidersPanel";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { RuntimePanel } from "./components/RuntimePanel";
@@ -17,7 +18,7 @@ import { countCards } from "./kanban";
 import type { KanbanSnapshot, ProjectSummary, TaskCard, TaskDetail } from "./types";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "readiness" | "providers" | "config" | "events";
+type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "config" | "events";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
@@ -155,6 +156,9 @@ export default function App() {
         <button className={viewMode === "readiness" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("readiness")}>
           Readiness
         </button>
+        <button className={viewMode === "outbox" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("outbox")}>
+          Outbox
+        </button>
         <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("providers")}>
           Providers
         </button>
@@ -172,6 +176,7 @@ export default function App() {
       ) : null}
       {viewMode === "runtime" ? <RuntimePanel /> : null}
       {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} /> : null}
+      {viewMode === "outbox" ? <OutboxPanel projectId={selectedProjectId} /> : null}
       {viewMode === "providers" ? <ProvidersPanel /> : null}
       {viewMode === "config" ? <ConfigPanel /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}

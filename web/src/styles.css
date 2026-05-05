@@ -721,6 +721,20 @@ button {
   text-align: right;
 }
 
+.runtime-facts.compact {
+  margin-top: 8px;
+}
+
+.runtime-facts.compact div {
+  align-items: start;
+}
+
+.outbox-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .runtime-counts {
   display: grid;
   gap: 8px;
@@ -745,6 +759,13 @@ button {
 .compact-list {
   margin: 12px 0 0;
   padding-left: 18px;
+}
+
+.compact-list small {
+  color: #52616b;
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
 }
 
 .runtime-table {

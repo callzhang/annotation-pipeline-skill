@@ -69,7 +69,7 @@ class DashboardApi:
                 return self._json_response(400, {"error": "project_required"})
             return self._json_response(200, build_readiness_report(self.store, project_id))
         if route == "/api/outbox":
-            return self._json_response(200, build_outbox_summary(self.store))
+            return self._json_response(200, build_outbox_summary(self.store, project_id=project_id))
         if route == "/api/runtime":
             return self._json_response(200, self._runtime_snapshot().to_dict())
         if route == "/api/runtime/monitor":

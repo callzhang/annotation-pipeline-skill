@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { postHumanReviewDecision } from "./api";
+import { fetchOutboxSummary, postHumanReviewDecision } from "./api";
 
 describe("dashboard API client", () => {
   afterEach(() => {
@@ -38,5 +38,18 @@ describe("dashboard API client", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/tasks/task-1");
     expect(detail.task.status).toBe("annotating");
+  });
+
+  it("fetches project-scoped outbox summaries", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ counts: { pending: 1, sent: 0, dead_letter: 0 }, records: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await fetchOutboxSummary("pipe");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/outbox?project=pipe");
+    expect(summary.counts.pending).toBe(1);
   });
 });

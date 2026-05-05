@@ -148,8 +148,15 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dic
     return json.loads(body.decode("utf-8"))
 
 
-def build_outbox_summary(store: FileStore) -> dict[str, Any]:
-    records = [record.to_dict() for record in store.list_outbox()]
+def build_outbox_summary(store: FileStore, project_id: str | None = None) -> dict[str, Any]:
+    task_ids = None
+    if project_id is not None:
+        task_ids = {task.task_id for task in store.list_tasks() if task.pipeline_id == project_id}
+    records = [
+        record.to_dict()
+        for record in store.list_outbox()
+        if task_ids is None or record.task_id in task_ids
+    ]
     counts = {
         "dead_letter": sum(1 for record in records if record["status"] == "dead_letter"),
         "pending": sum(1 for record in records if record["status"] == "pending"),

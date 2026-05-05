@@ -112,7 +112,12 @@ export function ReadinessPanel({ projectId }: ReadinessPanelProps) {
         {report.validation_blockers.length > 0 ? (
           <ul className="runtime-list compact-list">
             {report.validation_blockers.map((blocker) => (
-              <li key={`${blocker.task_id}-${blocker.reason}`}>{blocker.task_id}: {blocker.reason}</li>
+              <li key={`${String(blocker.task_id)}-${String(blocker.reason)}`}>
+                {String(blocker.task_id)}: {String(blocker.reason)}
+                {Array.isArray(blocker.errors) && blocker.errors.length > 0 ? (
+                  <small>{blocker.errors.map((error) => String(error)).join(", ")}</small>
+                ) : null}
+              </li>
             ))}
           </ul>
         ) : null}
