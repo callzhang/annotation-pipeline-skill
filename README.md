@@ -66,6 +66,12 @@ Run the runtime end-to-end verification:
 bash scripts/verify_runtime_e2e.sh
 ```
 
+Run the multi-cycle runtime progress verification with a deterministic fake Codex CLI:
+
+```bash
+bash scripts/verify_runtime_progress.sh
+```
+
 ## Run The Dashboard
 
 Start the Python dashboard API against a file-store root:
