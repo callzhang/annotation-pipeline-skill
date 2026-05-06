@@ -29,6 +29,10 @@ class FakeClient:
     def __init__(self):
         self.chat_completions = FakeChatCompletions()
         self.chat = type("Chat", (), {"completions": self.chat_completions})()
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -67,3 +71,21 @@ async def test_openai_compatible_generate_builds_chat_completion_request():
     assert result.final_text == "annotated result"
     assert result.usage == {"prompt_tokens": 10, "completion_tokens": 3}
     assert result.diagnostics == {"provider_flavor": "deepseek"}
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_client_closes_underlying_async_client():
+    fake_client = FakeClient()
+    profile = LLMProfile(
+        name="deepseek_default",
+        provider="openai_compatible",
+        provider_flavor="deepseek",
+        model="deepseek-chat",
+        api_key_env="DEEPSEEK_API_KEY",
+        base_url="https://api.deepseek.com",
+    )
+    client = OpenAICompatibleClient(profile, client=fake_client)
+
+    await client.aclose()
+
+    assert fake_client.closed is True

@@ -151,6 +151,17 @@ bash scripts/verify_memory_ner_truth_eval.sh
 
 The script selects 10 accepted or merged annotation-manager rows as gold truth, runs this skill's DeepSeek-compatible annotation client, and reports entity-level precision, recall, and F1. Use `MEMORY_NER_EVAL_MIN_F1` to raise the acceptance threshold as prompts improve.
 
+Run the memory-ner accepted-state E2E when you need to prove real tasks can move through annotation, QC feedback, reruns, and final `accepted` state:
+
+```bash
+set -a
+source ~/.agents/auth/deepseek.env
+set +a
+KEEP_MEMORY_NER_E2E_PROJECT=1 bash scripts/verify_memory_ner_accepted_e2e.sh
+```
+
+The accepted-state E2E uses the same 10-row truth sample source, runs DeepSeek for both annotation and QC through the runtime scheduler, and requires at least `MEMORY_NER_E2E_MIN_ACCEPTED` tasks to finish as `accepted` after `MEMORY_NER_E2E_MAX_CYCLES` feedback cycles. The default gate is 8 accepted tasks out of 10.
+
 Run the training data export verification:
 
 ```bash

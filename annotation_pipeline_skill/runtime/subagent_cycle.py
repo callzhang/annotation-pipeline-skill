@@ -178,7 +178,16 @@ class SubagentRuntime:
         self.store.save_task(task)
 
     def _generate(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
-        return asyncio.run(self.client_factory(target).generate(request))
+        return asyncio.run(self._generate_and_close(target, request))
+
+    async def _generate_and_close(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
+        client = self.client_factory(target)
+        try:
+            return await client.generate(request)
+        finally:
+            close = getattr(client, "aclose", None)
+            if close is not None:
+                await close()
 
     def _append_attempt(self, attempt: Attempt, artifact: ArtifactRef) -> None:
         self.store.append_attempt(attempt)
@@ -306,7 +315,10 @@ class SubagentRuntime:
 
 def _annotation_instructions(task: Task) -> str:
     return (
-        "You are an annotation subagent. Return only the annotation result for the task. "
+        "You are an annotation subagent. Return raw JSON only, with no markdown fences or commentary. "
+        "Follow task.source_ref.payload.annotation_guidance when it is present, including output_schema, allowed_entity_types, and rules. "
+        "For text entity spans, copy exact contiguous text spans from task.source_ref.payload.text. "
+        "Do not add entity labels outside the configured allowed entity types. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
 
@@ -314,7 +326,9 @@ def _annotation_instructions(task: Task) -> str:
 def _qc_instructions(task: Task) -> str:
     return (
         "You are a QC subagent. Inspect the task and latest annotation artifact. "
-        "Return JSON with a boolean field named passed. If passed is false, include message, category, severity, target, and suggested_action. "
+        "Return raw JSON with no markdown fences. Include a boolean field named passed. "
+        "If passed is false, include message, category, severity, target, and suggested_action. "
+        "Use task.source_ref.payload.annotation_guidance as the quality policy when it is present. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
 
@@ -329,8 +343,9 @@ def _task_payload(task: Task) -> dict[str, Any]:
 
 
 def _parse_qc_decision(text: str) -> dict[str, Any]:
+    normalized_text = _strip_markdown_json_fence(text)
     try:
-        payload = json.loads(text)
+        payload = json.loads(normalized_text)
     except json.JSONDecodeError:
         return {
             "passed": False,
@@ -360,6 +375,19 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
         "suggested_action": str(payload.get("suggested_action") or "annotator_rerun"),
         "raw_response": payload,
     }
+
+
+def _strip_markdown_json_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
+        return stripped
+    opening = lines[0].strip().lower()
+    if opening not in {"```", "```json"}:
+        return stripped
+    return "\n".join(lines[1:-1]).strip()
 
 
 def _feedback_from_qc_decision(task: Task, attempt_id: str, decision: dict[str, Any]) -> FeedbackRecord:

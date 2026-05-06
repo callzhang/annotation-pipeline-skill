@@ -54,7 +54,27 @@ def test_subagent_runtime_runs_annotation_and_qc_before_accepting(tmp_path):
     assert [artifact.kind for artifact in artifacts] == ["annotation_result", "qc_result"]
     assert artifacts[0].metadata["continuity_handle"] == "thread-1"
     assert store.list_feedback("task-1") == []
+    assert "annotation_guidance" in annotation_client.requests[0].instructions
+    assert "raw JSON" in qc_client.requests[0].instructions
     assert '"annotation_result"' in qc_client.requests[0].prompt
+
+
+def test_subagent_runtime_accepts_markdown_fenced_qc_json(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: StubLLMClient(final_text='```json\n{"passed": true, "summary": "acceptable"}\n```'),
+    )
+
+    result = runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("task-1")
+    assert result.accepted == 1
+    assert loaded.status is TaskStatus.ACCEPTED
+    assert store.list_feedback("task-1") == []
 
 
 def test_subagent_runtime_records_qc_feedback_and_returns_task_to_pending(tmp_path):

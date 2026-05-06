@@ -18,7 +18,9 @@ Initial local-first release for an agent-operated annotation pipeline skill.
 - Clean agent handoff verification through `scripts/verify_agent_handoff.sh`.
 - Real provider smoke scripts for Codex and DeepSeek.
 - Memory-ner truth evaluation through `scripts/verify_memory_ner_truth_eval.sh`.
+- Memory-ner accepted-state E2E through `scripts/verify_memory_ner_accepted_e2e.sh`.
 - Active learning/RL workflow design document for the next implementation phase.
+- Runtime QC parsing for model responses wrapped in JSON markdown fences.
 
 ### Known Limits
 

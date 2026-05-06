@@ -114,3 +114,15 @@ def test_memory_ner_truth_eval_script_is_packaged():
     assert "memory-ner-truth-eval" in text
     assert "MEMORY_NER_EVAL_MIN_F1" in text
     assert "accepted/merged truth rows" in text
+
+
+def test_memory_ner_accepted_e2e_script_is_packaged():
+    script = Path("scripts/verify_memory_ner_accepted_e2e.sh")
+    assert script.exists()
+    assert script.stat().st_mode & 0o111
+    text = script.read_text(encoding="utf-8")
+
+    assert "MEMORY_NER_E2E_MIN_ACCEPTED" in text
+    assert "memory-ner-accepted-e2e" in text
+    assert "annotation-pipeline runtime run" in text
+    assert "accepted_count" in text

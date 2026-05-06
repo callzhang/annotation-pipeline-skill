@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -69,6 +70,16 @@ class OpenAIResponsesClient:
             raw_response=_dump_response(response),
             diagnostics=None,
         )
+
+    async def aclose(self) -> None:
+        close = getattr(self.client, "close", None)
+        if close is None:
+            close = getattr(self.client, "aclose", None)
+        if close is None:
+            return
+        result = close()
+        if inspect.isawaitable(result):
+            await result
 
 
 def _response_id(response: Any) -> str | None:
