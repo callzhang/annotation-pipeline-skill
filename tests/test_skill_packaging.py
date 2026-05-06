@@ -83,3 +83,34 @@ def test_active_learning_rl_design_is_documented():
     assert "DatasetVersion" in text
     assert "annotation-pipeline learning" in text
     assert "RL path" in text
+
+
+def test_release_hygiene_files_are_present():
+    changelog = Path("CHANGELOG.md")
+    workflow = Path(".github/workflows/ci.yml")
+    verification = Path("docs/release/v0.1.0-verification.md")
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert changelog.exists()
+    assert "## v0.1.0 - 2026-05-05" in changelog.read_text(encoding="utf-8")
+    assert workflow.exists()
+    assert verification.exists()
+    assert "Clean Codex Handoff" in verification.read_text(encoding="utf-8")
+    workflow_text = workflow.read_text(encoding="utf-8")
+    assert "uv run pytest -q" in workflow_text
+    assert "npm test -- --run" in workflow_text
+    assert "scripts/verify_agent_handoff.sh" in workflow_text
+    assert "Current release: `v0.1.0`" in readme
+
+
+def test_memory_ner_truth_eval_script_is_packaged():
+    script = Path("scripts/verify_memory_ner_truth_eval.sh")
+    assert script.exists()
+    assert script.stat().st_mode & 0o111
+    text = script.read_text(encoding="utf-8")
+
+    assert "MEMORY_NER_ROOT" in text
+    assert "DEEPSEEK_API_KEY" in text
+    assert "memory-ner-truth-eval" in text
+    assert "MEMORY_NER_EVAL_MIN_F1" in text
+    assert "accepted/merged truth rows" in text

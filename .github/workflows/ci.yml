@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run backend tests
+        run: UV_LINK_MODE=copy uv run pytest -q
+
+      - name: Run packaging checks
+        run: |
+          bash scripts/verify_skill_installability.sh
+          bash scripts/verify_agent_handoff.sh
+
+      - name: Run local verification scripts
+        run: |
+          bash scripts/verify_export_training_data.sh
+          bash scripts/verify_runtime_progress.sh
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: web
+        run: npm test -- --run
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build

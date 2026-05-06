@@ -4,6 +4,8 @@ Local-first agent skill for running LLM-managed annotation projects that produce
 
 The skill gives an agent a durable project store, task state machine, configurable subagent providers, QC feedback, optional Human Review, Coordinator records, external task API integration, export readiness checks, and a Vite + React + TypeScript operator dashboard.
 
+Current release: `v0.1.0`. See `CHANGELOG.md` for release notes and known limits.
+
 ## Agent Quickstart
 
 Install the skill with the host agent's skill installer, or copy this repository to `$CODEX_HOME/skills/annotation-pipeline-skill`. If the runtime supports `codex skill install`, the GitHub form is:
@@ -15,7 +17,6 @@ codex skill install https://github.com/callzhang/annotation-pipeline-skill
 Initialize a project and validate the local setup:
 
 ```bash
-
 annotation-pipeline init --project-root ./annotation-project
 annotation-pipeline doctor --project-root ./annotation-project
 annotation-pipeline provider doctor --project-root ./annotation-project
@@ -138,6 +139,17 @@ bash scripts/verify_runtime_deepseek_smoke.sh
 ```
 
 The DeepSeek smoke passes when it reports `status=pending` or `status=accepted`. Pending is acceptable when QC returns feedback for another annotation cycle.
+
+Run the memory-ner truth evaluation when the local `memory-ner` annotation manager data and DeepSeek auth are available:
+
+```bash
+set -a
+source ~/.agents/auth/deepseek.env
+set +a
+bash scripts/verify_memory_ner_truth_eval.sh
+```
+
+The script selects 10 accepted or merged annotation-manager rows as gold truth, runs this skill's DeepSeek-compatible annotation client, and reports entity-level precision, recall, and F1. Use `MEMORY_NER_EVAL_MIN_F1` to raise the acceptance threshold as prompts improve.
 
 Run the training data export verification:
 
