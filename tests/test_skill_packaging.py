@@ -126,3 +126,23 @@ def test_memory_ner_accepted_e2e_script_is_packaged():
     assert "memory-ner-accepted-e2e" in text
     assert "annotation-pipeline runtime run" in text
     assert "accepted_count" in text
+
+
+def test_memory_ner_ui_acceptance_script_is_packaged():
+    script = Path("scripts/verify_memory_ner_ui_acceptance.sh")
+    assert script.exists()
+    assert script.stat().st_mode & 0o111
+    text = script.read_text(encoding="utf-8")
+
+    assert "MEMORY_NER_UI_PROJECT_ROOT" in text
+    assert "MEMORY_NER_UI_EVIDENCE_ROOT" in text
+    assert "MEMORY_NER_UI_API_PORT" in text
+    assert "MEMORY_NER_UI_WEB_PORT" in text
+    assert "MEMORY_NER_UI_PROJECT_ID" in text
+    assert "MEMORY_NER_UI_REFRESH_PROJECT" in text
+    assert "MEMORY_NER_UI_MIN_ACCEPTED" in text
+    assert "MEMORY_NER_UI_MAX_CYCLES" in text
+    assert "annotation-pipeline serve" in text
+    assert "verify_memory_ner_accepted_e2e.sh" in text
+    assert "playwright install chromium" in text
+    assert "memory-ner-ui-acceptance.mjs" in text

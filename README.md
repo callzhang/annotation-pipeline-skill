@@ -162,6 +162,14 @@ KEEP_MEMORY_NER_E2E_PROJECT=1 bash scripts/verify_memory_ner_accepted_e2e.sh
 
 The accepted-state E2E uses the same 10-row truth sample source, runs DeepSeek for both annotation and QC through the runtime scheduler, and requires at least `MEMORY_NER_E2E_MIN_ACCEPTED` tasks to finish as `accepted` after `MEMORY_NER_E2E_MAX_CYCLES` feedback cycles. The default gate is 8 accepted tasks out of 10.
 
+Run the memory-ner dashboard acceptance check when the real accepted E2E project is available:
+
+```bash
+bash scripts/verify_memory_ner_ui_acceptance.sh
+```
+
+By default the script reuses or creates a retained accepted E2E project under `/tmp/annotation-memory-ner-ui-acceptance/project`. Set `MEMORY_NER_UI_PROJECT_ROOT` to inspect a specific project directory.
+
 Run the training data export verification:
 
 ```bash
