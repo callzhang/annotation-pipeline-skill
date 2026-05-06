@@ -223,6 +223,103 @@ def test_cli_create_batched_jsonl_tasks(tmp_path):
     assert tasks[0].metadata["sources"] == ["demo_source"]
 
 
+def test_cli_create_batched_jsonl_tasks_with_qc_sample_count(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    source = tmp_path / "input.jsonl"
+    source.write_text(
+        "\n".join(json.dumps({"text": f"row {index}"}) for index in range(1, 6)) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "create-tasks",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "sample-count",
+            "--batch-size",
+            "5",
+            "--qc-sample-count",
+            "2",
+        ]
+    )
+
+    task = FileStore(tmp_path / ".annotation-pipeline").load_task("sample-count-000001")
+    assert exit_code == 0
+    assert task.metadata["qc_policy"] == {
+        "mode": "sample_count",
+        "row_count": 5,
+        "requested_sample_count": 2,
+        "sample_count": 2,
+        "required_correct_rows": 2,
+        "sample_scope": "per_task",
+        "selection": "deterministic_from_task_payload_order",
+        "feedback_loop": "annotator_may_accept_or_dispute_qc_items",
+    }
+
+
+def test_cli_create_batched_jsonl_tasks_with_qc_sample_ratio(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    source = tmp_path / "input.jsonl"
+    source.write_text(
+        "\n".join(json.dumps({"text": f"row {index}"}) for index in range(1, 6)) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "create-tasks",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "sample-ratio",
+            "--batch-size",
+            "5",
+            "--qc-sample-ratio",
+            "0.4",
+        ]
+    )
+
+    task = FileStore(tmp_path / ".annotation-pipeline").load_task("sample-ratio-000001")
+    assert exit_code == 0
+    assert task.metadata["qc_policy"]["mode"] == "sample_ratio"
+    assert task.metadata["qc_policy"]["sample_ratio"] == 0.4
+    assert task.metadata["qc_policy"]["sample_count"] == 2
+    assert task.metadata["qc_policy"]["required_correct_rows"] == 2
+
+
+def test_cli_create_tasks_rejects_conflicting_qc_sample_options(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    source = tmp_path / "input.jsonl"
+    source.write_text(json.dumps({"text": "alpha"}) + "\n", encoding="utf-8")
+
+    try:
+        main(
+            [
+                "create-tasks",
+                "--project-root",
+                str(tmp_path),
+                "--source",
+                str(source),
+                "--pipeline-id",
+                "bad",
+                "--qc-sample-count",
+                "1",
+                "--qc-sample-ratio",
+                "0.5",
+            ]
+        )
+    except ValueError as exc:
+        assert str(exc) == "--qc-sample-count and --qc-sample-ratio are mutually exclusive"
+    else:
+        raise AssertionError("expected conflicting QC sample options to fail")
+
+
 def test_cli_create_batched_jsonl_tasks_does_not_cross_group_boundaries(tmp_path):
     main(["init", "--project-root", str(tmp_path)])
     source = tmp_path / "input.jsonl"

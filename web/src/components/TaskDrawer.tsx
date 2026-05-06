@@ -78,6 +78,12 @@ export function TaskDrawer({
             <JsonBlock value={detail.task.source_ref} />
           </DetailSection>
 
+          {detail.task.metadata.qc_policy ? (
+            <DetailSection title="QC Policy">
+              <JsonBlock value={detail.task.metadata.qc_policy} />
+            </DetailSection>
+          ) : null}
+
           <DetailSection title="Annotation Content">
             {annotationArtifacts.length === 0 ? (
               <p className="empty-detail">No annotation artifacts recorded.</p>

@@ -292,8 +292,36 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 Each generated task stores the batch rows in `source_ref.payload.rows`, records
-line boundaries and row count, and includes an all-row QC policy in task
-metadata.
+line boundaries and row count, and includes a per-task QC policy in task
+metadata. By default QC uses `mode: all_rows`.
+
+Set the QC scope per task with either a fixed sample count:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline create-tasks \
+  --project-root ./demo-project \
+  --source ./input.jsonl \
+  --pipeline-id memory-ner-v2 \
+  --batch-size 100 \
+  --qc-sample-count 20
+```
+
+Or a sample ratio:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline create-tasks \
+  --project-root ./demo-project \
+  --source ./input.jsonl \
+  --pipeline-id memory-ner-v2 \
+  --batch-size 100 \
+  --qc-sample-ratio 0.2
+```
+
+The runtime passes `task.metadata.qc_policy` to the QC subagent. For sampled QC,
+the policy records `sample_scope: per_task`, `sample_count`,
+`required_correct_rows`, and deterministic payload-order selection guidance.
 
 You can import multiple JSONL sources into the same project root by using a different `--pipeline-id` for each logical annotation project. The dashboard exposes those pipeline IDs as projects, so switching projects filters the Kanban board and event log without moving or rewriting task data.
 
@@ -306,6 +334,8 @@ external_tasks:
     system_id: vendor-system
     pull_url: http://127.0.0.1:9000/tasks/pull
     auth_secret_env: EXTERNAL_TASK_API_TOKEN
+    qc_sample_count: 20
+    qc_sample_ratio: null
 ```
 
 Then run:
@@ -320,6 +350,9 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 The pull contract is a JSON `POST` to `pull_url` with `{"limit": 100}`. The response must be `{"tasks":[{"external_task_id":"...","payload":{...}}]}`. New external tasks become `pending`, receive an audit event, and enqueue a status outbox record. Re-pulling the same external id is idempotent.
+
+External sources can set the same per-task QC policy with either
+`qc_sample_count` or `qc_sample_ratio`. Leave both null for all-row QC.
 
 Validate subagent provider profiles:
 

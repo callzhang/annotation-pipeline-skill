@@ -81,12 +81,13 @@ async function main() {
       await page.getByRole("heading", { name: taskId }).waitFor();
       const drawer = page.locator(".task-drawer");
       await drawer.getByText("Raw Source").waitFor();
+      await drawer.getByText("QC Policy").waitFor();
       await drawer.getByText("Annotation Content").waitFor();
       await drawer.getByRole("heading", { name: /Attempts \(\d+\)/ }).waitFor();
       await drawer.getByRole("heading", { name: /Round Changes \(\d+\)/ }).waitFor();
       await drawer.getByRole("heading", { name: /Feedback Agreement \(\d+\)/ }).waitFor();
       const text = await drawer.innerText();
-      for (const expected of ["Raw Source", "Annotation Content", "Attempts", "Round Changes", "Feedback Agreement"]) {
+      for (const expected of ["Raw Source", "QC Policy", "Annotation Content", "Attempts", "Round Changes", "Feedback Agreement"]) {
         assert(text.includes(expected), `drawer missing ${expected}`);
       }
       assert(text.toLowerCase().includes("deepseek"), `drawer missing DeepSeek attempt evidence: ${text}`);

@@ -6,6 +6,7 @@ from hashlib import sha256
 from urllib.request import Request, urlopen
 
 from annotation_pipeline_skill.core.models import ExternalTaskRef, OutboxRecord, Task
+from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
 from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.store.file_store import FileStore
@@ -22,13 +23,17 @@ class ExternalTaskService:
         external_task_id: str,
         payload: dict,
         source_url: str | None = None,
+        qc_sample_count: int | None = None,
+        qc_sample_ratio: float | None = None,
     ) -> Task:
+        validate_qc_sample_options(qc_sample_count, qc_sample_ratio)
         idempotency_key = f"{system_id}:{external_task_id}"
         task_id = self._task_id_for_external(idempotency_key)
         existing = self._load_existing_task(task_id)
         if existing:
             return existing
 
+        row_count = self._payload_row_count(payload)
         task = Task.new(
             task_id=task_id,
             pipeline_id=pipeline_id,
@@ -39,6 +44,14 @@ class ExternalTaskService:
                 source_url=source_url,
                 idempotency_key=idempotency_key,
             ),
+            metadata={
+                "row_count": row_count,
+                "qc_policy": build_qc_policy(
+                    row_count=row_count,
+                    qc_sample_count=qc_sample_count,
+                    qc_sample_ratio=qc_sample_ratio,
+                ),
+            },
         )
         event = transition_task(
             task,
@@ -64,6 +77,9 @@ class ExternalTaskService:
             raise ValueError(f"external task source {source_id} is disabled")
         pull_url = str(config["pull_url"])
         system_id = str(config.get("system_id") or source_id)
+        qc_sample_count = config.get("qc_sample_count")
+        qc_sample_ratio = config.get("qc_sample_ratio")
+        validate_qc_sample_options(qc_sample_count, qc_sample_ratio)
         response = self._post_json(
             pull_url,
             {"limit": limit},
@@ -83,6 +99,8 @@ class ExternalTaskService:
                 external_task_id=external_task_id,
                 payload=dict(item["payload"]),
                 source_url=pull_url,
+                qc_sample_count=qc_sample_count,
+                qc_sample_ratio=qc_sample_ratio,
             )
             task_ids.append(task.task_id)
             if existed:
@@ -135,6 +153,12 @@ class ExternalTaskService:
     def _task_id_for_external(self, idempotency_key: str) -> str:
         digest = sha256(idempotency_key.encode("utf-8")).hexdigest()[:16]
         return f"external-{digest}"
+
+    def _payload_row_count(self, payload: dict) -> int:
+        rows = payload.get("rows")
+        if isinstance(rows, list):
+            return len(rows)
+        return 1
 
     def _post_json(self, url: str, payload: dict, secret_env: str | None = None) -> dict:
         headers = {"content-type": "application/json", "accept": "application/json"}

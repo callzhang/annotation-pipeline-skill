@@ -22,6 +22,7 @@ Initial local-first release for an agent-operated annotation pipeline skill.
 - Memory-ner dashboard UI acceptance verification through `scripts/verify_memory_ner_ui_acceptance.sh`.
 - Active learning/RL workflow design document for the next implementation phase.
 - Runtime QC parsing for model responses wrapped in JSON markdown fences.
+- Per-task QC sampling policy with `--qc-sample-count`, `--qc-sample-ratio`, and external source QC settings.
 
 ### Known Limits
 

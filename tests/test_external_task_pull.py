@@ -60,8 +60,36 @@ def test_external_http_pull_creates_pending_tasks_status_outbox_and_events(tmp_p
     assert result["existing"] == 0
     assert [task.status for task in tasks] == [TaskStatus.PENDING, TaskStatus.PENDING]
     assert sorted(task.external_ref.external_task_id for task in tasks if task.external_ref) == ["ext-1", "ext-2"]
+    assert [task.metadata["qc_policy"]["mode"] for task in tasks] == ["all_rows", "all_rows"]
     assert [record.kind for record in store.list_outbox()] == [OutboxKind.STATUS, OutboxKind.STATUS]
     assert store.list_events(tasks[0].task_id)[0].reason == "created from external task pull"
+
+
+def test_external_http_pull_applies_source_qc_sampling_policy(tmp_path):
+    store = FileStore(tmp_path)
+    with pull_server(
+        {
+            "tasks": [
+                {
+                    "external_task_id": "ext-1",
+                    "payload": {"rows": [{"text": "alpha"}, {"text": "beta"}, {"text": "gamma"}]},
+                }
+            ]
+        }
+    ) as (pull_url, _requests):
+        ExternalTaskService(store).pull_http_tasks(
+            pipeline_id="pipe",
+            source_id="default",
+            config={"enabled": True, "system_id": "vendor", "pull_url": pull_url, "qc_sample_ratio": 0.5},
+            limit=1,
+        )
+
+    task = store.list_tasks()[0]
+    assert task.metadata["row_count"] == 3
+    assert task.metadata["qc_policy"]["mode"] == "sample_ratio"
+    assert task.metadata["qc_policy"]["sample_ratio"] == 0.5
+    assert task.metadata["qc_policy"]["sample_count"] == 2
+    assert task.metadata["qc_policy"]["sample_scope"] == "per_task"
 
 
 def test_external_http_pull_is_idempotent_on_repeated_external_ids(tmp_path):

@@ -106,6 +106,38 @@ def test_subagent_runtime_records_qc_feedback_and_returns_task_to_pending(tmp_pa
     assert store.list_artifacts("task-1")[-1].kind == "qc_result"
 
 
+def test_subagent_runtime_qc_prompt_includes_task_qc_sampling_policy(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(
+        task_id="task-1",
+        pipeline_id="pipe",
+        source_ref={"kind": "jsonl", "payload": {"rows": [{"text": "alpha"}, {"text": "beta"}]}},
+        metadata={
+            "qc_policy": {
+                "mode": "sample_count",
+                "row_count": 2,
+                "sample_count": 1,
+                "required_correct_rows": 1,
+                "sample_scope": "per_task",
+            }
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    annotation_client = StubLLMClient(final_text='{"labels":[]}', provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    assert "qc_policy" in qc_client.requests[0].instructions
+    assert "sample_count" in qc_client.requests[0].instructions
+    assert '"sample_count": 1' in qc_client.requests[0].prompt
+
+
 def test_subagent_runtime_rerun_prompt_includes_feedback_context(tmp_path):
     store = FileStore(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})

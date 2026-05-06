@@ -329,6 +329,9 @@ def _qc_instructions(task: Task) -> str:
         "Return raw JSON with no markdown fences. Include a boolean field named passed. "
         "If passed is false, include message, category, severity, target, and suggested_action. "
         "Use task.source_ref.payload.annotation_guidance as the quality policy when it is present. "
+        "Use task.metadata.qc_policy to decide the QC scope for this task. "
+        "When qc_policy.mode is sample_count or sample_ratio, inspect exactly qc_policy.sample_count rows/items from this task, "
+        "choose them deterministically from task payload order, and include sampled row ids or row indexes in the QC response. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
 

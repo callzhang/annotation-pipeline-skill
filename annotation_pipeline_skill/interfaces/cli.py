@@ -16,8 +16,9 @@ from annotation_pipeline_skill.config.loader import (
     validate_project_config,
 )
 from annotation_pipeline_skill.config.models import ProjectConfig
-from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.models import Task
+from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
+from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
@@ -90,6 +91,8 @@ runtime:
     system_id: external
     pull_url: null
     auth_secret_env: null
+    qc_sample_count: null
+    qc_sample_ratio: null
 """,
     "callbacks.yaml": """callbacks:
   status:
@@ -187,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--modality", default="text")
     create_parser.add_argument("--task-prefix")
     create_parser.add_argument("--group-by", action="append", default=[])
+    create_parser.add_argument("--qc-sample-count", type=int)
+    create_parser.add_argument("--qc-sample-ratio", type=float)
     create_parser.set_defaults(handler=handle_create_tasks)
 
     cycle_parser = subparsers.add_parser("run-cycle")
@@ -368,6 +373,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
 def handle_create_tasks(args: argparse.Namespace) -> int:
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be > 0")
+    validate_qc_sample_options(args.qc_sample_count, args.qc_sample_ratio)
     store = FileStore(args.project_root / ".annotation-pipeline")
     rows = read_jsonl(args.source)
     task_prefix = args.task_prefix or args.pipeline_id
@@ -388,7 +394,11 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
             },
             modality=batch_modality(batch, args.modality),
             annotation_requirements={"annotation_types": annotation_types},
-            metadata=batch_metadata(batch),
+            metadata=batch_metadata(
+                batch,
+                qc_sample_count=args.qc_sample_count,
+                qc_sample_ratio=args.qc_sample_ratio,
+            ),
         )
         event = transition_task(
             task,
@@ -452,15 +462,20 @@ def batch_modality(batch: list[dict], default: str) -> str:
     return default
 
 
-def batch_metadata(batch: list[dict]) -> dict:
+def batch_metadata(
+    batch: list[dict],
+    *,
+    qc_sample_count: int | None = None,
+    qc_sample_ratio: float | None = None,
+) -> dict:
     sources = sorted({str(row.get("source") or row.get("source_dataset") or "") for row in batch if row.get("source") or row.get("source_dataset")})
     metadata = {
         "row_count": len(batch),
-        "qc_policy": {
-            "mode": "all_rows",
-            "required_correct_rows": len(batch),
-            "feedback_loop": "annotator_may_accept_or_dispute_qc_items",
-        },
+        "qc_policy": build_qc_policy(
+            row_count=len(batch),
+            qc_sample_count=qc_sample_count,
+            qc_sample_ratio=qc_sample_ratio,
+        ),
     }
     if sources:
         metadata["sources"] = sources

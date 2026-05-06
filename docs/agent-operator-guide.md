@@ -123,6 +123,8 @@ The local runtime now runs a real multistage loop. A pending task first creates 
 
 QC failure is business feedback, not a scheduler failure. Provider exceptions still count as runtime failures in cycle stats.
 
+QC scope is configured per task in `task.metadata.qc_policy`. Tasks created from JSONL default to all-row QC. Use `annotation-pipeline create-tasks --qc-sample-count N` for a fixed number of rows/items per task, or `--qc-sample-ratio R` for a percentage-derived sample count. The runtime passes that policy to the QC subagent so sampled QC is explicit in the audit trail.
+
 ## Verification
 
 Before publishing the skill or asking another agent to install it, run the clean handoff verification:
@@ -263,6 +265,8 @@ external_tasks:
     system_id: vendor-system
     pull_url: http://127.0.0.1:9000/tasks/pull
     auth_secret_env: EXTERNAL_TASK_API_TOKEN
+    qc_sample_count: null
+    qc_sample_ratio: 0.2
 ```
 
 Pull into a project:
@@ -277,6 +281,10 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 ```
 
 The external service must return `{"tasks":[{"external_task_id":"...","payload":{...}}]}`. New tasks become `pending`, get a prepare-stage audit event, and create status outbox records for callback delivery. Re-pulling the same external id returns the existing internal task and does not create duplicate outbox records.
+
+Use either `qc_sample_count` or `qc_sample_ratio` on the source config to attach a
+per-task QC sampling policy to pulled tasks. Leave both null to inspect all rows
+or the single external task payload item.
 
 ## Training Data Export
 
