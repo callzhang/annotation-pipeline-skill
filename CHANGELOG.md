@@ -23,6 +23,7 @@ Initial local-first release for an agent-operated annotation pipeline skill.
 - Active learning/RL workflow design document for the next implementation phase.
 - Runtime QC parsing for model responses wrapped in JSON markdown fences.
 - Per-task QC sampling policy with `--qc-sample-count`, `--qc-sample-ratio`, and external source QC settings.
+- Dashboard editing for task QC policies with audit events.
 
 ### Known Limits
 

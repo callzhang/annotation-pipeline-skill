@@ -5,6 +5,7 @@ import {
   postCoordinatorLongTailIssue,
   postCoordinatorRuleUpdate,
   postHumanReviewDecision,
+  saveTaskQcPolicy,
 } from "./api";
 
 describe("dashboard API client", () => {
@@ -44,6 +45,39 @@ describe("dashboard API client", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/tasks/task-1");
     expect(detail.task.status).toBe("annotating");
+  });
+
+  it("updates task QC policy", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          task: {
+            task_id: "task-1",
+            metadata: {
+              qc_policy: { mode: "sample_ratio", sample_ratio: 0.2, sample_count: 2 },
+            },
+          },
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const detail = await saveTaskQcPolicy("task-1", {
+      mode: "sample_ratio",
+      sample_ratio: 0.2,
+      actor: "algorithm-engineer",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/tasks/task-1/qc-policy", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "sample_ratio",
+        sample_ratio: 0.2,
+        actor: "algorithm-engineer",
+      }),
+    });
+    expect(detail.task.metadata.qc_policy).toEqual({ mode: "sample_ratio", sample_ratio: 0.2, sample_count: 2 });
   });
 
   it("fetches project-scoped outbox summaries", async () => {

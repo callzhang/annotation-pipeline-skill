@@ -428,6 +428,54 @@ button {
   word-break: break-word;
 }
 
+.qc-policy-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.qc-policy-modes {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.qc-policy-facts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.qc-policy-facts div {
+  background: #eef2f4;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.qc-policy-facts dt,
+.qc-policy-field span {
+  color: #52616b;
+  font-size: 12px;
+}
+
+.qc-policy-facts dd {
+  font-size: 13px;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.qc-policy-field {
+  display: grid;
+  gap: 5px;
+}
+
+.qc-policy-field input {
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  color: #172026;
+  font: inherit;
+  padding: 8px 9px;
+}
+
 .timeline-item {
   border: 1px solid #d7e0e5;
   border-radius: 6px;

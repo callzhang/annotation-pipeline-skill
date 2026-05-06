@@ -322,6 +322,9 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 The runtime passes `task.metadata.qc_policy` to the QC subagent. For sampled QC,
 the policy records `sample_scope: per_task`, `sample_count`,
 `required_correct_rows`, and deterministic payload-order selection guidance.
+The dashboard task drawer also lets an operator edit the current task's QC
+policy between all-row, fixed-count, and ratio modes; saving the edit writes an
+audit event.
 
 You can import multiple JSONL sources into the same project root by using a different `--pipeline-id` for each logical annotation project. The dashboard exposes those pipeline IDs as projects, so switching projects filters the Kanban board and event log without moving or rewriting task data.
 

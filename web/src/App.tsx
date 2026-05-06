@@ -5,6 +5,7 @@ import {
   fetchTaskDetail,
   postFeedbackDiscussion,
   postHumanReviewDecision,
+  saveTaskQcPolicy,
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { CoordinatorPanel } from "./components/CoordinatorPanel";
@@ -118,6 +119,21 @@ export default function App() {
     }
   }
 
+  async function submitTaskQcPolicy(payload: Record<string, unknown>) {
+    if (!selectedTask) return;
+    setDetailSaving(true);
+    setDetailError(null);
+    try {
+      const detail = await saveTaskQcPolicy(selectedTask.task_id, payload);
+      setSelectedDetail(detail);
+      setSnapshot(await fetchKanbanSnapshot(selectedProjectId));
+    } catch (reason: unknown) {
+      setDetailError(reason instanceof Error ? reason.message : "Unable to save QC policy");
+    } finally {
+      setDetailSaving(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -197,6 +213,7 @@ export default function App() {
         error={detailError}
         onSubmitFeedbackDiscussion={submitFeedbackDiscussion}
         onSubmitHumanReviewDecision={submitHumanReviewDecision}
+        onSaveQcPolicy={submitTaskQcPolicy}
         onClose={() => setSelectedTask(null)}
       />
     </main>

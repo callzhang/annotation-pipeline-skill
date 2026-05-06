@@ -365,6 +365,56 @@ def test_dashboard_api_posts_human_review_decision(tmp_path):
     assert store.list_events("task-1")[-1].reason == "human review requested annotator changes"
 
 
+def test_dashboard_api_updates_task_qc_policy_and_appends_event(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(
+        task_id="task-1",
+        pipeline_id="pipe",
+        source_ref={"kind": "jsonl", "payload": {"rows": [{"text": "a"}, {"text": "b"}, {"text": "c"}]}},
+        metadata={
+            "row_count": 3,
+            "qc_policy": {
+                "mode": "all_rows",
+                "required_correct_rows": 3,
+                "feedback_loop": "annotator_may_accept_or_dispute_qc_items",
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_put(
+        "/api/tasks/task-1/qc-policy",
+        json.dumps({"mode": "sample_count", "sample_count": 2, "actor": "algorithm-engineer"}).encode("utf-8"),
+    )
+
+    payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert payload["task"]["metadata"]["qc_policy"]["mode"] == "sample_count"
+    assert payload["task"]["metadata"]["qc_policy"]["sample_count"] == 2
+    assert store.load_task("task-1").metadata["qc_policy"]["required_correct_rows"] == 2
+    assert store.list_events("task-1")[-1].reason == "qc policy updated"
+    assert store.list_events("task-1")[-1].metadata["previous_qc_policy"]["mode"] == "all_rows"
+
+
+def test_dashboard_api_rejects_invalid_task_qc_policy(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_put(
+        "/api/tasks/task-1/qc-policy",
+        json.dumps({"mode": "sample_ratio", "sample_ratio": 1.5}).encode("utf-8"),
+    )
+
+    payload = json.loads(body.decode("utf-8"))
+    assert status == 400
+    assert payload["error"] == "invalid_qc_policy"
+    assert store.list_events("task-1") == []
+
+
 def test_dashboard_api_returns_config_files_and_can_update_allowed_yaml(tmp_path):
     store = FileStore(tmp_path)
     (tmp_path / "annotation_rules.yaml").write_text("rules:\n  - id: default\n", encoding="utf-8")

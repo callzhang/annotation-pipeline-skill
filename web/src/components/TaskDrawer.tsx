@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cardSubtitle } from "../kanban";
 import { previewArtifacts, previewBoxes, previewImageSource, previewTitle } from "../preview";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
@@ -12,6 +12,7 @@ interface TaskDrawerProps {
   error: string | null;
   onSubmitFeedbackDiscussion: (payload: Record<string, unknown>) => Promise<void>;
   onSubmitHumanReviewDecision: (payload: Record<string, unknown>) => Promise<void>;
+  onSaveQcPolicy: (payload: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }
 
@@ -23,6 +24,7 @@ export function TaskDrawer({
   error,
   onSubmitFeedbackDiscussion,
   onSubmitHumanReviewDecision,
+  onSaveQcPolicy,
   onClose,
 }: TaskDrawerProps) {
   if (!task) return null;
@@ -80,7 +82,7 @@ export function TaskDrawer({
 
           {detail.task.metadata.qc_policy ? (
             <DetailSection title="QC Policy">
-              <JsonBlock value={detail.task.metadata.qc_policy} />
+              <QcPolicyEditor detail={detail} saving={saving} onSave={onSaveQcPolicy} />
             </DetailSection>
           ) : null}
 
@@ -161,6 +163,98 @@ export function TaskDrawer({
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function QcPolicyEditor({
+  detail,
+  saving,
+  onSave,
+}: {
+  detail: TaskDetail;
+  saving: boolean;
+  onSave: (payload: Record<string, unknown>) => Promise<void>;
+}) {
+  const policy = detail.task.metadata.qc_policy as Record<string, unknown>;
+  const [mode, setMode] = useState(String(policy.mode ?? "all_rows"));
+  const [sampleCount, setSampleCount] = useState(String(policy.sample_count ?? policy.requested_sample_count ?? 1));
+  const [sampleRatio, setSampleRatio] = useState(String(policy.sample_ratio ?? 0.2));
+
+  useEffect(() => {
+    setMode(String(policy.mode ?? "all_rows"));
+    setSampleCount(String(policy.sample_count ?? policy.requested_sample_count ?? 1));
+    setSampleRatio(String(policy.sample_ratio ?? 0.2));
+  }, [detail.task.task_id, policy.mode, policy.sample_count, policy.requested_sample_count, policy.sample_ratio]);
+
+  const rowCount = Number(policy.row_count ?? detail.task.metadata.row_count ?? 1);
+  const numericSampleCount = Number(sampleCount);
+  const numericSampleRatio = Number(sampleRatio);
+  const invalidSampleCount = mode === "sample_count" && (!Number.isInteger(numericSampleCount) || numericSampleCount <= 0);
+  const invalidSampleRatio = mode === "sample_ratio" && (Number.isNaN(numericSampleRatio) || numericSampleRatio <= 0 || numericSampleRatio > 1);
+
+  async function save() {
+    const payload: Record<string, unknown> = {
+      mode,
+      actor: "algorithm-engineer",
+    };
+    if (mode === "sample_count") payload.sample_count = numericSampleCount;
+    if (mode === "sample_ratio") payload.sample_ratio = numericSampleRatio;
+    await onSave(payload);
+  }
+
+  return (
+    <div className="qc-policy-editor">
+      <div className="segmented-row qc-policy-modes" aria-label="QC policy mode">
+        <button className={mode === "all_rows" ? "segment selected" : "segment"} type="button" onClick={() => setMode("all_rows")}>
+          All Rows
+        </button>
+        <button className={mode === "sample_count" ? "segment selected" : "segment"} type="button" onClick={() => setMode("sample_count")}>
+          Count
+        </button>
+        <button className={mode === "sample_ratio" ? "segment selected" : "segment"} type="button" onClick={() => setMode("sample_ratio")}>
+          Ratio
+        </button>
+      </div>
+
+      <dl className="qc-policy-facts">
+        <div>
+          <dt>Scope</dt>
+          <dd>{String(policy.sample_scope ?? "per_task")}</dd>
+        </div>
+        <div>
+          <dt>Rows</dt>
+          <dd>{Number.isFinite(rowCount) ? rowCount : 1}</dd>
+        </div>
+        <div>
+          <dt>Required Correct</dt>
+          <dd>{String(policy.required_correct_rows ?? "unset")}</dd>
+        </div>
+      </dl>
+
+      {mode === "sample_count" ? (
+        <label className="qc-policy-field">
+          <span>Sample count per task</span>
+          <input min="1" step="1" type="number" value={sampleCount} onChange={(event) => setSampleCount(event.target.value)} />
+        </label>
+      ) : null}
+
+      {mode === "sample_ratio" ? (
+        <label className="qc-policy-field">
+          <span>Sample ratio per task</span>
+          <input max="1" min="0.01" step="0.01" type="number" value={sampleRatio} onChange={(event) => setSampleRatio(event.target.value)} />
+        </label>
+      ) : null}
+
+      <JsonBlock value={policy} />
+      <button
+        className="primary-button"
+        type="button"
+        disabled={saving || invalidSampleCount || invalidSampleRatio}
+        onClick={save}
+      >
+        {saving ? "Saving" : "Save QC Policy"}
+      </button>
+    </div>
   );
 }
 

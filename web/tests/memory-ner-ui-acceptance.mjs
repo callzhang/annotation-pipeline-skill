@@ -81,7 +81,7 @@ async function main() {
       await page.getByRole("heading", { name: taskId }).waitFor();
       const drawer = page.locator(".task-drawer");
       await drawer.getByText("Raw Source").waitFor();
-      await drawer.getByText("QC Policy").waitFor();
+      await drawer.getByRole("heading", { name: "QC Policy" }).waitFor();
       await drawer.getByText("Annotation Content").waitFor();
       await drawer.getByRole("heading", { name: /Attempts \(\d+\)/ }).waitFor();
       await drawer.getByRole("heading", { name: /Round Changes \(\d+\)/ }).waitFor();
@@ -92,6 +92,16 @@ async function main() {
       }
       assert(text.toLowerCase().includes("deepseek"), `drawer missing DeepSeek attempt evidence: ${text}`);
       assert(text.includes("accepted") || text.includes("accept"), `drawer missing accepted transition evidence: ${text}`);
+
+      await drawer.getByRole("button", { name: "Ratio" }).click();
+      await drawer.getByLabel("Sample ratio per task").fill("0.2");
+      await drawer.getByRole("button", { name: "Save QC Policy" }).click();
+      await page.waitForFunction(() => {
+        const sections = Array.from(document.querySelectorAll(".task-drawer .detail-section"));
+        const qcSection = sections.find((section) => section.querySelector("h3")?.textContent === "QC Policy");
+        const content = qcSection?.textContent ?? "";
+        return content.includes('"mode": "sample_ratio"') && content.includes('"sample_ratio": 0.2');
+      });
     });
 
     await check("runtime panel shows no active or stale work and accepted queue count", async () => {

@@ -80,6 +80,22 @@ export async function postHumanReviewDecision(
   return fetchTaskDetail(taskId);
 }
 
+export async function saveTaskQcPolicy(
+  taskId: string,
+  payload: Record<string, unknown>,
+): Promise<TaskDetail> {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/qc-policy`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `QC policy API returned ${response.status}`);
+  }
+  return response.json() as Promise<TaskDetail>;
+}
+
 export async function fetchConfigSnapshot(): Promise<ConfigSnapshot> {
   const response = await fetch("/api/config");
   if (!response.ok) {

@@ -123,7 +123,7 @@ The local runtime now runs a real multistage loop. A pending task first creates 
 
 QC failure is business feedback, not a scheduler failure. Provider exceptions still count as runtime failures in cycle stats.
 
-QC scope is configured per task in `task.metadata.qc_policy`. Tasks created from JSONL default to all-row QC. Use `annotation-pipeline create-tasks --qc-sample-count N` for a fixed number of rows/items per task, or `--qc-sample-ratio R` for a percentage-derived sample count. The runtime passes that policy to the QC subagent so sampled QC is explicit in the audit trail.
+QC scope is configured per task in `task.metadata.qc_policy`. Tasks created from JSONL default to all-row QC. Use `annotation-pipeline create-tasks --qc-sample-count N` for a fixed number of rows/items per task, or `--qc-sample-ratio R` for a percentage-derived sample count. The runtime passes that policy to the QC subagent so sampled QC is explicit in the audit trail. Operators can also edit the current task's QC policy in the dashboard task drawer; each save appends a `qc policy updated` audit event.
 
 ## Verification
 

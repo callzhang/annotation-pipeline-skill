@@ -9,7 +9,8 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
-from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry
+from annotation_pipeline_skill.core.models import AuditEvent, FeedbackDiscussionEntry, Task, utc_now
+from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
 from annotation_pipeline_skill.core.runtime import RuntimeConfig, RuntimeSnapshot
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
@@ -91,6 +92,9 @@ class DashboardApi:
 
     def handle_put(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         route = path.split("?", 1)[0]
+        if route.startswith("/api/tasks/") and route.endswith("/qc-policy"):
+            task_id = route.removeprefix("/api/tasks/").removesuffix("/qc-policy").strip("/")
+            return self._update_task_qc_policy_response(task_id, body)
         if route.startswith("/api/config/"):
             config_id = route.removeprefix("/api/config/")
             return self._update_config_response(config_id, body)
@@ -251,6 +255,69 @@ class DashboardApi:
         except (InvalidTransition, ValueError) as exc:
             return self._json_response(400, {"error": "invalid_human_review_decision", "detail": str(exc)})
         return self._json_response(200, result.to_dict())
+
+    def _update_task_qc_policy_response(self, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            task = self.store.load_task(task_id)
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "task_not_found"})
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+
+        try:
+            policy = self._build_task_qc_policy(task, payload)
+        except ValueError as exc:
+            return self._json_response(400, {"error": "invalid_qc_policy", "detail": str(exc)})
+
+        previous_policy = dict(task.metadata.get("qc_policy") or {})
+        task.metadata["row_count"] = self._task_row_count(task)
+        task.metadata["qc_policy"] = policy
+        task.updated_at = utc_now()
+        self.store.save_task(task)
+        self.store.append_event(
+            AuditEvent.new(
+                task_id=task.task_id,
+                previous_status=task.status,
+                next_status=task.status,
+                actor=str(payload.get("actor") or "algorithm-engineer"),
+                reason="qc policy updated",
+                stage="qc",
+                metadata={"previous_qc_policy": previous_policy, "qc_policy": policy},
+            )
+        )
+        return self._task_detail_response(task_id)
+
+    def _build_task_qc_policy(self, task: Task, payload: dict) -> dict:
+        row_count = self._task_row_count(task)
+        mode = str(payload.get("mode") or "")
+        if mode == "all_rows":
+            return build_qc_policy(row_count=row_count)
+        if mode == "sample_count":
+            sample_count = payload.get("sample_count")
+            if isinstance(sample_count, bool) or not isinstance(sample_count, int):
+                raise ValueError("sample_count must be an integer")
+            validate_qc_sample_options(sample_count, None)
+            return build_qc_policy(row_count=row_count, qc_sample_count=sample_count)
+        if mode == "sample_ratio":
+            sample_ratio = payload.get("sample_ratio")
+            if isinstance(sample_ratio, bool) or not isinstance(sample_ratio, (int, float)):
+                raise ValueError("sample_ratio must be a number")
+            validate_qc_sample_options(None, float(sample_ratio))
+            return build_qc_policy(row_count=row_count, qc_sample_ratio=float(sample_ratio))
+        raise ValueError("mode must be all_rows, sample_count, or sample_ratio")
+
+    def _task_row_count(self, task: Task) -> int:
+        metadata_row_count = task.metadata.get("row_count")
+        if isinstance(metadata_row_count, int) and metadata_row_count >= 0:
+            return metadata_row_count
+        payload = task.source_ref.get("payload")
+        if isinstance(payload, dict) and isinstance(payload.get("rows"), list):
+            return len(payload["rows"])
+        return 1
 
     def _post_coordinator_rule_update_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
