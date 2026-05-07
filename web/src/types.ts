@@ -1,6 +1,8 @@
 export interface TaskCard {
   task_id: string;
   status: string;
+  operator_stage: string;
+  pipeline_chain: string;
   modality: string;
   annotation_types: string[];
   selected_annotator_id: string | null;
@@ -20,6 +22,7 @@ export interface KanbanColumn {
 
 export interface KanbanSnapshot {
   project_id: string | null;
+  stage_view?: string;
   columns: KanbanColumn[];
 }
 

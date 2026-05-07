@@ -23,6 +23,7 @@ def build_runtime_snapshot(
     generated_at = now or datetime.now(timezone.utc)
     tasks = store.list_tasks()
     active_runs = store.list_active_runs()
+    leases = store.list_runtime_leases()
     heartbeat_at = store.load_runtime_heartbeat()
     cycle_stats = store.list_runtime_cycle_stats()
 
@@ -43,8 +44,15 @@ def build_runtime_snapshot(
     )
     if stale_tasks:
         errors.append("stale_active_runs")
+    stale_leases = sorted(
+        lease.lease_id
+        for lease in leases
+        if lease.expires_at <= generated_at
+    )
+    if stale_leases:
+        errors.append("stale_runtime_leases")
 
-    active_count = len(active_runs)
+    active_count = max(len(leases), len(active_runs))
     queue_counts = _build_queue_counts(tasks)
     capacity = CapacitySnapshot(
         max_concurrent_tasks=config.max_concurrent_tasks,
@@ -69,8 +77,10 @@ def build_runtime_snapshot(
         ),
         queue_counts=queue_counts,
         active_runs=active_runs,
+        leases=leases,
         capacity=capacity,
         stale_tasks=stale_tasks,
+        stale_leases=stale_leases,
         due_retries=due_retries,
         project_summaries=build_project_summaries(store)["projects"],
         cycle_stats=cycle_stats,

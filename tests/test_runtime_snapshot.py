@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from annotation_pipeline_skill.core.models import Task
 from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeConfig
+from annotation_pipeline_skill.core.runtime import RuntimeLease
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.store.file_store import FileStore
@@ -109,3 +110,52 @@ def test_runtime_snapshot_detects_stale_active_runs(tmp_path):
     assert snapshot.runtime_status.healthy is False
     assert snapshot.stale_tasks == ["task-stale"]
     assert "stale_active_runs" in snapshot.runtime_status.errors
+
+
+def test_runtime_snapshot_counts_leases_as_capacity_truth(tmp_path):
+    store = FileStore(tmp_path)
+    now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    store.save_runtime_heartbeat(now)
+    task = Task.new(task_id="task-1", pipeline_id="alpha", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    store.save_runtime_lease(
+        RuntimeLease(
+            lease_id="lease-1",
+            task_id="task-1",
+            stage="annotation",
+            acquired_at=now,
+            heartbeat_at=now,
+            expires_at=now + timedelta(seconds=600),
+            owner="test",
+        )
+    )
+
+    snapshot = build_runtime_snapshot(store, RuntimeConfig(max_concurrent_tasks=4), now=now)
+
+    assert snapshot.capacity.active_count == 1
+    assert snapshot.capacity.available_slots == 3
+    assert snapshot.leases[0].lease_id == "lease-1"
+
+
+def test_runtime_snapshot_detects_stale_leases(tmp_path):
+    store = FileStore(tmp_path)
+    now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    store.save_runtime_heartbeat(now)
+    store.save_runtime_lease(
+        RuntimeLease(
+            lease_id="lease-stale",
+            task_id="task-1",
+            stage="annotation",
+            acquired_at=now - timedelta(seconds=700),
+            heartbeat_at=now - timedelta(seconds=700),
+            expires_at=now - timedelta(seconds=100),
+            owner="test",
+        )
+    )
+
+    snapshot = build_runtime_snapshot(store, RuntimeConfig(), now=now)
+
+    assert snapshot.runtime_status.healthy is False
+    assert snapshot.stale_leases == ["lease-stale"]
+    assert "stale_runtime_leases" in snapshot.runtime_status.errors

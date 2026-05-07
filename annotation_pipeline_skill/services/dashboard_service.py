@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from annotation_pipeline_skill.core.models import Task
@@ -15,19 +16,57 @@ KANBAN_COLUMNS: list[tuple[str, str, TaskStatus]] = [
     ("rejected", "Rejected", TaskStatus.REJECTED),
 ]
 
+OPERATOR_COLUMNS: list[tuple[str, str]] = [
+    ("pending", "Pending"),
+    ("annotation", "Annotation"),
+    ("qc", "QC"),
+    ("merge", "Merge"),
+    ("failed", "Failed"),
+    ("accepted", "Accepted"),
+]
 
-def build_kanban_snapshot(store: FileStore, project_id: str | None = None) -> dict:
+
+def operator_stage(task: Task) -> str:
+    if task.status is TaskStatus.PENDING:
+        return "pending"
+    if task.status in {TaskStatus.ANNOTATING, TaskStatus.VALIDATING}:
+        return "annotation"
+    if task.status in {TaskStatus.QC, TaskStatus.HUMAN_REVIEW}:
+        return "qc"
+    if task.status is TaskStatus.ACCEPTED:
+        return "accepted"
+    if task.status in {TaskStatus.REJECTED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}:
+        return "failed"
+    return "pending"
+
+
+def build_kanban_snapshot(store: FileStore, project_id: str | None = None, stage_view: str = "internal") -> dict:
     tasks = sorted(store.list_tasks(), key=lambda task: task.created_at)
     if project_id is not None:
         tasks = [task for task in tasks if task.pipeline_id == project_id]
+    index = _dashboard_index(store)
+    if stage_view == "operator":
+        return {
+            "project_id": project_id,
+            "stage_view": "operator",
+            "columns": [
+                {
+                    "id": column_id,
+                    "title": title,
+                    "cards": [_task_card(index, task) for task in tasks if operator_stage(task) == column_id],
+                }
+                for column_id, title in OPERATOR_COLUMNS
+            ],
+        }
     return {
         "project_id": project_id,
+        "stage_view": "internal",
         "columns": [
-            {
-                "id": column_id,
-                "title": title,
-                "cards": [_task_card(store, task) for task in tasks if task.status is status],
-            }
+                {
+                    "id": column_id,
+                    "title": title,
+                    "cards": [_task_card(index, task) for task in tasks if task.status is status],
+                }
             for column_id, title, status in KANBAN_COLUMNS
         ]
     }
@@ -56,22 +95,57 @@ def build_project_summaries(store: FileStore) -> dict:
     }
 
 
-def _task_card(store: FileStore, task: Task) -> dict:
-    attempts = store.list_attempts(task.task_id)
+def _dashboard_index(store: FileStore) -> dict:
+    attempts_by_task: dict[str, list[dict]] = {}
+    for path in sorted(store.attempts_dir.glob("*.jsonl")):
+        task_id = path.stem
+        attempts_by_task[task_id] = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    feedback_counts = {
+        path.stem: sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+        for path in sorted(store.feedback_dir.glob("*.jsonl"))
+    }
+    pending_outbox_task_ids = {
+        record.task_id
+        for record in store.list_outbox()
+        if record.status.value == "pending"
+    }
+    return {
+        "attempts_by_task": attempts_by_task,
+        "feedback_counts": feedback_counts,
+        "pending_outbox_task_ids": pending_outbox_task_ids,
+    }
+
+
+def _task_card(index: dict, task: Task) -> dict:
+    attempts = index["attempts_by_task"].get(task.task_id, [])
     latest_attempt = attempts[-1] if attempts else None
-    feedback_count = len(store.list_feedback(task.task_id))
-    outbox_records = [record for record in store.list_outbox() if record.task_id == task.task_id]
+    feedback_count = index["feedback_counts"].get(task.task_id, 0)
     annotation_types = task.annotation_requirements.get("annotation_types", [])
     return {
         "task_id": task.task_id,
         "status": task.status.value,
+        "operator_stage": operator_stage(task),
+        "pipeline_chain": _pipeline_chain(task, attempts),
         "modality": task.modality,
         "annotation_types": annotation_types,
         "selected_annotator_id": task.selected_annotator_id,
         "status_age_seconds": int((datetime.now(timezone.utc) - task.updated_at).total_seconds()),
-        "latest_attempt_status": latest_attempt.status.value if latest_attempt else None,
+        "latest_attempt_status": latest_attempt.get("status") if latest_attempt else None,
         "feedback_count": feedback_count,
         "retry_pending": task.next_retry_at is not None,
         "blocked": task.status is TaskStatus.BLOCKED,
-        "external_sync_pending": any(record.status.value == "pending" for record in outbox_records),
+        "external_sync_pending": task.task_id in index["pending_outbox_task_ids"],
     }
+
+
+def _pipeline_chain(task: Task, attempts) -> str:
+    providers = []
+    for stage in ("annotation", "qc", "merge"):
+        stage_attempts = [attempt for attempt in attempts if attempt.get("stage") == stage and attempt.get("provider_id")]
+        if stage_attempts:
+            providers.append(str(stage_attempts[-1]["provider_id"]))
+    return "->".join(providers) if providers else str(task.selected_annotator_id or "")

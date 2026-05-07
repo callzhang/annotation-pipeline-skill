@@ -4,6 +4,8 @@ from annotation_pipeline_skill.core.models import Task
 from annotation_pipeline_skill.core.states import FeedbackSource, TaskStatus
 from annotation_pipeline_skill.llm.client import LLMGenerateResult
 from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime, SubagentRuntimeResult
+from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
+from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -104,6 +106,40 @@ def test_subagent_runtime_records_qc_feedback_and_returns_task_to_pending(tmp_pa
     assert feedback[0].message == "missing entity"
     assert feedback[0].suggested_action == "annotator_rerun"
     assert store.list_artifacts("task-1")[-1].kind == "qc_result"
+
+
+def test_local_scheduler_records_qc_parse_error_without_annotator_feedback_and_retries_qc(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    annotation_client = StubLLMClient(final_text='{"labels":[]}', provider="annotator")
+    qc_clients = [
+        StubLLMClient(final_text="not json", provider="qc"),
+        StubLLMClient(final_text='{"passed": true, "summary": "acceptable"}', provider="qc"),
+    ]
+
+    def client_factory(target):
+        return qc_clients.pop(0) if target == "qc" else annotation_client
+
+    scheduler = LocalRuntimeScheduler(
+        store=store,
+        client_factory=client_factory,
+        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
+    )
+
+    first = scheduler.run_once(stage_target="annotation")
+    second = scheduler.run_once(stage_target="annotation")
+
+    attempts = store.list_attempts("task-1")
+    assert first.cycle_stats[-1].failed == 1
+    assert second.cycle_stats[-1].accepted == 1
+    assert store.load_task("task-1").status is TaskStatus.ACCEPTED
+    assert store.list_feedback("task-1") == []
+    assert [attempt.stage for attempt in attempts] == ["annotation", "qc", "qc"]
+    assert attempts[1].status.value == "failed"
+    assert attempts[1].error["kind"] == "parse_error"
+    assert len(annotation_client.requests) == 1
 
 
 def test_subagent_runtime_qc_prompt_includes_task_qc_sampling_policy(tmp_path):

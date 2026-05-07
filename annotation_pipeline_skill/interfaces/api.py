@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -54,12 +55,13 @@ class DashboardApi:
         route = parsed_path.path
         query = parse_qs(parsed_path.query)
         project_id = query.get("project", [None])[0]
+        stage_view = query.get("stage_view", ["internal"])[0]
         if route == "/api/health":
             return self._json_response(200, {"ok": True})
         if route == "/api/projects":
             return self._json_response(200, build_project_summaries(self.store))
         if route == "/api/kanban":
-            return self._json_response(200, build_kanban_snapshot(self.store, project_id=project_id))
+            return self._json_response(200, build_kanban_snapshot(self.store, project_id=project_id, stage_view=stage_view))
         if route == "/api/config":
             return self._json_response(200, {"files": self._config_files()})
         if route == "/api/providers":
@@ -119,7 +121,17 @@ class DashboardApi:
         return self._json_response(404, {"error": "not_found"})
 
     def _runtime_snapshot(self) -> RuntimeSnapshot:
-        return self.store.load_runtime_snapshot() or build_runtime_snapshot(self.store, self.runtime_config)
+        snapshot = self.store.load_runtime_snapshot()
+        if snapshot is not None:
+            return snapshot
+        rebuilt = build_runtime_snapshot(self.store, self.runtime_config)
+        status = replace(
+            rebuilt.runtime_status,
+            healthy=False,
+            active=False,
+            errors=sorted(set([*rebuilt.runtime_status.errors, "runtime_snapshot_missing"])),
+        )
+        return replace(rebuilt, runtime_status=status)
 
     def _runtime_run_once_response(self) -> tuple[int, dict[str, str], bytes]:
         if self.runtime_once is None:

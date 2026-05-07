@@ -17,6 +17,23 @@ def validate_runtime_snapshot(snapshot: RuntimeSnapshot) -> dict:
     if snapshot.stale_tasks:
         failures.append("stale_active_tasks")
         details["stale_active_tasks"] = {"task_ids": snapshot.stale_tasks}
+    if snapshot.stale_leases:
+        failures.append("stale_runtime_leases")
+        details["stale_runtime_leases"] = {"lease_ids": snapshot.stale_leases}
+    active_run_lease_ids = {
+        str(run.metadata.get("lease_id"))
+        for run in snapshot.active_runs
+        if run.metadata.get("lease_id")
+    }
+    lease_ids = {lease.lease_id for lease in snapshot.leases}
+    missing_active_leases = sorted(active_run_lease_ids - lease_ids)
+    orphan_leases = sorted(lease_ids - active_run_lease_ids)
+    if missing_active_leases or orphan_leases:
+        failures.append("runtime_lease_mismatch")
+        details["runtime_lease_mismatch"] = {
+            "active_runs_without_lease": missing_active_leases,
+            "leases_without_active_run": orphan_leases,
+        }
     if snapshot.capacity.active_count > snapshot.capacity.max_concurrent_tasks:
         failures.append("capacity_exceeded")
         details["capacity_exceeded"] = {

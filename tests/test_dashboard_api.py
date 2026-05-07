@@ -53,6 +53,22 @@ def test_dashboard_api_returns_projects_and_filters_kanban_by_project(tmp_path):
     assert visible_task_ids == ["alpha-1"]
 
 
+def test_dashboard_api_returns_operator_stage_kanban_view(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.VALIDATING
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    status, _headers, body = api.handle_get("/api/kanban?stage_view=operator")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    assert payload["stage_view"] == "operator"
+    assert payload["columns"][1]["id"] == "annotation"
+    assert payload["columns"][1]["cards"][0]["operator_stage"] == "annotation"
+
+
 def test_dashboard_api_returns_404_for_unknown_route(tmp_path):
     api = DashboardApi(FileStore(tmp_path))
 
@@ -85,7 +101,8 @@ def test_dashboard_api_returns_runtime_monitor_report(tmp_path):
     assert status == 200
     assert payload["ok"] is False
     assert payload["failures"] == ["runtime_unhealthy"]
-    assert payload["details"]["runtime_unhealthy"]["errors"] == ["heartbeat_missing"]
+    assert "heartbeat_missing" in payload["details"]["runtime_unhealthy"]["errors"]
+    assert "runtime_snapshot_missing" in payload["details"]["runtime_unhealthy"]["errors"]
 
 
 def test_dashboard_api_runs_one_runtime_cycle_with_injected_runner(tmp_path):

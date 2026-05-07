@@ -12,6 +12,8 @@ const snapshot: KanbanSnapshot = {
         {
           task_id: "task-1",
           status: "pending",
+          operator_stage: "pending",
+          pipeline_chain: "",
           modality: "text",
           annotation_types: ["entity_span"],
           selected_annotator_id: null,

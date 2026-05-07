@@ -137,6 +137,9 @@ def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
     assert snapshot.cycle_stats[-1].errors == [
         {
             "task_id": "task-1",
+            "stage": "annotation",
+            "provider_target": "annotation",
+            "error_kind": "provider_unavailable",
             "error_type": "RuntimeError",
             "message": "provider unavailable",
         }
@@ -159,6 +162,9 @@ def test_local_runtime_scheduler_preserves_provider_failure_diagnostics(tmp_path
     assert snapshot.cycle_stats[-1].errors == [
         {
             "task_id": "task-1",
+            "stage": "annotation",
+            "provider_target": "annotation",
+            "error_kind": "provider_unavailable",
             "error_type": "DiagnosticProviderError",
             "message": "local CLI provider failed",
             "diagnostics": {"stderr": "resume thread not found", "returncode": 1},

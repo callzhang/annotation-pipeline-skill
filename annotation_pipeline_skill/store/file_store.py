@@ -16,6 +16,7 @@ from annotation_pipeline_skill.core.models import (
     Task,
 )
 from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeCycleStats, RuntimeSnapshot
+from annotation_pipeline_skill.core.runtime import RuntimeLease
 
 T = TypeVar("T")
 
@@ -34,6 +35,7 @@ class FileStore:
         self.coordination_dir = self.root / "coordination"
         self.runtime_dir = self.root / "runtime"
         self.active_runs_dir = self.runtime_dir / "active_runs"
+        self.leases_dir = self.runtime_dir / "leases"
         self.runtime_cycles_path = self.runtime_dir / "cycle_stats.jsonl"
         self.runtime_heartbeat_path = self.runtime_dir / "heartbeat.json"
         self.runtime_snapshot_path = self.runtime_dir / "runtime_snapshot.json"
@@ -49,6 +51,7 @@ class FileStore:
             self.coordination_dir,
             self.runtime_dir,
             self.active_runs_dir,
+            self.leases_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -134,6 +137,24 @@ class FileStore:
 
     def delete_active_run(self, run_id: str) -> None:
         (self.active_runs_dir / f"{run_id}.json").unlink(missing_ok=True)
+
+    def save_runtime_lease(self, lease: RuntimeLease) -> bool:
+        path = self.leases_dir / f"{lease.lease_id}.json"
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(lease.to_dict(), sort_keys=True, indent=2) + "\n")
+            return True
+        except FileExistsError:
+            return False
+
+    def list_runtime_leases(self) -> list[RuntimeLease]:
+        return [
+            RuntimeLease.from_dict(self._read_json(path))
+            for path in sorted(self.leases_dir.glob("*.json"))
+        ]
+
+    def delete_runtime_lease(self, lease_id: str) -> None:
+        (self.leases_dir / f"{lease_id}.json").unlink(missing_ok=True)
 
     def save_runtime_heartbeat(self, heartbeat_at: datetime) -> None:
         self._write_json(

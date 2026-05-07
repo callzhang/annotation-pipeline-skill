@@ -1,5 +1,5 @@
-from annotation_pipeline_skill.core.models import FeedbackRecord, Task
-from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, TaskStatus
+from annotation_pipeline_skill.core.models import Attempt, FeedbackRecord, OutboxRecord, Task
+from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, OutboxKind, TaskStatus
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
 from annotation_pipeline_skill.store.file_store import FileStore
 
@@ -43,6 +43,83 @@ def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
     assert snapshot["columns"][0]["cards"][0]["task_id"] == "task-pending"
     assert snapshot["columns"][4]["cards"][0]["feedback_count"] == 1
     assert snapshot["columns"][4]["cards"][0]["modality"] == "image"
+    assert snapshot["columns"][4]["cards"][0]["operator_stage"] == "qc"
+
+
+def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
+    store = FileStore(tmp_path)
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    store.append_attempt(
+        Attempt(
+            attempt_id="attempt-1",
+            task_id="task-1",
+            index=1,
+            stage="annotation",
+            status=AttemptStatus.SUCCEEDED,
+            provider_id="deepseek",
+        )
+    )
+    store.append_attempt(
+        Attempt(
+            attempt_id="attempt-2",
+            task_id="task-1",
+            index=2,
+            stage="qc",
+            status=AttemptStatus.FAILED,
+            provider_id="glm",
+        )
+    )
+    store.append_feedback(
+        FeedbackRecord.new(
+            task_id="task-1",
+            attempt_id="attempt-2",
+            source_stage=FeedbackSource.QC,
+            severity=FeedbackSeverity.WARNING,
+            category="quality",
+            message="Needs review",
+            target={},
+            suggested_action="annotator_rerun",
+            created_by="qc",
+        )
+    )
+    store.save_outbox(OutboxRecord.new(task_id="task-1", kind=OutboxKind.STATUS, payload={}))
+
+    card = build_kanban_snapshot(store)["columns"][0]["cards"][0]
+
+    assert card["latest_attempt_status"] == "failed"
+    assert card["pipeline_chain"] == "deepseek->glm"
+    assert card["feedback_count"] == 1
+    assert card["external_sync_pending"] is True
+
+
+def test_dashboard_snapshot_can_return_operator_stage_columns(tmp_path):
+    store = FileStore(tmp_path)
+    annotating = Task.new(task_id="task-annotation", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    annotating.status = TaskStatus.VALIDATING
+    review = Task.new(task_id="task-qc", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    review.status = TaskStatus.HUMAN_REVIEW
+    failed = Task.new(task_id="task-failed", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    failed.status = TaskStatus.REJECTED
+    store.save_task(annotating)
+    store.save_task(review)
+    store.save_task(failed)
+
+    snapshot = build_kanban_snapshot(store, stage_view="operator")
+
+    assert snapshot["stage_view"] == "operator"
+    assert [column["id"] for column in snapshot["columns"]] == [
+        "pending",
+        "annotation",
+        "qc",
+        "merge",
+        "failed",
+        "accepted",
+    ]
+    assert [card["task_id"] for card in snapshot["columns"][1]["cards"]] == ["task-annotation"]
+    assert [card["task_id"] for card in snapshot["columns"][2]["cards"]] == ["task-qc"]
+    assert [card["task_id"] for card in snapshot["columns"][4]["cards"]] == ["task-failed"]
 
 
 def test_dashboard_snapshot_filters_tasks_by_project_id(tmp_path):

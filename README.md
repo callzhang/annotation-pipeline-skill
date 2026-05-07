@@ -411,7 +411,9 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline runtime run --project-root ./demo-project --max-cycles 3
 ```
 
-The runtime writes `.annotation-pipeline/runtime/runtime_snapshot.json`, heartbeat data, active-run records, and cycle stats. The snapshot is the local read model for runtime health, queue counts, capacity, stale tasks, and due retries.
+The runtime writes `.annotation-pipeline/runtime/runtime_snapshot.json`, heartbeat data, active-run records, file-backed runtime leases, and cycle stats. The snapshot is the local read model for runtime health, queue counts, capacity, stale tasks, stale leases, and due retries. If no snapshot exists, API and CLI status report an unhealthy `runtime_snapshot_missing` state instead of silently treating rebuilt file scans as live runtime truth.
+
+Kanban snapshots include both internal status and `operator_stage`. Use `GET /api/kanban?stage_view=operator` to view the operator-facing stages `pending`, `annotation`, `QC`, `merge`, `failed`, and `accepted`.
 
 OpenAI Responses API example:
 
@@ -443,7 +445,7 @@ OpenAI-compatible providers use `provider: openai_compatible` with `provider_fla
 
 Subagent attempts record provider, model, diagnostics, artifacts, and continuity handles for later QC and feedback analysis. Local Codex runs are isolated and do not reuse prior CLI sessions; feedback and prior artifacts are passed explicitly in the next prompt.
 
-QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority.
+QC is consensus-based: feedback can be discussed by the annotator and QC agent, including partial agreement. When every open feedback item has a recorded consensus, a task in QC or Human Review can move to Accepted without treating the first QC suggestion as the final authority. Malformed QC responses are recorded as `parse_error` QC attempt failures and retried as QC work; they are not converted into annotator feedback.
 
 Record a Human Review decision from the CLI:
 

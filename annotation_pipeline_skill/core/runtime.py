@@ -82,6 +82,43 @@ class ActiveRun:
 
 
 @dataclass(frozen=True)
+class RuntimeLease:
+    lease_id: str
+    task_id: str
+    stage: str
+    acquired_at: datetime
+    heartbeat_at: datetime
+    expires_at: datetime
+    owner: str
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "lease_id": self.lease_id,
+            "task_id": self.task_id,
+            "stage": self.stage,
+            "acquired_at": _dt_to_str(self.acquired_at),
+            "heartbeat_at": _dt_to_str(self.heartbeat_at),
+            "expires_at": _dt_to_str(self.expires_at),
+            "owner": self.owner,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> RuntimeLease:
+        return cls(
+            lease_id=data["lease_id"],
+            task_id=data["task_id"],
+            stage=data["stage"],
+            acquired_at=_dt_from_str(data["acquired_at"]),
+            heartbeat_at=_dt_from_str(data["heartbeat_at"]),
+            expires_at=_dt_from_str(data["expires_at"]),
+            owner=data["owner"],
+            metadata=data.get("metadata", {}),
+        )
+
+
+@dataclass(frozen=True)
 class RuntimeCycleStats:
     cycle_id: str
     started_at: datetime
@@ -225,6 +262,8 @@ class RuntimeSnapshot:
     due_retries: list[str]
     project_summaries: list[dict]
     cycle_stats: list[RuntimeCycleStats]
+    leases: list[RuntimeLease] = field(default_factory=list)
+    stale_leases: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -232,8 +271,10 @@ class RuntimeSnapshot:
             "runtime_status": self.runtime_status.to_dict(),
             "queue_counts": self.queue_counts.to_dict(),
             "active_runs": [run.to_dict() for run in self.active_runs],
+            "leases": [lease.to_dict() for lease in self.leases],
             "capacity": self.capacity.to_dict(),
             "stale_tasks": self.stale_tasks,
+            "stale_leases": self.stale_leases,
             "due_retries": self.due_retries,
             "project_summaries": self.project_summaries,
             "cycle_stats": [stats.to_dict() for stats in self.cycle_stats],
@@ -246,8 +287,10 @@ class RuntimeSnapshot:
             runtime_status=RuntimeStatus.from_dict(data["runtime_status"]),
             queue_counts=QueueCounts.from_dict(data["queue_counts"]),
             active_runs=[ActiveRun.from_dict(item) for item in data.get("active_runs", [])],
+            leases=[RuntimeLease.from_dict(item) for item in data.get("leases", [])],
             capacity=CapacitySnapshot.from_dict(data["capacity"]),
             stale_tasks=list(data.get("stale_tasks", [])),
+            stale_leases=list(data.get("stale_leases", [])),
             due_retries=list(data.get("due_retries", [])),
             project_summaries=list(data.get("project_summaries", [])),
             cycle_stats=[RuntimeCycleStats.from_dict(item) for item in data.get("cycle_stats", [])],

@@ -504,7 +504,18 @@ def handle_runtime_once(args: argparse.Namespace) -> int:
 def handle_runtime_status(args: argparse.Namespace) -> int:
     runtime_config = load_runtime_config(args.project_root)
     store = FileStore(args.project_root / ".annotation-pipeline")
-    snapshot = store.load_runtime_snapshot() or build_runtime_snapshot(store, runtime_config)
+    snapshot = store.load_runtime_snapshot()
+    if snapshot is None:
+        snapshot = build_runtime_snapshot(store, runtime_config)
+        snapshot = replace(
+            snapshot,
+            runtime_status=replace(
+                snapshot.runtime_status,
+                healthy=False,
+                active=False,
+                errors=sorted(set([*snapshot.runtime_status.errors, "runtime_snapshot_missing"])),
+            ),
+        )
     print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
     return 0
 

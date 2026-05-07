@@ -20,6 +20,12 @@ class SubagentRuntimeResult:
     failed: int
 
 
+class QCParseError(ValueError):
+    def __init__(self, message: str, *, raw_text: str):
+        super().__init__(message)
+        self.diagnostics = {"error_kind": "parse_error", "raw_text": raw_text}
+
+
 class SubagentRuntime:
     def __init__(self, store: FileStore, client_factory: Callable[[str], LLMClient]):
         self.store = store
@@ -46,6 +52,10 @@ class SubagentRuntime:
         self._run_task(task, stage_target)
 
     def _run_task(self, task: Task, stage_target: str) -> None:
+        if task.status is TaskStatus.QC and task.metadata.get("runtime_next_stage") == "qc":
+            self._run_qc_only(task)
+            return
+
         annotation_attempt_id = self._next_attempt_id(task)
         self._transition(
             task,
@@ -116,6 +126,16 @@ class SubagentRuntime:
             stage="qc",
             attempt_id=annotation_attempt_id,
         )
+        task.metadata["continuity_handle"] = annotation_result.continuity_handle
+        self._run_qc_stage(task, annotation_artifact)
+        self.store.save_task(task)
+
+    def _run_qc_only(self, task: Task) -> None:
+        annotation_artifact = self._latest_annotation_artifact(task.task_id)
+        self._run_qc_stage(task, annotation_artifact)
+        self.store.save_task(task)
+
+    def _run_qc_stage(self, task: Task, annotation_artifact: ArtifactRef) -> None:
         qc_attempt_id = self._next_attempt_id(task)
         qc_result = self._generate(
             "qc",
@@ -125,7 +145,11 @@ class SubagentRuntime:
                 continuity_handle=task.metadata.get("qc_continuity_handle"),
             ),
         )
-        qc_decision = _parse_qc_decision(qc_result.final_text)
+        try:
+            qc_decision = _parse_qc_decision(qc_result.final_text)
+        except QCParseError as exc:
+            self._record_qc_parse_error(task, qc_attempt_id, qc_result, exc)
+            raise
         task.current_attempt += 1
         qc_artifact = self._write_stage_artifact(
             task,
@@ -153,8 +177,8 @@ class SubagentRuntime:
             qc_artifact,
         )
 
-        task.metadata["continuity_handle"] = annotation_result.continuity_handle
         task.metadata["qc_continuity_handle"] = qc_result.continuity_handle
+        task.metadata.pop("runtime_next_stage", None)
         if qc_decision["passed"]:
             self._transition(
                 task,
@@ -175,6 +199,52 @@ class SubagentRuntime:
                 attempt_id=qc_attempt_id,
                 metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
             )
+        self.store.save_task(task)
+
+    def _latest_annotation_artifact(self, task_id: str) -> ArtifactRef:
+        annotation_artifacts = [
+            artifact for artifact in self.store.list_artifacts(task_id)
+            if artifact.kind == "annotation_result"
+        ]
+        if not annotation_artifacts:
+            raise QCParseError("QC retry requires an annotation artifact.", raw_text="")
+        return annotation_artifacts[-1]
+
+    def _record_qc_parse_error(
+        self,
+        task: Task,
+        attempt_id: str,
+        result: LLMGenerateResult,
+        error: QCParseError,
+    ) -> None:
+        task.current_attempt += 1
+        artifact = self._write_stage_artifact(
+            task,
+            result,
+            kind="qc_result",
+            attempt_id=attempt_id,
+            payload={"parse_error": error.diagnostics},
+        )
+        self._append_attempt(
+            Attempt(
+                attempt_id=attempt_id,
+                task_id=task.task_id,
+                index=task.current_attempt,
+                stage="qc",
+                status=AttemptStatus.FAILED,
+                started_at=utc_now(),
+                finished_at=utc_now(),
+                provider_id=result.provider,
+                model=result.model,
+                route_role="qc",
+                summary=str(error),
+                error={"kind": "parse_error", "message": str(error)},
+                artifacts=[artifact],
+            ),
+            artifact,
+        )
+        task.metadata["qc_continuity_handle"] = result.continuity_handle
+        task.metadata["runtime_next_stage"] = "qc"
         self.store.save_task(task)
 
     def _generate(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
@@ -327,7 +397,8 @@ def _qc_instructions(task: Task) -> str:
     return (
         "You are a QC subagent. Inspect the task and latest annotation artifact. "
         "Return raw JSON with no markdown fences. Include a boolean field named passed. "
-        "If passed is false, include message, category, severity, target, and suggested_action. "
+        "If passed is false, include message or failures. failures must be a list of objects with row_id or target, category, message, severity, and suggested_action. "
+        "When feedback discussions or annotator rebuttals are present, include feedback_resolution as a list of row-level decisions with row_id, decision, and reason. "
         "Use task.source_ref.payload.annotation_guidance as the quality policy when it is present. "
         "Use task.metadata.qc_policy to decide the QC scope for this task. "
         "When qc_policy.mode is sample_count or sample_ratio, inspect exactly qc_policy.sample_count rows/items from this task, "
@@ -349,26 +420,20 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
     normalized_text = _strip_markdown_json_fence(text)
     try:
         payload = json.loads(normalized_text)
-    except json.JSONDecodeError:
-        return {
-            "passed": False,
-            "message": text.strip() or "QC response was empty or not valid JSON.",
-            "category": "qc",
-            "severity": FeedbackSeverity.WARNING.value,
-            "target": {},
-            "suggested_action": "annotator_rerun",
-            "raw_text": text,
-        }
+    except json.JSONDecodeError as exc:
+        raise QCParseError("QC response was not valid JSON.", raw_text=text) from exc
     if not isinstance(payload, dict):
-        return {
-            "passed": False,
-            "message": "QC response JSON must be an object.",
-            "category": "qc",
-            "severity": FeedbackSeverity.WARNING.value,
-            "target": {},
-            "suggested_action": "annotator_rerun",
-            "raw_response": payload,
-        }
+        raise QCParseError("QC response JSON must be an object.", raw_text=text)
+    if not isinstance(payload.get("passed"), bool):
+        raise QCParseError("QC response JSON must include boolean passed.", raw_text=text)
+    failures = payload.get("failures", [])
+    if failures is not None and not isinstance(failures, list):
+        raise QCParseError("QC response failures must be a list when present.", raw_text=text)
+    feedback_resolution = payload.get("feedback_resolution", [])
+    if feedback_resolution is not None and not isinstance(feedback_resolution, list):
+        raise QCParseError("QC response feedback_resolution must be a list when present.", raw_text=text)
+    if payload["passed"] is False and not str(payload.get("message") or payload.get("summary") or "").strip() and not failures:
+        raise QCParseError("Rejected QC response must include message or failures.", raw_text=text)
     return {
         "passed": bool(payload.get("passed", False)),
         "message": str(payload.get("message") or payload.get("summary") or ""),
@@ -376,6 +441,8 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
         "severity": _severity_value(payload.get("severity")),
         "target": payload.get("target") if isinstance(payload.get("target"), dict) else {},
         "suggested_action": str(payload.get("suggested_action") or "annotator_rerun"),
+        "failures": failures or [],
+        "feedback_resolution": feedback_resolution or [],
         "raw_response": payload,
     }
 
@@ -394,15 +461,17 @@ def _strip_markdown_json_fence(text: str) -> str:
 
 
 def _feedback_from_qc_decision(task: Task, attempt_id: str, decision: dict[str, Any]) -> FeedbackRecord:
+    failures = decision.get("failures") if isinstance(decision.get("failures"), list) else []
+    first_failure = failures[0] if failures and isinstance(failures[0], dict) else {}
     return FeedbackRecord.new(
         task_id=task.task_id,
         attempt_id=attempt_id,
         source_stage=FeedbackSource.QC,
         severity=FeedbackSeverity(decision["severity"]),
-        category=str(decision.get("category") or "qc"),
-        message=str(decision.get("message") or "QC rejected the annotation result."),
-        target=decision.get("target") if isinstance(decision.get("target"), dict) else {},
-        suggested_action=str(decision.get("suggested_action") or "annotator_rerun"),
+        category=str(first_failure.get("category") or decision.get("category") or "qc"),
+        message=str(first_failure.get("message") or decision.get("message") or "QC rejected the annotation result."),
+        target=first_failure.get("target") if isinstance(first_failure.get("target"), dict) else decision.get("target") if isinstance(decision.get("target"), dict) else {},
+        suggested_action=str(first_failure.get("suggested_action") or decision.get("suggested_action") or "annotator_rerun"),
         created_by="qc",
         metadata={"qc_decision": decision},
     )

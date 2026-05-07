@@ -121,7 +121,9 @@ Subagent attempts record provider, model, artifact metadata, diagnostics, and co
 
 The local runtime now runs a real multistage loop. A pending task first creates an annotation attempt and `annotation_result` artifact, then deterministic validation gates it into QC. The QC target creates a QC attempt and `qc_result` artifact. If QC passes, the task becomes `accepted`. If QC fails, the runtime records structured QC feedback and returns the task to `pending` so the next annotation attempt receives the feedback bundle and prior artifacts as context.
 
-QC failure is business feedback, not a scheduler failure. Provider exceptions still count as runtime failures in cycle stats.
+QC failure is business feedback, not a scheduler failure. Malformed QC payloads are `parse_error` QC attempt failures and stay in the QC retry path without creating annotator feedback. Provider exceptions still count as runtime failures in cycle stats and include `error_kind`, stage, and provider target metadata.
+
+Runtime capacity is represented by file-backed leases under `.annotation-pipeline/runtime/leases`. Active work should have a matching lease and active-run record; stale leases and mismatches are monitor failures. A missing runtime snapshot is reported as `runtime_snapshot_missing` rather than hidden by an on-demand rebuild.
 
 QC scope is configured per task in `task.metadata.qc_policy`. Tasks created from JSONL default to all-row QC. Use `annotation-pipeline create-tasks --qc-sample-count N` for a fixed number of rows/items per task, or `--qc-sample-ratio R` for a percentage-derived sample count. The runtime passes that policy to the QC subagent so sampled QC is explicit in the audit trail. Operators can also edit the current task's QC policy in the dashboard task drawer; each save appends a `qc policy updated` audit event.
 
