@@ -5,11 +5,11 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackRecord, Task, utc_now
+from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task, utc_now
 from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.llm.client import LLMClient, LLMGenerateRequest, LLMGenerateResult
-from annotation_pipeline_skill.services.feedback_service import build_feedback_bundle
+from annotation_pipeline_skill.services.feedback_service import build_feedback_bundle, build_feedback_consensus_summary
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -180,6 +180,7 @@ class SubagentRuntime:
         task.metadata["qc_continuity_handle"] = qc_result.continuity_handle
         task.metadata.pop("runtime_next_stage", None)
         if qc_decision["passed"]:
+            self._record_feedback_resolution(task, qc_attempt_id, qc_artifact, qc_decision)
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
@@ -200,6 +201,37 @@ class SubagentRuntime:
                 metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
             )
         self.store.save_task(task)
+
+    def _record_feedback_resolution(
+        self,
+        task: Task,
+        qc_attempt_id: str,
+        qc_artifact: ArtifactRef,
+        qc_decision: dict[str, Any],
+    ) -> None:
+        open_feedback_ids = build_feedback_consensus_summary(self.store, task.task_id)["open_feedback"]
+        if not open_feedback_ids:
+            return
+
+        message = str(qc_decision.get("summary") or "Resolved by a subsequent QC pass.")
+        for feedback_id in open_feedback_ids:
+            self.store.append_feedback_discussion(
+                FeedbackDiscussionEntry.new(
+                    task_id=task.task_id,
+                    feedback_id=feedback_id,
+                    role="qc",
+                    stance="resolved",
+                    message=message,
+                    proposed_resolution="Subsequent annotation attempt passed QC.",
+                    consensus=True,
+                    created_by="qc-agent",
+                    metadata={
+                        "attempt_id": qc_attempt_id,
+                        "qc_artifact_id": qc_artifact.artifact_id,
+                        "resolution_source": "subsequent_qc_pass",
+                    },
+                )
+            )
 
     def _latest_annotation_artifact(self, task_id: str) -> ArtifactRef:
         annotation_artifacts = [

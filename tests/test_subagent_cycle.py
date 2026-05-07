@@ -6,6 +6,7 @@ from annotation_pipeline_skill.llm.client import LLMGenerateResult
 from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime, SubagentRuntimeResult
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.core.runtime import RuntimeConfig
+from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.store.file_store import FileStore
 
 
@@ -211,4 +212,10 @@ def test_subagent_runtime_rerun_prompt_includes_feedback_context(tmp_path):
     assert "missing entity" in rerun_prompt
     assert "feedback_bundle" in rerun_prompt
     assert "prior_artifacts" in rerun_prompt
+    discussions = store.list_feedback_discussions("task-1")
+    assert len(discussions) == 1
+    assert discussions[0].consensus is True
+    assert discussions[0].stance == "resolved"
+    assert discussions[0].metadata["resolution_source"] == "subsequent_qc_pass"
+    assert build_feedback_consensus_summary(store, "task-1")["open_feedback"] == []
     assert json.loads((tmp_path / artifacts[2].path).read_text(encoding="utf-8"))["text"] == '{"labels":[{"text":"alpha","type":"ENTITY"}]}'
