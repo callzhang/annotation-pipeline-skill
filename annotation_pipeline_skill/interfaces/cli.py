@@ -118,7 +118,7 @@ runtime:
     provider: local_cli
     cli_kind: claude
     cli_binary: claude
-    model: claude-sonnet-4-5
+    model: claude-sonnet-4-6
     permission_mode: dontAsk
     timeout_seconds: 900
     no_progress_timeout_seconds: 30
@@ -129,31 +129,45 @@ runtime:
     base_url: https://api.openai.com/v1
     reasoning_effort: medium
     timeout_seconds: 300
-  deepseek_default:
+  deepseek_flash:
     provider: openai_compatible
     provider_flavor: deepseek
-    model: deepseek-chat
+    model: deepseek-v4-flash
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    timeout_seconds: 120
+  deepseek_pro:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-v4-pro
     api_key_env: DEEPSEEK_API_KEY
     base_url: https://api.deepseek.com
     timeout_seconds: 300
-  glm_default:
+  glm_flash:
     provider: openai_compatible
     provider_flavor: glm
-    model: glm-4.5
-    api_key_env: ZHIPUAI_API_KEY
+    model: glm-4-flash
+    api_key_env: BIGMODEL_MCP_API_KEY
     base_url: https://open.bigmodel.cn/api/paas/v4
+    timeout_seconds: 120
+  glm_air:
+    provider: openai_compatible
+    provider_flavor: glm
+    model: glm-4.5-air
+    api_key_env: BIGMODEL_MCP_API_KEY
+    base_url: https://open.bigmodel.cn/api/coding/paas/v4
     timeout_seconds: 300
   minimax_default:
     provider: openai_compatible
     provider_flavor: minimax
-    model: MiniMax-M1
+    model: MiniMax-M2.7
     api_key_env: MINIMAX_API_KEY
-    base_url: https://api.minimax.io/v1
+    base_url: https://api.minimaxi.com/v1
     timeout_seconds: 300
 targets:
-  annotation: local_codex
-  qc: openai_default
-  coordinator: local_codex
+  annotation: deepseek_flash
+  qc: deepseek_flash
+  coordinator: deepseek_flash
 limits:
   local_cli_global_concurrency: 4
 """,

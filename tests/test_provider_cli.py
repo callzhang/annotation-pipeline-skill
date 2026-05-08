@@ -48,18 +48,18 @@ def test_provider_targets_exposes_ui_relevant_profile_fields(tmp_path, capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["annotation"] == {
-        "base_url": None,
-        "cli_kind": "codex",
-        "model": "gpt-5.4-mini",
-        "profile": "local_codex",
-        "provider": "local_cli",
-        "provider_flavor": None,
+        "base_url": "https://api.deepseek.com",
+        "cli_kind": None,
+        "model": "deepseek-v4-flash",
+        "profile": "deepseek_flash",
+        "provider": "openai_compatible",
+        "provider_flavor": "deepseek",
     }
     assert payload["qc"] == {
-        "base_url": "https://api.openai.com/v1",
+        "base_url": "https://api.deepseek.com",
         "cli_kind": None,
-        "model": "gpt-5.4-mini",
-        "profile": "openai_default",
-        "provider": "openai_responses",
-        "provider_flavor": None,
+        "model": "deepseek-v4-flash",
+        "profile": "deepseek_flash",
+        "provider": "openai_compatible",
+        "provider_flavor": "deepseek",
     }
