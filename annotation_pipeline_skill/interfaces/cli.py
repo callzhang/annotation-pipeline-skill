@@ -193,7 +193,44 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--group-by", action="append", default=[])
     create_parser.add_argument("--qc-sample-count", type=int)
     create_parser.add_argument("--qc-sample-ratio", type=float)
+    create_parser.add_argument("--document-version-id")
     create_parser.set_defaults(handler=handle_create_tasks)
+
+    document_parser = subparsers.add_parser("document")
+    document_subparsers = document_parser.add_subparsers(required=True)
+
+    doc_create = document_subparsers.add_parser("create")
+    doc_create.add_argument("--project-root", type=Path, default=Path.cwd())
+    doc_create.add_argument("--title", required=True)
+    doc_create.add_argument("--description", default="")
+    doc_create.add_argument("--created-by", default="operator")
+    doc_create.set_defaults(handler=handle_document_create)
+
+    doc_list = document_subparsers.add_parser("list")
+    doc_list.add_argument("--project-root", type=Path, default=Path.cwd())
+    doc_list.set_defaults(handler=handle_document_list)
+
+    doc_version_parser = document_subparsers.add_parser("version")
+    doc_version_subparsers = doc_version_parser.add_subparsers(required=True)
+
+    doc_version_add = doc_version_subparsers.add_parser("add")
+    doc_version_add.add_argument("--project-root", type=Path, default=Path.cwd())
+    doc_version_add.add_argument("--document-id", required=True)
+    doc_version_add.add_argument("--version", required=True)
+    doc_version_add.add_argument("--content-file", type=Path, required=True)
+    doc_version_add.add_argument("--changelog", default="")
+    doc_version_add.add_argument("--created-by", default="operator")
+    doc_version_add.set_defaults(handler=handle_document_version_add)
+
+    doc_version_list = doc_version_subparsers.add_parser("list")
+    doc_version_list.add_argument("--project-root", type=Path, default=Path.cwd())
+    doc_version_list.add_argument("--document-id", required=True)
+    doc_version_list.set_defaults(handler=handle_document_version_list)
+
+    doc_version_show = doc_version_subparsers.add_parser("show")
+    doc_version_show.add_argument("--project-root", type=Path, default=Path.cwd())
+    doc_version_show.add_argument("--version-id", required=True)
+    doc_version_show.set_defaults(handler=handle_document_version_show)
 
     import_parser = subparsers.add_parser("import")
     import_subparsers = import_parser.add_subparsers(required=True)
@@ -426,6 +463,7 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
                 qc_sample_count=args.qc_sample_count,
                 qc_sample_ratio=args.qc_sample_ratio,
             ),
+            document_version_id=getattr(args, "document_version_id", None),
         )
         event = transition_task(
             task,
@@ -658,6 +696,56 @@ def _save_annotation_manager_v2_task(
             artifacts=[artifact],
         )
     )
+
+
+def handle_document_create(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.core.models import AnnotationDocument
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    doc = AnnotationDocument.new(
+        title=args.title,
+        description=args.description,
+        created_by=args.created_by,
+    )
+    store.save_document(doc)
+    print(json.dumps(doc.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_document_list(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    docs = store.list_documents()
+    print(json.dumps({"documents": [doc.to_dict() for doc in docs]}, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_document_version_add(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.core.models import AnnotationDocumentVersion
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    content = args.content_file.read_text(encoding="utf-8")
+    ver = AnnotationDocumentVersion.new(
+        document_id=args.document_id,
+        version=args.version,
+        content=content,
+        changelog=args.changelog,
+        created_by=args.created_by,
+    )
+    store.save_document_version(ver)
+    print(json.dumps(ver.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_document_version_list(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    versions = store.list_document_versions(args.document_id)
+    print(json.dumps({"versions": [v.to_dict() for v in versions]}, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_document_version_show(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    ver = store.load_document_version(args.version_id)
+    print(json.dumps(ver.to_dict(), sort_keys=True, indent=2))
+    return 0
 
 
 def read_jsonl(path: Path) -> list[dict]:
