@@ -43,88 +43,140 @@ class DashboardApi:
         self,
         store: FileStore,
         *,
+        stores: dict[str, FileStore] | None = None,
+        default_store_key: str | None = None,
         runtime_once: Callable[[], RuntimeSnapshot] | None = None,
         runtime_config: RuntimeConfig | None = None,
     ):
         self.store = store
+        self._stores = stores or {}
+        self._default_store_key = default_store_key
         self.runtime_once = runtime_once
         self.runtime_config = runtime_config or RuntimeConfig()
+
+    def _resolve_store(self, query: dict[str, list[str]]) -> FileStore:
+        key = query.get("store", [None])[0]
+        if key and key in self._stores:
+            return self._stores[key]
+        if self._default_store_key and self._default_store_key in self._stores:
+            return self._stores[self._default_store_key]
+        return self.store
 
     def handle_get(self, path: str) -> tuple[int, dict[str, str], bytes]:
         parsed_path = urlparse(path)
         route = parsed_path.path
         query = parse_qs(parsed_path.query)
+        store = self._resolve_store(query)
         project_id = query.get("project", [None])[0]
         stage_view = query.get("stage_view", ["internal"])[0]
         if route == "/api/health":
             return self._json_response(200, {"ok": True})
+        if route == "/api/stores":
+            return self._json_response(200, {"stores": self._stores_list()})
         if route == "/api/projects":
-            return self._json_response(200, build_project_summaries(self.store))
+            return self._json_response(200, build_project_summaries(store))
         if route == "/api/kanban":
-            return self._json_response(200, build_kanban_snapshot(self.store, project_id=project_id, stage_view=stage_view))
+            return self._json_response(200, build_kanban_snapshot(store, project_id=project_id, stage_view=stage_view))
         if route == "/api/config":
-            return self._json_response(200, {"files": self._config_files()})
+            return self._json_response(200, {"files": self._config_files(store)})
         if route == "/api/providers":
-            return self._provider_config_response()
+            return self._provider_config_response(store)
         if route == "/api/coordinator":
-            return self._json_response(200, CoordinatorService(self.store).build_report(project_id=project_id))
+            return self._json_response(200, CoordinatorService(store).build_report(project_id=project_id))
         if route == "/api/events":
-            return self._json_response(200, {"events": self._event_log(project_id=project_id)})
+            return self._json_response(200, {"events": self._event_log(store, project_id=project_id)})
         if route == "/api/readiness":
             if not project_id:
                 return self._json_response(400, {"error": "project_required"})
-            return self._json_response(200, build_readiness_report(self.store, project_id))
+            return self._json_response(200, build_readiness_report(store, project_id))
         if route == "/api/outbox":
-            return self._json_response(200, build_outbox_summary(self.store, project_id=project_id))
+            return self._json_response(200, build_outbox_summary(store, project_id=project_id))
         if route == "/api/runtime":
-            return self._json_response(200, self._runtime_snapshot().to_dict())
+            return self._json_response(200, self._runtime_snapshot(store).to_dict())
         if route == "/api/runtime/monitor":
-            return self._json_response(200, validate_runtime_snapshot(self._runtime_snapshot()))
+            return self._json_response(200, validate_runtime_snapshot(self._runtime_snapshot(store)))
         if route == "/api/runtime/cycles":
             return self._json_response(
                 200,
-                {"cycles": [stats.to_dict() for stats in self.store.list_runtime_cycle_stats()]},
+                {"cycles": [stats.to_dict() for stats in store.list_runtime_cycle_stats()]},
             )
+        if route == "/api/documents":
+            return self._json_response(200, {"documents": [doc.to_dict() for doc in store.list_documents()]})
+        if route.startswith("/api/documents/"):
+            remainder = route.removeprefix("/api/documents/")
+            parts = remainder.split("/")
+            if len(parts) == 1 and parts[0]:
+                return self._document_detail_response(store, parts[0])
+            if len(parts) == 2 and parts[1] == "versions":
+                return self._json_response(200, {"versions": [v.to_dict() for v in store.list_document_versions(parts[0])]})
+            if len(parts) == 3 and parts[1] == "versions" and parts[2]:
+                try:
+                    ver = store.load_document_version(parts[2])
+                except FileNotFoundError:
+                    return self._json_response(404, {"error": "version_not_found"})
+                return self._json_response(200, ver.to_dict())
         if route.startswith("/api/tasks/"):
             task_id = route.removeprefix("/api/tasks/")
             if not task_id:
                 return self._json_response(404, {"error": "not_found"})
-            return self._task_detail_response(task_id)
+            return self._task_detail_response(store, task_id)
         return self._json_response(404, {"error": "not_found"})
 
     def handle_put(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
-        route = path.split("?", 1)[0]
+        parsed_path = urlparse(path)
+        route = parsed_path.path
+        query = parse_qs(parsed_path.query)
+        store = self._resolve_store(query)
         if route.startswith("/api/tasks/") and route.endswith("/qc-policy"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/qc-policy").strip("/")
-            return self._update_task_qc_policy_response(task_id, body)
+            return self._update_task_qc_policy_response(store, task_id, body)
         if route.startswith("/api/config/"):
             config_id = route.removeprefix("/api/config/")
-            return self._update_config_response(config_id, body)
+            return self._update_config_response(store, config_id, body)
         if route == "/api/providers":
-            return self._update_provider_config_response(body)
+            return self._update_provider_config_response(store, body)
         return self._json_response(404, {"error": "not_found"})
 
     def handle_post(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
-        route = path.split("?", 1)[0]
+        parsed_path = urlparse(path)
+        route = parsed_path.path
+        query = parse_qs(parsed_path.query)
+        store = self._resolve_store(query)
         if route == "/api/runtime/run-once":
             return self._runtime_run_once_response()
         if route == "/api/coordinator/rule-updates":
-            return self._post_coordinator_rule_update_response(body)
+            return self._post_coordinator_rule_update_response(store, body)
         if route == "/api/coordinator/long-tail-issues":
-            return self._post_coordinator_long_tail_issue_response(body)
+            return self._post_coordinator_long_tail_issue_response(store, body)
+        if route == "/api/documents":
+            return self._post_document_response(store, body)
+        if route.startswith("/api/documents/") and route.endswith("/versions"):
+            doc_id = route.removeprefix("/api/documents/").removesuffix("/versions").strip("/")
+            return self._post_document_version_response(store, doc_id, body)
         if route.startswith("/api/tasks/") and route.endswith("/human-review"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/human-review").strip("/")
-            return self._post_human_review_response(task_id, body)
+            return self._post_human_review_response(store, task_id, body)
         if route.startswith("/api/tasks/") and route.endswith("/feedback-discussions"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/feedback-discussions").strip("/")
-            return self._post_feedback_discussion_response(task_id, body)
+            return self._post_feedback_discussion_response(store, task_id, body)
         return self._json_response(404, {"error": "not_found"})
 
-    def _runtime_snapshot(self) -> RuntimeSnapshot:
-        snapshot = self.store.load_runtime_snapshot()
+    def _stores_list(self) -> list[dict]:
+        result = []
+        for key, s in self._stores.items():
+            result.append({
+                "key": key,
+                "name": s.root.parent.name,
+                "path": str(s.root.parent),
+                "pipeline_count": len({task.pipeline_id for task in s.list_tasks()}),
+            })
+        return result
+
+    def _runtime_snapshot(self, store: FileStore) -> RuntimeSnapshot:
+        snapshot = store.load_runtime_snapshot()
         if snapshot is not None:
             return snapshot
-        rebuilt = build_runtime_snapshot(self.store, self.runtime_config)
+        rebuilt = build_runtime_snapshot(store, self.runtime_config)
         status = replace(
             rebuilt.runtime_status,
             healthy=False,
@@ -139,9 +191,9 @@ class DashboardApi:
         snapshot = self.runtime_once()
         return self._json_response(200, {"ok": True, "snapshot": snapshot.to_dict()})
 
-    def _provider_config_response(self) -> tuple[int, dict[str, str], bytes]:
+    def _provider_config_response(self, store: FileStore) -> tuple[int, dict[str, str], bytes]:
         try:
-            return self._json_response(200, build_provider_config_snapshot(self.store.root))
+            return self._json_response(200, build_provider_config_snapshot(store.root))
         except (OSError, ProfileValidationError) as exc:
             return self._json_response(
                 400,
@@ -152,7 +204,7 @@ class DashboardApi:
                 },
             )
 
-    def _update_provider_config_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _update_provider_config_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -160,7 +212,7 @@ class DashboardApi:
         if not isinstance(payload, dict):
             return self._json_response(400, {"error": "invalid_payload"})
         try:
-            snapshot = save_provider_config(self.store.root, payload)
+            snapshot = save_provider_config(store.root, payload)
         except (OSError, ProfileValidationError) as exc:
             return self._json_response(400, {"error": "invalid_provider_config", "detail": str(exc)})
         return self._json_response(200, snapshot)
@@ -169,35 +221,83 @@ class DashboardApi:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
         return status, {"content-type": "application/json"}, body
 
-    def _task_detail_response(self, task_id: str) -> tuple[int, dict[str, str], bytes]:
+    def _document_detail_response(self, store: FileStore, document_id: str) -> tuple[int, dict[str, str], bytes]:
         try:
-            task = self.store.load_task(task_id)
+            doc = store.load_document(document_id)
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "document_not_found"})
+        versions = store.list_document_versions(document_id)
+        return self._json_response(200, {"document": doc.to_dict(), "versions": [v.to_dict() for v in versions]})
+
+    def _post_document_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        from annotation_pipeline_skill.core.models import AnnotationDocument
+        doc = AnnotationDocument.new(
+            title=str(payload.get("title") or ""),
+            description=str(payload.get("description") or ""),
+            created_by=str(payload.get("created_by") or "operator"),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+        store.save_document(doc)
+        return self._json_response(200, doc.to_dict())
+
+    def _post_document_version_response(self, store: FileStore, doc_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            store.load_document(doc_id)
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "document_not_found"})
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        from annotation_pipeline_skill.core.models import AnnotationDocumentVersion
+        ver = AnnotationDocumentVersion.new(
+            document_id=doc_id,
+            version=str(payload.get("version") or "v1"),
+            content=str(payload.get("content") or ""),
+            changelog=str(payload.get("changelog") or ""),
+            created_by=str(payload.get("created_by") or "operator"),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+        store.save_document_version(ver)
+        return self._json_response(200, ver.to_dict())
+
+    def _task_detail_response(self, store: FileStore, task_id: str) -> tuple[int, dict[str, str], bytes]:
+        try:
+            task = store.load_task(task_id)
         except FileNotFoundError:
             return self._json_response(404, {"error": "task_not_found"})
 
         artifacts = [
-            {**artifact.to_dict(), "payload": self._read_artifact_payload(artifact.path)}
-            for artifact in self.store.list_artifacts(task_id)
+            {**artifact.to_dict(), "payload": self._read_artifact_payload(store, artifact.path)}
+            for artifact in store.list_artifacts(task_id)
         ]
         return self._json_response(
             200,
             {
                 "task": task.to_dict(),
-                "attempts": [attempt.to_dict() for attempt in self.store.list_attempts(task_id)],
+                "attempts": [attempt.to_dict() for attempt in store.list_attempts(task_id)],
                 "artifacts": artifacts,
-                "events": [event.to_dict() for event in self.store.list_events(task_id)],
-                "feedback": [feedback.to_dict() for feedback in self.store.list_feedback(task_id)],
+                "events": [event.to_dict() for event in store.list_events(task_id)],
+                "feedback": [feedback.to_dict() for feedback in store.list_feedback(task_id)],
                 "feedback_discussions": [
                     entry.to_dict()
-                    for entry in self.store.list_feedback_discussions(task_id)
+                    for entry in store.list_feedback_discussions(task_id)
                 ],
-                "feedback_consensus": build_feedback_consensus_summary(self.store, task_id),
+                "feedback_consensus": build_feedback_consensus_summary(store, task_id),
             },
         )
 
-    def _post_feedback_discussion_response(self, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_feedback_discussion_response(self, store: FileStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
-            task = self.store.load_task(task_id)
+            task = store.load_task(task_id)
         except FileNotFoundError:
             return self._json_response(404, {"error": "task_not_found"})
         try:
@@ -208,7 +308,7 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_payload"})
 
         feedback_id = str(payload.get("feedback_id") or "")
-        if feedback_id not in {feedback.feedback_id for feedback in self.store.list_feedback(task_id)}:
+        if feedback_id not in {feedback.feedback_id for feedback in store.list_feedback(task_id)}:
             return self._json_response(400, {"error": "unknown_feedback_id"})
         entry = FeedbackDiscussionEntry.new(
             task_id=task_id,
@@ -223,9 +323,9 @@ class DashboardApi:
             created_by=str(payload.get("created_by") or payload.get("role") or "unknown"),
             metadata=dict(payload.get("metadata") or {}),
         )
-        self.store.append_feedback_discussion(entry)
+        store.append_feedback_discussion(entry)
 
-        consensus = build_feedback_consensus_summary(self.store, task_id)
+        consensus = build_feedback_consensus_summary(store, task_id)
         if consensus["can_accept_by_consensus"] and task.status in {TaskStatus.QC, TaskStatus.HUMAN_REVIEW}:
             event = transition_task(
                 task,
@@ -235,19 +335,19 @@ class DashboardApi:
                 stage="qc",
                 metadata={"feedback_id": feedback_id, "discussion_entry_id": entry.entry_id},
             )
-            self.store.append_event(event)
-            self.store.save_task(task)
+            store.append_event(event)
+            store.save_task(task)
 
         return self._json_response(
             200,
             {
                 "entry": entry.to_dict(),
                 "feedback_consensus": consensus,
-                "task": self.store.load_task(task_id).to_dict(),
+                "task": store.load_task(task_id).to_dict(),
             },
         )
 
-    def _post_human_review_response(self, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_human_review_response(self, store: FileStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -255,7 +355,7 @@ class DashboardApi:
         if not isinstance(payload, dict):
             return self._json_response(400, {"error": "invalid_payload"})
         try:
-            result = HumanReviewService(self.store).decide(
+            result = HumanReviewService(store).decide(
                 task_id=task_id,
                 action=str(payload.get("action") or ""),
                 actor=str(payload.get("actor") or "human-reviewer"),
@@ -268,9 +368,9 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_human_review_decision", "detail": str(exc)})
         return self._json_response(200, result.to_dict())
 
-    def _update_task_qc_policy_response(self, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _update_task_qc_policy_response(self, store: FileStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
-            task = self.store.load_task(task_id)
+            task = store.load_task(task_id)
         except FileNotFoundError:
             return self._json_response(404, {"error": "task_not_found"})
         try:
@@ -289,8 +389,8 @@ class DashboardApi:
         task.metadata["row_count"] = self._task_row_count(task)
         task.metadata["qc_policy"] = policy
         task.updated_at = utc_now()
-        self.store.save_task(task)
-        self.store.append_event(
+        store.save_task(task)
+        store.append_event(
             AuditEvent.new(
                 task_id=task.task_id,
                 previous_status=task.status,
@@ -301,7 +401,7 @@ class DashboardApi:
                 metadata={"previous_qc_policy": previous_policy, "qc_policy": policy},
             )
         )
-        return self._task_detail_response(task_id)
+        return self._task_detail_response(store, task_id)
 
     def _build_task_qc_policy(self, task: Task, payload: dict) -> dict:
         row_count = self._task_row_count(task)
@@ -331,7 +431,7 @@ class DashboardApi:
             return len(payload["rows"])
         return 1
 
-    def _post_coordinator_rule_update_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_coordinator_rule_update_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -339,7 +439,7 @@ class DashboardApi:
         if not isinstance(payload, dict):
             return self._json_response(400, {"error": "invalid_payload"})
         try:
-            record = CoordinatorService(self.store).record_rule_update(
+            record = CoordinatorService(store).record_rule_update(
                 project_id=str(payload.get("project_id") or ""),
                 source=str(payload.get("source") or ""),
                 summary=str(payload.get("summary") or ""),
@@ -353,7 +453,7 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
         return self._json_response(200, record)
 
-    def _post_coordinator_long_tail_issue_response(self, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_coordinator_long_tail_issue_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -361,7 +461,7 @@ class DashboardApi:
         if not isinstance(payload, dict):
             return self._json_response(400, {"error": "invalid_payload"})
         try:
-            record = CoordinatorService(self.store).record_long_tail_issue(
+            record = CoordinatorService(store).record_long_tail_issue(
                 project_id=str(payload.get("project_id") or ""),
                 category=str(payload.get("category") or ""),
                 summary=str(payload.get("summary") or ""),
@@ -376,8 +476,8 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
         return self._json_response(200, record)
 
-    def _read_artifact_payload(self, relative_path: str) -> Any:
-        path = self.store.root / relative_path
+    def _read_artifact_payload(self, store: FileStore, relative_path: str) -> Any:
+        path = store.root / relative_path
         if not path.exists():
             return None
         text = path.read_text(encoding="utf-8")
@@ -386,10 +486,10 @@ class DashboardApi:
         except json.JSONDecodeError:
             return text
 
-    def _config_files(self) -> list[dict[str, Any]]:
+    def _config_files(self, store: FileStore) -> list[dict[str, Any]]:
         files = []
         for config_id, title in CONFIG_FILE_DEFINITIONS.items():
-            path = self.store.root / config_id
+            path = store.root / config_id
             files.append(
                 {
                     "id": config_id,
@@ -401,7 +501,7 @@ class DashboardApi:
             )
         return files
 
-    def _update_config_response(self, config_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _update_config_response(self, store: FileStore, config_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         if config_id not in CONFIG_FILE_DEFINITIONS:
             return self._json_response(404, {"error": "config_not_found"})
         content = body.decode("utf-8")
@@ -409,16 +509,16 @@ class DashboardApi:
             yaml.safe_load(content) if content.strip() else None
         except yaml.YAMLError as exc:
             return self._json_response(400, {"error": "invalid_yaml", "detail": str(exc)})
-        path = self.store.root / config_id
+        path = store.root / config_id
         path.write_text(content, encoding="utf-8")
         return self._json_response(200, {"ok": True, "id": config_id})
 
-    def _event_log(self, project_id: str | None = None) -> list[dict[str, Any]]:
+    def _event_log(self, store: FileStore, project_id: str | None = None) -> list[dict[str, Any]]:
         events = []
-        for task in self.store.list_tasks():
+        for task in store.list_tasks():
             if project_id is not None and task.pipeline_id != project_id:
                 continue
-            events.extend(event.to_dict() for event in self.store.list_events(task.task_id))
+            events.extend(event.to_dict() for event in store.list_events(task.task_id))
         return sorted(events, key=lambda event: event["created_at"], reverse=True)
 
 
@@ -508,12 +608,20 @@ def serve_dashboard_api(
     host: str,
     port: int,
     *,
+    stores: dict[str, FileStore] | None = None,
+    default_store_key: str | None = None,
     runtime_once: Callable[[], RuntimeSnapshot] | None = None,
     runtime_config: RuntimeConfig | None = None,
 ) -> None:
     server = ThreadingHTTPServer(
         (host, port),
-        make_handler(DashboardApi(store, runtime_once=runtime_once, runtime_config=runtime_config)),
+        make_handler(DashboardApi(
+            store,
+            stores=stores,
+            default_store_key=default_store_key,
+            runtime_once=runtime_once,
+            runtime_config=runtime_config,
+        )),
     )
     server.serve_forever()
 

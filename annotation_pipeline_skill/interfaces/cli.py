@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from collections.abc import Iterable
@@ -343,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     external_pull.set_defaults(handler=handle_external_pull)
 
     serve_parser = subparsers.add_parser("serve")
-    serve_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    serve_parser.add_argument("--workspace", type=Path, default=Path.cwd())
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
     serve_parser.set_defaults(handler=handle_serve)
@@ -930,15 +931,76 @@ def handle_external_pull(args: argparse.Namespace) -> int:
     return 0
 
 
+def discover_project_stores(workspace: Path) -> dict[str, Path]:
+    workspace = Path(workspace).resolve()
+    result: dict[str, Path] = {}
+    seen: set[Path] = set()
+
+    def _add(project_root: Path) -> None:
+        resolved = project_root.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        key = hashlib.sha256(str(resolved).encode()).hexdigest()[:12]
+        result[key] = resolved
+
+    if (workspace / ".annotation-pipeline").is_dir():
+        _add(workspace)
+
+    base_parts = len(workspace.parts)
+    for item in workspace.rglob(".annotation-pipeline"):
+        depth = len(item.parts) - base_parts
+        if depth > 4:
+            continue
+        if item.is_dir():
+            _add(item.parent)
+
+    return result
+
+
 def handle_serve(args: argparse.Namespace) -> int:
-    context = _runtime_context(args.project_root)
-    scheduler = _build_runtime_scheduler(context)
+    stores_map = discover_project_stores(args.workspace)
+    if not stores_map:
+        print(json.dumps({"error": "no_projects_found", "workspace": str(args.workspace)}))
+        return 1
+    file_stores = {key: FileStore(path / ".annotation-pipeline") for key, path in stores_map.items()}
+    default_key = next(iter(file_stores))
+    default_store = file_stores[default_key]
+    runtime_once = None
+    runtime_config = None
+    try:
+        registry = load_llm_registry(default_store.root / "llm_profiles.yaml")
+        default_project_root = stores_map[default_key]
+        config_root = default_project_root / ".annotation-pipeline"
+        annotators_data = read_yaml(config_root / "annotators.yaml")
+        external_data = read_yaml(config_root / "external_tasks.yaml")
+        callbacks_data = read_yaml(config_root / "callbacks.yaml")
+        workflow_data = read_yaml(config_root / "workflow.yaml")
+        config = build_project_config_from_data(
+            annotators_data=annotators_data,
+            external_data=external_data,
+            callbacks_data=callbacks_data,
+            workflow_data=workflow_data,
+        )
+        context = RuntimeCliContext(
+            project_root=default_project_root,
+            config=config,
+            store=default_store,
+            registry=registry,
+        )
+        scheduler = _build_runtime_scheduler(context)
+        runtime_once = scheduler.run_once
+        runtime_config = config.runtime
+    except Exception:
+        pass
     serve_dashboard_api(
-        context.store,
+        default_store,
         host=args.host,
         port=args.port,
-        runtime_once=scheduler.run_once,
-        runtime_config=context.config.runtime,
+        stores=file_stores,
+        default_store_key=default_key,
+        runtime_once=runtime_once,
+        runtime_config=runtime_config,
     )
     return 0
 
