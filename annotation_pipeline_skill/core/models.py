@@ -269,6 +269,7 @@ class Task:
     active_run_id: str | None = None
     next_retry_at: datetime | None = None
     metadata: dict = field(default_factory=dict)
+    document_version_id: str | None = None
 
     @classmethod
     def new(
@@ -281,6 +282,7 @@ class Task:
         annotation_requirements: dict | None = None,
         selected_annotator_id: str | None = None,
         metadata: dict | None = None,
+        document_version_id: str | None = None,
     ) -> Task:
         now = utc_now()
         return cls(
@@ -296,6 +298,7 @@ class Task:
             created_at=now,
             updated_at=now,
             metadata=metadata or {},
+            document_version_id=document_version_id,
         )
 
     def to_dict(self) -> dict:
@@ -314,6 +317,7 @@ class Task:
             "active_run_id": self.active_run_id,
             "next_retry_at": _dt_to_str(self.next_retry_at),
             "metadata": self.metadata,
+            "document_version_id": self.document_version_id,
         }
 
     @classmethod
@@ -333,6 +337,115 @@ class Task:
             updated_at=_dt_from_str(data["updated_at"]),
             active_run_id=data.get("active_run_id"),
             next_retry_at=_dt_from_str(data.get("next_retry_at")),
+            metadata=data.get("metadata", {}),
+            document_version_id=data.get("document_version_id"),
+        )
+
+
+@dataclass
+class AnnotationDocument:
+    document_id: str
+    title: str
+    description: str
+    created_at: datetime
+    created_by: str
+    metadata: dict = field(default_factory=dict)
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        title: str,
+        description: str,
+        created_by: str,
+        metadata: dict | None = None,
+    ) -> AnnotationDocument:
+        return cls(
+            document_id=f"doc-{uuid4().hex}",
+            title=title,
+            description=description,
+            created_at=utc_now(),
+            created_by=created_by,
+            metadata=metadata or {},
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "document_id": self.document_id,
+            "title": self.title,
+            "description": self.description,
+            "created_at": _dt_to_str(self.created_at),
+            "created_by": self.created_by,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AnnotationDocument:
+        return cls(
+            document_id=data["document_id"],
+            title=data["title"],
+            description=data["description"],
+            created_at=_dt_from_str(data["created_at"]),
+            created_by=data["created_by"],
+            metadata=data.get("metadata", {}),
+        )
+
+
+@dataclass
+class AnnotationDocumentVersion:
+    version_id: str
+    document_id: str
+    version: str
+    content: str
+    changelog: str
+    created_at: datetime
+    created_by: str
+    metadata: dict = field(default_factory=dict)
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        document_id: str,
+        version: str,
+        content: str,
+        changelog: str,
+        created_by: str,
+        metadata: dict | None = None,
+    ) -> AnnotationDocumentVersion:
+        return cls(
+            version_id=f"docver-{uuid4().hex}",
+            document_id=document_id,
+            version=version,
+            content=content,
+            changelog=changelog,
+            created_at=utc_now(),
+            created_by=created_by,
+            metadata=metadata or {},
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "version_id": self.version_id,
+            "document_id": self.document_id,
+            "version": self.version,
+            "content": self.content,
+            "changelog": self.changelog,
+            "created_at": _dt_to_str(self.created_at),
+            "created_by": self.created_by,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AnnotationDocumentVersion:
+        return cls(
+            version_id=data["version_id"],
+            document_id=data["document_id"],
+            version=data["version"],
+            content=data["content"],
+            changelog=data["changelog"],
+            created_at=_dt_from_str(data["created_at"]),
+            created_by=data["created_by"],
             metadata=data.get("metadata", {}),
         )
 
