@@ -725,7 +725,8 @@ def handle_run_cycle(args: argparse.Namespace) -> int:
             runtime_config,
             max_starts_per_cycle=min(runtime_config.max_starts_per_cycle, args.limit),
         )
-    _build_runtime_scheduler(context, runtime_config).run_once(stage_target=args.stage_target)
+    snapshot = _build_runtime_scheduler(context, runtime_config).run_once(stage_target=args.stage_target)
+    print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
     return 0
 
 
