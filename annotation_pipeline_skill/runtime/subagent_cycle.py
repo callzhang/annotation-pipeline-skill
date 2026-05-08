@@ -52,11 +52,21 @@ class SubagentRuntime:
     def run_task(self, task: Task, stage_target: str = "annotation") -> None:
         self._run_task(task, stage_target)
 
+    def _load_guideline(self, task: Task) -> str | None:
+        if not task.document_version_id:
+            return None
+        try:
+            ver = self.store.load_document_version(task.document_version_id)
+        except FileNotFoundError:
+            return None
+        return f"Annotation guideline ({ver.version}):\n{ver.content}"
+
     def _run_task(self, task: Task, stage_target: str) -> None:
         if task.status is TaskStatus.QC and task.metadata.get("runtime_next_stage") == "qc":
             self._run_qc_only(task)
             return
 
+        guideline = self._load_guideline(task)
         annotation_attempt_id = self._next_attempt_id(task)
         self._transition(
             task,
@@ -70,7 +80,7 @@ class SubagentRuntime:
         annotation_result = self._generate(
             stage_target,
             LLMGenerateRequest(
-                instructions=_annotation_instructions(task),
+                instructions=_annotation_instructions(task, guideline=guideline),
                 prompt=self._annotation_prompt(task),
                 continuity_handle=task.metadata.get("continuity_handle"),
             ),
@@ -139,12 +149,13 @@ class SubagentRuntime:
         self.store.save_task(task)
 
     def _run_qc_stage(self, task: Task, annotation_artifact: ArtifactRef) -> None:
+        guideline = self._load_guideline(task)
         qc_attempt_id = self._next_attempt_id(task)
         qc_started_at = utc_now()
         qc_result = self._generate(
             "qc",
             LLMGenerateRequest(
-                instructions=_qc_instructions(task),
+                instructions=_qc_instructions(task, guideline=guideline),
                 prompt=self._qc_prompt(task, annotation_artifact),
                 continuity_handle=task.metadata.get("qc_continuity_handle"),
             ),
@@ -423,18 +434,21 @@ class SubagentRuntime:
         )
 
 
-def _annotation_instructions(task: Task) -> str:
-    return (
+def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str:
+    base = (
         "You are an annotation subagent. Return raw JSON only, with no markdown fences or commentary. "
         "Follow task.source_ref.payload.annotation_guidance when it is present, including output_schema, allowed_entity_types, and rules. "
         "For text entity spans, copy exact contiguous text spans from task.source_ref.payload.text. "
         "Do not add entity labels outside the configured allowed entity types. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
+    if guideline:
+        return f"{base}\n\n{guideline}"
+    return base
 
 
-def _qc_instructions(task: Task) -> str:
-    return (
+def _qc_instructions(task: Task, *, guideline: str | None = None) -> str:
+    base = (
         "You are a QC subagent. Inspect the task and latest annotation artifact. "
         "Return raw JSON with no markdown fences. Include a boolean field named passed. "
         "If passed is false, include message or failures. failures must be a list of objects with row_id or target, category, message, severity, and suggested_action. "
@@ -445,6 +459,9 @@ def _qc_instructions(task: Task) -> str:
         "choose them deterministically from task payload order, and include sampled row ids or row indexes in the QC response. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
+    if guideline:
+        return f"{base}\n\n{guideline}"
+    return base
 
 
 def _task_payload(task: Task) -> dict[str, Any]:
