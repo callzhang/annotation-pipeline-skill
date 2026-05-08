@@ -18,10 +18,10 @@ class ConfigValidationError(ValueError):
 
 def load_project_config(project_root: Path | str) -> ProjectConfig:
     config_root = Path(project_root) / ".annotation-pipeline"
-    annotators_data = _read_yaml(config_root / "annotators.yaml")
-    external_data = _read_yaml(config_root / "external_tasks.yaml")
-    callbacks_data = _read_yaml(config_root / "callbacks.yaml")
-    workflow_data = _read_yaml(config_root / "workflow.yaml")
+    annotators_data = read_yaml(config_root / "annotators.yaml")
+    external_data = read_yaml(config_root / "external_tasks.yaml")
+    callbacks_data = read_yaml(config_root / "callbacks.yaml")
+    workflow_data = read_yaml(config_root / "workflow.yaml")
 
     config = build_project_config_from_data(
         annotators_data=annotators_data,
@@ -51,7 +51,7 @@ def build_project_config_from_data(
 
 def load_runtime_config(project_root: Path | str) -> RuntimeConfig:
     config_root = Path(project_root) / ".annotation-pipeline"
-    workflow_data = _read_yaml(config_root / "workflow.yaml")
+    workflow_data = read_yaml(config_root / "workflow.yaml")
     return RuntimeConfig.from_dict(workflow_data.get("runtime") or {})
 
 
@@ -68,7 +68,7 @@ def validate_project_config(config: ProjectConfig, config_root: Path, llm_regist
             )
 
 
-def _read_yaml(path: Path) -> dict:
+def read_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8"))

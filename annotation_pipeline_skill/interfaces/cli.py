@@ -9,7 +9,7 @@ from pathlib import Path
 
 from annotation_pipeline_skill.config.loader import (
     ConfigValidationError,
-    _read_yaml,
+    read_yaml,
     build_project_config_from_data,
     load_project_config,
     load_runtime_config,
@@ -825,7 +825,7 @@ def handle_outbox_status(args: argparse.Namespace) -> int:
 
 def handle_outbox_drain(args: argparse.Namespace) -> int:
     config_root = args.project_root / ".annotation-pipeline"
-    callbacks_data = _read_yaml(config_root / "callbacks.yaml")
+    callbacks_data = read_yaml(config_root / "callbacks.yaml")
     store = FileStore(config_root)
     result = OutboxDispatchService(
         store,
@@ -890,7 +890,7 @@ def handle_coordinator_long_tail_issue(args: argparse.Namespace) -> int:
 
 def handle_external_pull(args: argparse.Namespace) -> int:
     config_root = args.project_root / ".annotation-pipeline"
-    external_data = _read_yaml(config_root / "external_tasks.yaml").get("external_tasks", {})
+    external_data = read_yaml(config_root / "external_tasks.yaml").get("external_tasks", {})
     store = FileStore(config_root)
     result = ExternalTaskService(store).pull_http_tasks(
         pipeline_id=args.project_id,
@@ -918,10 +918,10 @@ def handle_serve(args: argparse.Namespace) -> int:
 def _runtime_context(project_root: Path) -> RuntimeCliContext:
     project_root = Path(project_root)
     config_root = project_root / ".annotation-pipeline"
-    annotators_data = _read_yaml(config_root / "annotators.yaml")
-    external_data = _read_yaml(config_root / "external_tasks.yaml")
-    callbacks_data = _read_yaml(config_root / "callbacks.yaml")
-    workflow_data = _read_yaml(config_root / "workflow.yaml")
+    annotators_data = read_yaml(config_root / "annotators.yaml")
+    external_data = read_yaml(config_root / "external_tasks.yaml")
+    callbacks_data = read_yaml(config_root / "callbacks.yaml")
+    workflow_data = read_yaml(config_root / "workflow.yaml")
     registry = load_llm_registry(config_root / "llm_profiles.yaml")
     config = build_project_config_from_data(
         annotators_data=annotators_data,
