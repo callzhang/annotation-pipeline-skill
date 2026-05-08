@@ -74,7 +74,7 @@ class LocalRuntimeScheduler:
                 self.store.delete_active_run(run.run_id)
                 self.store.delete_runtime_lease(lease.lease_id)
 
-        cycle_finished_at = now or datetime.now(timezone.utc)
+        cycle_finished_at = datetime.now(timezone.utc)
         stats = RuntimeCycleStats(
             cycle_id=f"cycle-{uuid4().hex}",
             started_at=cycle_started_at,
