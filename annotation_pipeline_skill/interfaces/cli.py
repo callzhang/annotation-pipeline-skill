@@ -365,6 +365,8 @@ def handle_init(args: argparse.Namespace) -> int:
         "runtime",
         "snapshots",
         "coordination",
+        "documents",
+        "document_versions",
     ):
         (config_root / name).mkdir(parents=True, exist_ok=True)
     for filename, content in CONFIG_FILES.items():

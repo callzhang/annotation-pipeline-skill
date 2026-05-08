@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from annotation_pipeline_skill.core.models import (
+    AnnotationDocument,
+    AnnotationDocumentVersion,
     ArtifactRef,
     Attempt,
     AuditEvent,
@@ -39,6 +41,8 @@ class FileStore:
         self.runtime_cycles_path = self.runtime_dir / "cycle_stats.jsonl"
         self.runtime_heartbeat_path = self.runtime_dir / "heartbeat.json"
         self.runtime_snapshot_path = self.runtime_dir / "runtime_snapshot.json"
+        self.documents_dir = self.root / "documents"
+        self.document_versions_dir = self.root / "document_versions"
         for directory in (
             self.tasks_dir,
             self.events_dir,
@@ -52,6 +56,8 @@ class FileStore:
             self.runtime_dir,
             self.active_runs_dir,
             self.leases_dir,
+            self.documents_dir,
+            self.document_versions_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -181,6 +187,32 @@ class FileStore:
         if not self.runtime_snapshot_path.exists():
             return None
         return RuntimeSnapshot.from_dict(self._read_json(self.runtime_snapshot_path))
+
+    def save_document(self, doc: AnnotationDocument) -> None:
+        self._write_json(self.documents_dir / f"{doc.document_id}.json", doc.to_dict())
+
+    def load_document(self, document_id: str) -> AnnotationDocument:
+        return AnnotationDocument.from_dict(self._read_json(self.documents_dir / f"{document_id}.json"))
+
+    def list_documents(self) -> list[AnnotationDocument]:
+        return [
+            AnnotationDocument.from_dict(self._read_json(path))
+            for path in sorted(self.documents_dir.glob("*.json"))
+        ]
+
+    def save_document_version(self, ver: AnnotationDocumentVersion) -> None:
+        self._write_json(self.document_versions_dir / f"{ver.version_id}.json", ver.to_dict())
+
+    def load_document_version(self, version_id: str) -> AnnotationDocumentVersion:
+        return AnnotationDocumentVersion.from_dict(self._read_json(self.document_versions_dir / f"{version_id}.json"))
+
+    def list_document_versions(self, document_id: str) -> list[AnnotationDocumentVersion]:
+        results = []
+        for path in sorted(self.document_versions_dir.glob("*.json")):
+            data = self._read_json(path)
+            if data.get("document_id") == document_id:
+                results.append(AnnotationDocumentVersion.from_dict(data))
+        return results
 
     def _write_json(self, path: Path, data: dict) -> None:
         path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
