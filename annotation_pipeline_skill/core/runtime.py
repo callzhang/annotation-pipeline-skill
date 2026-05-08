@@ -1,19 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _dt_to_str(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
-
-
-def _dt_from_str(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
+from annotation_pipeline_skill.core.models import _dt_from_str, _dt_to_str, utc_now  # noqa: F401
 
 
 @dataclass(frozen=True)
