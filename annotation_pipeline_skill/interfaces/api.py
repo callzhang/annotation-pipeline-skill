@@ -422,32 +422,74 @@ class DashboardApi:
         return sorted(events, key=lambda event: event["created_at"], reverse=True)
 
 
-def make_handler(api: DashboardApi) -> type[BaseHTTPRequestHandler]:
+MIME_TYPES: dict[str, str] = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+}
+
+_STATIC_ROOT: Path | None = None
+
+
+def _find_static_root() -> Path | None:
+    candidates = [
+        Path(__file__).parent.parent.parent / "web" / "dist",
+    ]
+    for path in candidates:
+        if (path / "index.html").exists():
+            return path
+    return None
+
+
+def make_handler(api: DashboardApi, static_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
+    resolved_static = static_root or _find_static_root()
+
     class DashboardRequestHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            route = self.path.split("?", 1)[0]
+            if route.startswith("/api/"):
+                status, headers, body = api.handle_get(self.path)
+                self._send(status, headers, body)
+                return
+            if resolved_static is not None:
+                self._serve_static(route)
+                return
             status, headers, body = api.handle_get(self.path)
-            self.send_response(status)
-            for name, value in headers.items():
-                self.send_header(name, value)
-            self.send_header("content-length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send(status, headers, body)
+
+        def _serve_static(self, route: str) -> None:
+            assert resolved_static is not None
+            rel = route.lstrip("/") or "index.html"
+            candidate = (resolved_static / rel).resolve()
+            if not str(candidate).startswith(str(resolved_static.resolve())):
+                self._send(403, {}, b"Forbidden")
+                return
+            if not candidate.exists() or candidate.is_dir():
+                candidate = resolved_static / "index.html"
+            suffix = candidate.suffix.lower()
+            content_type = MIME_TYPES.get(suffix, "application/octet-stream")
+            body = candidate.read_bytes()
+            self._send(200, {"content-type": content_type}, body)
 
         def do_PUT(self) -> None:
             content_length = int(self.headers.get("content-length", "0"))
             request_body = self.rfile.read(content_length)
             status, headers, body = api.handle_put(self.path, request_body)
-            self.send_response(status)
-            for name, value in headers.items():
-                self.send_header(name, value)
-            self.send_header("content-length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send(status, headers, body)
 
         def do_POST(self) -> None:
             content_length = int(self.headers.get("content-length", "0"))
             request_body = self.rfile.read(content_length)
             status, headers, body = api.handle_post(self.path, request_body)
+            self._send(status, headers, body)
+
+        def _send(self, status: int, headers: dict[str, str], body: bytes) -> None:
             self.send_response(status)
             for name, value in headers.items():
                 self.send_header(name, value)
