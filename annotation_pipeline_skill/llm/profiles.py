@@ -34,6 +34,7 @@ class LLMProfile:
     max_retries: int | None = None
     concurrency_limit: int | None = None
     no_progress_timeout_seconds: int | None = None
+    reasoning_capable: bool | None = None
 
     def resolve_api_key(self, env: Mapping[str, str] = os.environ) -> str:
         if self.api_key:
@@ -84,11 +85,12 @@ def load_llm_registry(path: Path | str) -> LLMRegistry:
     return registry
 
 
-def reasoning_kwargs(model: str | None, effort: str | None) -> dict:
+def reasoning_kwargs(model: str | None, effort: str | None, *, reasoning_capable: bool | None = None) -> dict:
     normalized_effort = str(effort or "").strip().lower()
     if normalized_effort in {"", "none", "default"}:
         return {}
-    if not _is_reasoning_model(model):
+    capable = reasoning_capable if reasoning_capable is not None else _is_reasoning_model(model)
+    if not capable:
         return {}
     return {"reasoning": {"effort": normalized_effort}}
 
@@ -119,6 +121,7 @@ def _parse_profile(name: str, raw: object) -> LLMProfile:
             raw.get("no_progress_timeout_seconds"),
             f"profile {name} no_progress_timeout_seconds",
         ),
+        reasoning_capable=_optional_bool(raw.get("reasoning_capable"), f"profile {name} reasoning_capable"),
     )
     _validate_profile(profile)
     return profile
@@ -145,6 +148,14 @@ def _validate_profile(profile: LLMProfile) -> None:
         if not profile.cli_binary:
             raise ProfileValidationError(f"LLM profile {profile.name} missing cli_binary")
         return
+
+
+def _optional_bool(value: object, label: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise ProfileValidationError(f"invalid {label}: must be true or false")
 
 
 def _is_reasoning_model(model: str | None) -> bool:
