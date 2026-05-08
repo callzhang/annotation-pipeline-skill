@@ -43,7 +43,7 @@ class SubagentRuntime:
                 self.run_task(task, stage_target)
             except Exception:
                 failed += 1
-                raise
+                continue
             if task.status is TaskStatus.ACCEPTED:
                 accepted += 1
         return SubagentRuntimeResult(started=len(pending_tasks), accepted=accepted, failed=failed)
