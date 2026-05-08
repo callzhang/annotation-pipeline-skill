@@ -69,6 +69,12 @@ export function TaskDrawer({
           <dt>External Sync</dt>
           <dd>{task.external_sync_pending ? "pending" : "clear"}</dd>
         </div>
+        {detail?.task.document_version_id ? (
+          <div>
+            <dt>Guideline Version</dt>
+            <dd><span className="agreement-pill">{detail.task.document_version_id}</span></dd>
+          </div>
+        ) : null}
       </dl>
 
       {loading ? <div className="drawer-state">Loading task detail</div> : null}

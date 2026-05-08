@@ -47,6 +47,46 @@ export interface TaskDetailArtifact {
   payload: unknown;
 }
 
+export interface StoreInfo {
+  key: string;
+  name: string;
+  path: string;
+  pipeline_count: number;
+}
+
+export interface StoresSnapshot {
+  stores: StoreInfo[];
+}
+
+export interface AnnotationDocument {
+  document_id: string;
+  title: string;
+  description: string;
+  created_at: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface AnnotationDocumentVersion {
+  version_id: string;
+  document_id: string;
+  version: string;
+  content: string;
+  changelog: string;
+  created_at: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface DocumentDetail {
+  document: AnnotationDocument;
+  versions: AnnotationDocumentVersion[];
+}
+
+export interface DocumentsSnapshot {
+  documents: AnnotationDocument[];
+}
+
 export interface TaskDetail {
   task: {
     task_id: string;
@@ -58,6 +98,7 @@ export interface TaskDetail {
     status: string;
     current_attempt: number;
     metadata: Record<string, unknown>;
+    document_version_id: string | null;
   };
   attempts: Array<Record<string, unknown>>;
   artifacts: TaskDetailArtifact[];

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   fetchKanbanSnapshot,
   fetchProjects,
+  fetchStores,
   fetchTaskDetail,
   postFeedbackDiscussion,
   postHumanReviewDecision,
@@ -9,6 +10,7 @@ import {
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { CoordinatorPanel } from "./components/CoordinatorPanel";
+import { DocumentsPanel } from "./components/DocumentsPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { OutboxPanel } from "./components/OutboxPanel";
@@ -17,14 +19,16 @@ import { ReadinessPanel } from "./components/ReadinessPanel";
 import { RuntimePanel } from "./components/RuntimePanel";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
-import type { KanbanSnapshot, ProjectSummary, TaskCard, TaskDetail } from "./types";
+import type { KanbanSnapshot, ProjectSummary, StoreInfo, TaskCard, TaskDetail } from "./types";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events";
+type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events" | "documents";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [stores, setStores] = useState<StoreInfo[]>([]);
+  const [selectedStoreKey, setSelectedStoreKey] = useState<string | null>(() => localStorage.getItem("storeKey"));
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<TaskCard | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<TaskDetail | null>(null);
@@ -36,10 +40,24 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    fetchStores()
+      .then((snap) => {
+        setStores(snap.stores);
+        if (snap.stores.length > 0) {
+          setSelectedStoreKey((prev) => {
+            const valid = snap.stores.some((s) => s.key === prev);
+            return valid ? prev : snap.stores[0].key;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let active = true;
     setLoading(true);
 
-    Promise.all([fetchProjects(), fetchKanbanSnapshot(selectedProjectId)])
+    Promise.all([fetchProjects(selectedStoreKey), fetchKanbanSnapshot(selectedProjectId, selectedStoreKey)])
       .then(([projectSnapshot, nextSnapshot]) => {
         if (!active) return;
         setProjects(projectSnapshot.projects);
@@ -57,7 +75,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedProjectId]);
+  }, [selectedProjectId, selectedStoreKey]);
 
   useEffect(() => {
     if (!selectedTask) {
@@ -70,7 +88,7 @@ export default function App() {
     let active = true;
     setDetailLoading(true);
     setDetailError(null);
-    fetchTaskDetail(selectedTask.task_id)
+    fetchTaskDetail(selectedTask.task_id, selectedStoreKey)
       .then((detail) => {
         if (!active) return;
         setSelectedDetail(detail);
@@ -87,16 +105,22 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedTask]);
+  }, [selectedTask, selectedStoreKey]);
+
+  function handleStoreChange(key: string) {
+    setSelectedStoreKey(key || null);
+    localStorage.setItem("storeKey", key);
+    setSelectedTask(null);
+  }
 
   async function submitFeedbackDiscussion(payload: Record<string, unknown>) {
     if (!selectedTask) return;
     setDetailSaving(true);
     setDetailError(null);
     try {
-      const detail = await postFeedbackDiscussion(selectedTask.task_id, payload);
+      const detail = await postFeedbackDiscussion(selectedTask.task_id, payload, selectedStoreKey);
       setSelectedDetail(detail);
-      setSnapshot(await fetchKanbanSnapshot(selectedProjectId));
+      setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
     } catch (reason: unknown) {
       setDetailError(reason instanceof Error ? reason.message : "Unable to save feedback discussion");
     } finally {
@@ -109,9 +133,9 @@ export default function App() {
     setDetailSaving(true);
     setDetailError(null);
     try {
-      const detail = await postHumanReviewDecision(selectedTask.task_id, payload);
+      const detail = await postHumanReviewDecision(selectedTask.task_id, payload, selectedStoreKey);
       setSelectedDetail(detail);
-      setSnapshot(await fetchKanbanSnapshot(selectedProjectId));
+      setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
     } catch (reason: unknown) {
       setDetailError(reason instanceof Error ? reason.message : "Unable to save Human Review decision");
     } finally {
@@ -124,9 +148,9 @@ export default function App() {
     setDetailSaving(true);
     setDetailError(null);
     try {
-      const detail = await saveTaskQcPolicy(selectedTask.task_id, payload);
+      const detail = await saveTaskQcPolicy(selectedTask.task_id, payload, selectedStoreKey);
       setSelectedDetail(detail);
-      setSnapshot(await fetchKanbanSnapshot(selectedProjectId));
+      setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
     } catch (reason: unknown) {
       setDetailError(reason instanceof Error ? reason.message : "Unable to save QC policy");
     } finally {
@@ -142,6 +166,21 @@ export default function App() {
           <p>{countCards(snapshot)} tasks across operational stages</p>
         </div>
         <div className="topbar-actions">
+          {stores.length > 0 ? (
+            <label className="project-selector">
+              <span>Workspace</span>
+              <select
+                value={selectedStoreKey ?? ""}
+                onChange={(event) => handleStoreChange(event.target.value)}
+              >
+                {stores.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label className="project-selector">
             <span>Project</span>
             <select
@@ -192,6 +231,9 @@ export default function App() {
         <button className={viewMode === "events" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("events")}>
           Event Log
         </button>
+        <button className={viewMode === "documents" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("documents")}>
+          Documents
+        </button>
       </nav>
 
       {error ? <div className="notice">{error}</div> : null}
@@ -205,6 +247,7 @@ export default function App() {
       {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} /> : null}
       {viewMode === "config" ? <ConfigPanel /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}
+      {viewMode === "documents" ? <DocumentsPanel storeKey={selectedStoreKey} /> : null}
       <TaskDrawer
         task={selectedTask}
         detail={selectedDetail}

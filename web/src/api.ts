@@ -1,10 +1,14 @@
 import type {
+  AnnotationDocument,
+  AnnotationDocumentVersion,
   ConfigSnapshot,
   CoordinatorLongTailIssue,
   CoordinatorLongTailIssuePayload,
   CoordinatorReport,
   CoordinatorRuleUpdate,
   CoordinatorRuleUpdatePayload,
+  DocumentDetail,
+  DocumentsSnapshot,
   EventLog,
   KanbanSnapshot,
   ProjectSnapshot,
@@ -13,6 +17,7 @@ import type {
   RuntimeMonitorReport,
   RuntimeRunOnceResponse,
   RuntimeSnapshot,
+  StoresSnapshot,
   TaskDetail,
   ReadinessReport,
   OutboxSummary,
@@ -22,24 +27,43 @@ function projectQuery(projectId: string | null): string {
   return projectId ? `?project=${encodeURIComponent(projectId)}` : "";
 }
 
-export async function fetchProjects(): Promise<ProjectSnapshot> {
-  const response = await fetch("/api/projects");
+function storeParam(storeKey: string | null): string {
+  return storeKey ? `store=${encodeURIComponent(storeKey)}` : "";
+}
+
+function withStore(base: string, storeKey: string | null): string {
+  const sp = storeParam(storeKey);
+  if (!sp) return base;
+  return base.includes("?") ? `${base}&${sp}` : `${base}?${sp}`;
+}
+
+export async function fetchStores(): Promise<StoresSnapshot> {
+  const response = await fetch("/api/stores");
+  if (!response.ok) {
+    throw new Error(`Stores API returned ${response.status}`);
+  }
+  return response.json() as Promise<StoresSnapshot>;
+}
+
+export async function fetchProjects(storeKey: string | null = null): Promise<ProjectSnapshot> {
+  const response = await fetch(withStore("/api/projects", storeKey));
   if (!response.ok) {
     throw new Error(`Projects API returned ${response.status}`);
   }
   return response.json() as Promise<ProjectSnapshot>;
 }
 
-export async function fetchKanbanSnapshot(projectId: string | null = null): Promise<KanbanSnapshot> {
-  const response = await fetch(`/api/kanban${projectQuery(projectId)}`);
+export async function fetchKanbanSnapshot(projectId: string | null = null, storeKey: string | null = null): Promise<KanbanSnapshot> {
+  const base = `/api/kanban${projectQuery(projectId)}`;
+  const response = await fetch(withStore(base, storeKey));
   if (!response.ok) {
     throw new Error(`Kanban API returned ${response.status}`);
   }
   return response.json() as Promise<KanbanSnapshot>;
 }
 
-export async function fetchTaskDetail(taskId: string): Promise<TaskDetail> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+export async function fetchTaskDetail(taskId: string, storeKey: string | null = null): Promise<TaskDetail> {
+  const response = await fetch(withStore(`/api/tasks/${encodeURIComponent(taskId)}`, storeKey));
   if (!response.ok) {
     throw new Error(`Task detail API returned ${response.status}`);
   }
@@ -49,8 +73,9 @@ export async function fetchTaskDetail(taskId: string): Promise<TaskDetail> {
 export async function postFeedbackDiscussion(
   taskId: string,
   payload: Record<string, unknown>,
+  storeKey: string | null = null,
 ): Promise<TaskDetail> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/feedback-discussions`, {
+  const response = await fetch(withStore(`/api/tasks/${encodeURIComponent(taskId)}/feedback-discussions`, storeKey), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -60,14 +85,15 @@ export async function postFeedbackDiscussion(
     throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Feedback discussion API returned ${response.status}`);
   }
   await response.json();
-  return fetchTaskDetail(taskId);
+  return fetchTaskDetail(taskId, storeKey);
 }
 
 export async function postHumanReviewDecision(
   taskId: string,
   payload: Record<string, unknown>,
+  storeKey: string | null = null,
 ): Promise<TaskDetail> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/human-review`, {
+  const response = await fetch(withStore(`/api/tasks/${encodeURIComponent(taskId)}/human-review`, storeKey), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -77,14 +103,15 @@ export async function postHumanReviewDecision(
     throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Human Review API returned ${response.status}`);
   }
   await response.json();
-  return fetchTaskDetail(taskId);
+  return fetchTaskDetail(taskId, storeKey);
 }
 
 export async function saveTaskQcPolicy(
   taskId: string,
   payload: Record<string, unknown>,
+  storeKey: string | null = null,
 ): Promise<TaskDetail> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/qc-policy`, {
+  const response = await fetch(withStore(`/api/tasks/${encodeURIComponent(taskId)}/qc-policy`, storeKey), {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -96,16 +123,16 @@ export async function saveTaskQcPolicy(
   return response.json() as Promise<TaskDetail>;
 }
 
-export async function fetchConfigSnapshot(): Promise<ConfigSnapshot> {
-  const response = await fetch("/api/config");
+export async function fetchConfigSnapshot(storeKey: string | null = null): Promise<ConfigSnapshot> {
+  const response = await fetch(withStore("/api/config", storeKey));
   if (!response.ok) {
     throw new Error(`Config API returned ${response.status}`);
   }
   return response.json() as Promise<ConfigSnapshot>;
 }
 
-export async function saveConfigFile(id: string, content: string): Promise<void> {
-  const response = await fetch(`/api/config/${encodeURIComponent(id)}`, {
+export async function saveConfigFile(id: string, content: string, storeKey: string | null = null): Promise<void> {
+  const response = await fetch(withStore(`/api/config/${encodeURIComponent(id)}`, storeKey), {
     method: "PUT",
     headers: { "content-type": "application/yaml; charset=utf-8" },
     body: content,
@@ -116,56 +143,59 @@ export async function saveConfigFile(id: string, content: string): Promise<void>
   }
 }
 
-export async function fetchEventLog(projectId: string | null = null): Promise<EventLog> {
-  const response = await fetch(`/api/events${projectQuery(projectId)}`);
+export async function fetchEventLog(projectId: string | null = null, storeKey: string | null = null): Promise<EventLog> {
+  const base = `/api/events${projectQuery(projectId)}`;
+  const response = await fetch(withStore(base, storeKey));
   if (!response.ok) {
     throw new Error(`Event log API returned ${response.status}`);
   }
   return response.json() as Promise<EventLog>;
 }
 
-export async function fetchRuntimeSnapshot(): Promise<RuntimeSnapshot> {
-  const response = await fetch("/api/runtime");
+export async function fetchRuntimeSnapshot(storeKey: string | null = null): Promise<RuntimeSnapshot> {
+  const response = await fetch(withStore("/api/runtime", storeKey));
   if (!response.ok) {
     throw new Error(`Runtime API returned ${response.status}`);
   }
   return response.json() as Promise<RuntimeSnapshot>;
 }
 
-export async function fetchRuntimeCycles(): Promise<RuntimeCyclesResponse> {
-  const response = await fetch("/api/runtime/cycles");
+export async function fetchRuntimeCycles(storeKey: string | null = null): Promise<RuntimeCyclesResponse> {
+  const response = await fetch(withStore("/api/runtime/cycles", storeKey));
   if (!response.ok) {
     throw new Error(`Runtime cycles API returned ${response.status}`);
   }
   return response.json() as Promise<RuntimeCyclesResponse>;
 }
 
-export async function fetchRuntimeMonitor(): Promise<RuntimeMonitorReport> {
-  const response = await fetch("/api/runtime/monitor");
+export async function fetchRuntimeMonitor(storeKey: string | null = null): Promise<RuntimeMonitorReport> {
+  const response = await fetch(withStore("/api/runtime/monitor", storeKey));
   if (!response.ok) {
     throw new Error(`Runtime monitor API returned ${response.status}`);
   }
   return response.json() as Promise<RuntimeMonitorReport>;
 }
 
-export async function fetchReadinessReport(projectId: string): Promise<ReadinessReport> {
-  const response = await fetch(`/api/readiness?project=${encodeURIComponent(projectId)}`);
+export async function fetchReadinessReport(projectId: string, storeKey: string | null = null): Promise<ReadinessReport> {
+  const base = `/api/readiness?project=${encodeURIComponent(projectId)}`;
+  const response = await fetch(withStore(base, storeKey));
   if (!response.ok) {
     throw new Error(`Readiness API returned ${response.status}`);
   }
   return response.json() as Promise<ReadinessReport>;
 }
 
-export async function fetchOutboxSummary(projectId: string | null = null): Promise<OutboxSummary> {
-  const response = await fetch(`/api/outbox${projectQuery(projectId)}`);
+export async function fetchOutboxSummary(projectId: string | null = null, storeKey: string | null = null): Promise<OutboxSummary> {
+  const base = `/api/outbox${projectQuery(projectId)}`;
+  const response = await fetch(withStore(base, storeKey));
   if (!response.ok) {
     throw new Error(`Outbox API returned ${response.status}`);
   }
   return response.json() as Promise<OutboxSummary>;
 }
 
-export async function runRuntimeOnce(): Promise<RuntimeRunOnceResponse> {
-  const response = await fetch("/api/runtime/run-once", { method: "POST", body: "{}" });
+export async function runRuntimeOnce(storeKey: string | null = null): Promise<RuntimeRunOnceResponse> {
+  const response = await fetch(withStore("/api/runtime/run-once", storeKey), { method: "POST", body: "{}" });
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error ?? `Runtime run-once API returned ${response.status}`);
@@ -173,8 +203,8 @@ export async function runRuntimeOnce(): Promise<RuntimeRunOnceResponse> {
   return response.json() as Promise<RuntimeRunOnceResponse>;
 }
 
-export async function fetchProviderConfig(): Promise<ProviderConfigSnapshot> {
-  const response = await fetch("/api/providers");
+export async function fetchProviderConfig(storeKey: string | null = null): Promise<ProviderConfigSnapshot> {
+  const response = await fetch(withStore("/api/providers", storeKey));
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
     throw new Error(payload?.detail ?? payload?.error ?? `Provider API returned ${response.status}`);
@@ -186,8 +216,8 @@ export async function saveProviderConfig(payload: {
   profiles: ProviderConfigSnapshot["profiles"];
   targets: ProviderConfigSnapshot["targets"];
   limits: ProviderConfigSnapshot["limits"];
-}): Promise<ProviderConfigSnapshot> {
-  const response = await fetch("/api/providers", {
+}, storeKey: string | null = null): Promise<ProviderConfigSnapshot> {
+  const response = await fetch(withStore("/api/providers", storeKey), {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -199,8 +229,9 @@ export async function saveProviderConfig(payload: {
   return response.json() as Promise<ProviderConfigSnapshot>;
 }
 
-export async function fetchCoordinatorReport(projectId: string | null = null): Promise<CoordinatorReport> {
-  const response = await fetch(`/api/coordinator${projectQuery(projectId)}`);
+export async function fetchCoordinatorReport(projectId: string | null = null, storeKey: string | null = null): Promise<CoordinatorReport> {
+  const base = `/api/coordinator${projectQuery(projectId)}`;
+  const response = await fetch(withStore(base, storeKey));
   if (!response.ok) {
     throw new Error(`Coordinator API returned ${response.status}`);
   }
@@ -209,8 +240,9 @@ export async function fetchCoordinatorReport(projectId: string | null = null): P
 
 export async function postCoordinatorRuleUpdate(
   payload: CoordinatorRuleUpdatePayload,
+  storeKey: string | null = null,
 ): Promise<CoordinatorRuleUpdate> {
-  const response = await fetch("/api/coordinator/rule-updates", {
+  const response = await fetch(withStore("/api/coordinator/rule-updates", storeKey), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -226,8 +258,9 @@ export async function postCoordinatorRuleUpdate(
 
 export async function postCoordinatorLongTailIssue(
   payload: CoordinatorLongTailIssuePayload,
+  storeKey: string | null = null,
 ): Promise<CoordinatorLongTailIssue> {
-  const response = await fetch("/api/coordinator/long-tail-issues", {
+  const response = await fetch(withStore("/api/coordinator/long-tail-issues", storeKey), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -239,4 +272,53 @@ export async function postCoordinatorLongTailIssue(
     );
   }
   return response.json() as Promise<CoordinatorLongTailIssue>;
+}
+
+export async function fetchDocuments(storeKey: string | null = null): Promise<DocumentsSnapshot> {
+  const response = await fetch(withStore("/api/documents", storeKey));
+  if (!response.ok) {
+    throw new Error(`Documents API returned ${response.status}`);
+  }
+  return response.json() as Promise<DocumentsSnapshot>;
+}
+
+export async function fetchDocumentDetail(docId: string, storeKey: string | null = null): Promise<DocumentDetail> {
+  const response = await fetch(withStore(`/api/documents/${encodeURIComponent(docId)}`, storeKey));
+  if (!response.ok) {
+    throw new Error(`Document detail API returned ${response.status}`);
+  }
+  return response.json() as Promise<DocumentDetail>;
+}
+
+export async function createDocument(
+  payload: { title: string; description: string; created_by: string },
+  storeKey: string | null = null,
+): Promise<AnnotationDocument> {
+  const response = await fetch(withStore("/api/documents", storeKey), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Create document returned ${response.status}`);
+  }
+  return response.json() as Promise<AnnotationDocument>;
+}
+
+export async function createDocumentVersion(
+  docId: string,
+  payload: { version: string; content: string; changelog: string; created_by: string },
+  storeKey: string | null = null,
+): Promise<AnnotationDocumentVersion> {
+  const response = await fetch(withStore(`/api/documents/${encodeURIComponent(docId)}/versions`, storeKey), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Create document version returned ${response.status}`);
+  }
+  return response.json() as Promise<AnnotationDocumentVersion>;
 }
