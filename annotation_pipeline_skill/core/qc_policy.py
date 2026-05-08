@@ -44,6 +44,10 @@ def build_qc_policy(
         }
     return {
         "mode": "all_rows",
+        "row_count": row_count,
+        "sample_scope": "per_task",
+        "selection": "deterministic_from_task_payload_order",
+        "sample_count": row_count,
         "required_correct_rows": row_count,
         "feedback_loop": "annotator_may_accept_or_dispute_qc_items",
     }
