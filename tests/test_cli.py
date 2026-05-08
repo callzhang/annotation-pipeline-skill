@@ -355,6 +355,92 @@ def test_cli_create_batched_jsonl_tasks_does_not_cross_group_boundaries(tmp_path
     assert [task.metadata["sources"] for task in tasks] == [["a"], ["a"], ["b"]]
 
 
+def test_cli_import_annotation_manager_v2_queues_imported_annotations_for_qc(tmp_path, capsys):
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    main(["init", "--project-root", str(tmp_path)])
+    source_root = tmp_path / "manager-v2" / "tasks"
+    source_root.mkdir(parents=True)
+    output_file = source_root / "legacy_task_001.annotated.jsonl"
+    output_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "input": "Repo: nodejs/node\nReviewed-By: Ada Lovelace",
+                        "output": {
+                            "entities": {"organization": ["nodejs"], "person": ["Ada Lovelace"]},
+                            "classifications": [],
+                            "json_structures": [],
+                            "relations": [],
+                        },
+                        "source_dataset": "github",
+                        "source_path": "github.jsonl",
+                    }
+                ),
+                json.dumps({"input": "missing output"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    task_file = source_root / "legacy_task_001.task.json"
+    task_file.write_text(
+        json.dumps(
+            {
+                "task_id": "legacy_task_001",
+                "status": "merged",
+                "output_file": str(output_file),
+            }
+        ),
+        encoding="utf-8",
+    )
+    missing_output_task = source_root / "legacy_task_002.task.json"
+    missing_output_task.write_text(
+        json.dumps({"task_id": "legacy_task_002", "status": "merged", "output_file": ""}),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "import",
+            "annotation-manager-v2",
+            "--project-root",
+            str(tmp_path),
+            "--source-task-root",
+            str(source_root),
+            "--pipeline-id",
+            "memory-ner-v2",
+            "--task-prefix",
+            "memory-ner-v2-review",
+            "--qc-sample-count",
+            "1",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    store = FileStore(tmp_path / ".annotation-pipeline")
+    task = store.load_task("memory-ner-v2-review-000001")
+    artifacts = store.list_artifacts(task.task_id)
+    attempts = store.list_attempts(task.task_id)
+    artifact_payload = json.loads((store.root / artifacts[0].path).read_text(encoding="utf-8"))
+    events = store.list_events(task.task_id)
+    assert exit_code == 0
+    assert payload == {"imported": 1, "pipeline_id": "memory-ner-v2", "skipped": 1}
+    assert task.status is TaskStatus.QC
+    assert task.current_attempt == 1
+    assert task.metadata["runtime_next_stage"] == "qc"
+    assert task.metadata["source_task_id"] == "legacy_task_001"
+    assert task.metadata["qc_policy"]["mode"] == "sample_count"
+    assert task.source_ref["kind"] == "annotation_manager_v2"
+    assert task.source_ref["payload"]["rows"][0]["text"].startswith("Repo: nodejs/node")
+    assert [event.next_status.value for event in events] == ["pending", "annotating", "validating", "qc"]
+    assert attempts[0].provider_id == "annotation_manager_v2"
+    assert artifacts[0].kind == "annotation_result"
+    assert artifact_payload["imported_annotation"]["rows"][0]["output"]["entities"]["person"] == ["Ada Lovelace"]
+    assert json.loads(artifact_payload["text"])["rows"][0]["output"]["entities"]["organization"] == ["nodejs"]
+
+
 def test_cli_export_training_data_writes_manifest(tmp_path, capsys):
     from annotation_pipeline_skill.core.models import ArtifactRef
     from annotation_pipeline_skill.core.states import TaskStatus

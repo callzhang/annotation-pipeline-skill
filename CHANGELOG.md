@@ -25,6 +25,7 @@ Initial local-first release for an agent-operated annotation pipeline skill.
 - Per-task QC sampling policy with `--qc-sample-count`, `--qc-sample-ratio`, and external source QC settings.
 - Dashboard editing for task QC policies with audit events.
 - File-backed runtime leases, missing snapshot failure reporting, operator-stage Kanban read model, strict QC parse-error handling, provider failure taxonomy, and indexed dashboard summaries.
+- Read-only annotation manager v2 import that creates new QC-stage review tasks from old accepted/merged `.annotated.jsonl` outputs without mutating the source project.
 
 ### Known Limits
 
