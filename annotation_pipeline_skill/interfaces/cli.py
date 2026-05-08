@@ -322,6 +322,16 @@ def build_parser() -> argparse.ArgumentParser:
     coordinator_issue.add_argument("--task-id", action="append", default=[])
     coordinator_issue.set_defaults(handler=handle_coordinator_long_tail_issue)
 
+    task_parser = subparsers.add_parser("task")
+    task_subparsers = task_parser.add_subparsers(required=True)
+
+    task_unblock = task_subparsers.add_parser("unblock")
+    task_unblock.add_argument("--project-root", type=Path, default=Path.cwd())
+    task_unblock.add_argument("--task-id", required=True)
+    task_unblock.add_argument("--actor", default="operator")
+    task_unblock.add_argument("--reason", default="manually unblocked")
+    task_unblock.set_defaults(handler=handle_task_unblock)
+
     external_parser = subparsers.add_parser("external")
     external_subparsers = external_parser.add_subparsers(required=True)
 
@@ -885,6 +895,22 @@ def handle_coordinator_long_tail_issue(args: argparse.Namespace) -> int:
         task_ids=args.task_id,
     )
     print(json.dumps(record, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_task_unblock(args: argparse.Namespace) -> int:
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    task = store.load_task(args.task_id)
+    event = transition_task(
+        task,
+        TaskStatus.PENDING,
+        actor=args.actor,
+        reason=args.reason,
+        stage="unblock",
+    )
+    store.save_task(task)
+    store.append_event(event)
+    print(json.dumps({"task": task.to_dict(), "event": event.to_dict()}, sort_keys=True, indent=2))
     return 0
 
 

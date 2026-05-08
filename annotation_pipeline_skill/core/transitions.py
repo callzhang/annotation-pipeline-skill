@@ -36,7 +36,7 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     },
     TaskStatus.ACCEPTED: set(),
     TaskStatus.REJECTED: set(),
-    TaskStatus.BLOCKED: set(),
+    TaskStatus.BLOCKED: {TaskStatus.PENDING},
     TaskStatus.CANCELLED: set(),
 }
 
