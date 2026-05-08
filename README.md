@@ -328,6 +328,29 @@ audit event.
 
 You can import multiple JSONL sources into the same project root by using a different `--pipeline-id` for each logical annotation project. The dashboard exposes those pipeline IDs as projects, so switching projects filters the Kanban board and event log without moving or rewriting task data.
 
+Import existing `memory-ner` annotation manager v2 task outputs for full QC review:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
+  annotation-pipeline import annotation-manager-v2 \
+  --project-root ./demo-project \
+  --source-task-root /path/to/memory-ner/data/derived/annotation_projects/v2/tasks \
+  --pipeline-id memory-ner-v2-review \
+  --task-prefix memory-ner-v2-review \
+  --qc-sample-ratio 0.2
+```
+
+This is a read-only import from the old `memory-ner` directory. It does not
+modify annotation manager v2 task files or `.annotated.jsonl` outputs. All new
+tasks, artifacts, events, feedback, runtime state, and exports are written under
+the target project's `.annotation-pipeline/` directory. Imported old `accepted`
+and `merged` annotation-manager tasks become new tasks in `qc` status. Each
+imported task gets an `annotation_result` artifact containing the old
+`.annotated.jsonl` outputs and `metadata.runtime_next_stage: qc`, so the first
+runtime cycle reviews the old annotation directly. If QC fails, the task returns
+to `pending` with feedback and the next runtime cycle asks the annotator to
+revise it using the feedback bundle and imported artifact context.
+
 Pull tasks from an external HTTP task API by configuring `.annotation-pipeline/external_tasks.yaml`:
 
 ```yaml

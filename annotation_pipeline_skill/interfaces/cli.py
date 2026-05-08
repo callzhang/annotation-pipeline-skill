@@ -16,10 +16,10 @@ from annotation_pipeline_skill.config.loader import (
     validate_project_config,
 )
 from annotation_pipeline_skill.config.models import ProjectConfig
-from annotation_pipeline_skill.core.models import Task
+from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, Task, utc_now
 from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
 from annotation_pipeline_skill.core.runtime import RuntimeConfig
-from annotation_pipeline_skill.core.states import TaskStatus
+from annotation_pipeline_skill.core.states import AttemptStatus, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
 from annotation_pipeline_skill.llm.local_cli import LocalCLIClient
@@ -193,6 +193,20 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--qc-sample-count", type=int)
     create_parser.add_argument("--qc-sample-ratio", type=float)
     create_parser.set_defaults(handler=handle_create_tasks)
+
+    import_parser = subparsers.add_parser("import")
+    import_subparsers = import_parser.add_subparsers(required=True)
+
+    annotation_manager_v2 = import_subparsers.add_parser("annotation-manager-v2")
+    annotation_manager_v2.add_argument("--project-root", type=Path, default=Path.cwd())
+    annotation_manager_v2.add_argument("--source-task-root", type=Path, required=True)
+    annotation_manager_v2.add_argument("--pipeline-id", required=True)
+    annotation_manager_v2.add_argument("--task-prefix")
+    annotation_manager_v2.add_argument("--status", action="append", choices=("accepted", "merged"))
+    annotation_manager_v2.add_argument("--limit", type=int)
+    annotation_manager_v2.add_argument("--qc-sample-count", type=int)
+    annotation_manager_v2.add_argument("--qc-sample-ratio", type=float)
+    annotation_manager_v2.set_defaults(handler=handle_import_annotation_manager_v2)
 
     cycle_parser = subparsers.add_parser("run-cycle")
     cycle_parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -410,6 +424,227 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
         store.save_task(task)
         store.append_event(event)
     return 0
+
+
+def handle_import_annotation_manager_v2(args: argparse.Namespace) -> int:
+    validate_qc_sample_options(args.qc_sample_count, args.qc_sample_ratio)
+    store = FileStore(args.project_root / ".annotation-pipeline")
+    statuses = set(args.status or ["accepted", "merged"])
+    task_prefix = args.task_prefix or args.pipeline_id
+    imported = 0
+    skipped = 0
+    for source_task_file in sorted(args.source_task_root.rglob("*.task.json")):
+        if args.limit is not None and imported >= args.limit:
+            break
+        source_task = json.loads(source_task_file.read_text(encoding="utf-8"))
+        if source_task.get("status") not in statuses:
+            skipped += 1
+            continue
+        output_file = _annotation_manager_v2_output_file(source_task, source_task_file)
+        if output_file is None:
+            skipped += 1
+            continue
+        annotated_rows = _read_annotation_manager_v2_rows(output_file)
+        if not annotated_rows:
+            skipped += 1
+            continue
+        imported += 1
+        _save_annotation_manager_v2_task(
+            store=store,
+            pipeline_id=args.pipeline_id,
+            task_id=f"{task_prefix}-{imported:06d}",
+            source_task=source_task,
+            source_task_file=source_task_file,
+            output_file=output_file,
+            annotated_rows=annotated_rows,
+            qc_sample_count=args.qc_sample_count,
+            qc_sample_ratio=args.qc_sample_ratio,
+        )
+    print(json.dumps({"imported": imported, "skipped": skipped, "pipeline_id": args.pipeline_id}, sort_keys=True, indent=2))
+    return 0
+
+
+def _annotation_manager_v2_output_file(source_task: dict, source_task_file: Path) -> Path | None:
+    raw_output_file = source_task.get("output_file")
+    if not isinstance(raw_output_file, str) or not raw_output_file.strip():
+        return None
+    output_file = Path(raw_output_file)
+    if not output_file.is_absolute():
+        output_file = source_task_file.parent / output_file
+    if not output_file.is_file():
+        return None
+    return output_file
+
+
+def _read_annotation_manager_v2_rows(output_file: Path) -> list[dict]:
+    rows = []
+    for line_no, line in enumerate(output_file.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        text = row.get("input") or row.get("text")
+        output = row.get("output")
+        if isinstance(text, str) and isinstance(output, dict):
+            rows.append(
+                {
+                    "source_row_index": line_no,
+                    "text": text,
+                    "source_dataset": row.get("source_dataset"),
+                    "source_path": row.get("source_path"),
+                    "output": output,
+                }
+            )
+    return rows
+
+
+def _save_annotation_manager_v2_task(
+    *,
+    store: FileStore,
+    pipeline_id: str,
+    task_id: str,
+    source_task: dict,
+    source_task_file: Path,
+    output_file: Path,
+    annotated_rows: list[dict],
+    qc_sample_count: int | None,
+    qc_sample_ratio: float | None,
+) -> None:
+    attempt_id = f"{task_id}-attempt-1"
+    source_rows = [
+        {
+            "source_row_index": row["source_row_index"],
+            "text": row["text"],
+            "source_dataset": row.get("source_dataset"),
+            "source_path": row.get("source_path"),
+        }
+        for row in annotated_rows
+    ]
+    task = Task.new(
+        task_id=task_id,
+        pipeline_id=pipeline_id,
+        source_ref={
+            "kind": "annotation_manager_v2",
+            "task_file": str(source_task_file),
+            "output_file": str(output_file),
+            "row_count": len(source_rows),
+            "payload": {"rows": source_rows},
+        },
+        modality="text",
+        annotation_requirements={"annotation_types": ["entity_span", "structured_json"]},
+        metadata={
+            "row_count": len(source_rows),
+            "source_task_id": source_task.get("task_id"),
+            "source_task_status": source_task.get("status"),
+            "runtime_next_stage": "qc",
+            "qc_policy": build_qc_policy(
+                row_count=len(source_rows),
+                qc_sample_count=qc_sample_count,
+                qc_sample_ratio=qc_sample_ratio,
+            ),
+        },
+    )
+    prepare_event = transition_task(
+        task,
+        TaskStatus.PENDING,
+        actor="cli",
+        reason="imported annotation manager v2 task",
+        stage="prepare",
+        metadata={"source_task_id": source_task.get("task_id"), "source_task_status": source_task.get("status")},
+    )
+    annotating_event = transition_task(
+        task,
+        TaskStatus.ANNOTATING,
+        actor="cli",
+        reason="attached annotation manager v2 annotation artifact",
+        stage="annotation",
+        attempt_id=attempt_id,
+    )
+    validating_event = transition_task(
+        task,
+        TaskStatus.VALIDATING,
+        actor="cli",
+        reason="imported annotation artifact ready for qc",
+        stage="validation",
+        attempt_id=attempt_id,
+    )
+    qc_event = transition_task(
+        task,
+        TaskStatus.QC,
+        actor="cli",
+        reason="queued imported annotation for qc",
+        stage="qc",
+        attempt_id=attempt_id,
+    )
+    task.current_attempt = 1
+    store.save_task(task)
+    for event in (prepare_event, annotating_event, validating_event, qc_event):
+        store.append_event(event)
+
+    relative_path = f"artifact_payloads/{task_id}/{attempt_id}_annotation_result.json"
+    payload_path = store.root / relative_path
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    imported_annotation = {
+        "rows": [
+            {
+                "source_row_index": row["source_row_index"],
+                "text": row["text"],
+                "output": row["output"],
+            }
+            for row in annotated_rows
+        ]
+    }
+    payload_path.write_text(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "text": json.dumps(imported_annotation, ensure_ascii=False, sort_keys=True),
+                "imported_annotation": imported_annotation,
+                "raw_response": {
+                    "source": "annotation_manager_v2",
+                    "source_task_id": source_task.get("task_id"),
+                    "source_task_status": source_task.get("status"),
+                    "task_file": str(source_task_file),
+                    "output_file": str(output_file),
+                },
+                "usage": {},
+                "diagnostics": {"imported": True, "source": "annotation_manager_v2"},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    artifact = ArtifactRef.new(
+        task_id=task_id,
+        kind="annotation_result",
+        path=relative_path,
+        content_type="application/json",
+        metadata={
+            "runtime": "import",
+            "provider": "annotation_manager_v2",
+            "model": None,
+            "diagnostics": {"imported": True, "source": "annotation_manager_v2"},
+        },
+    )
+    store.append_artifact(artifact)
+    store.append_attempt(
+        Attempt(
+            attempt_id=attempt_id,
+            task_id=task_id,
+            index=1,
+            stage="annotation",
+            status=AttemptStatus.SUCCEEDED,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            provider_id="annotation_manager_v2",
+            model=None,
+            route_role="import",
+            summary=f"Imported {len(annotated_rows)} annotation manager v2 rows for QC.",
+            artifacts=[artifact],
+        )
+    )
 
 
 def read_jsonl(path: Path) -> list[dict]:
