@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable
 
 from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task, utc_now
@@ -65,6 +66,7 @@ class SubagentRuntime:
             attempt_id=annotation_attempt_id,
         )
 
+        annotation_started_at = utc_now()
         annotation_result = self._generate(
             stage_target,
             LLMGenerateRequest(
@@ -73,6 +75,7 @@ class SubagentRuntime:
                 continuity_handle=task.metadata.get("continuity_handle"),
             ),
         )
+        annotation_finished_at = utc_now()
         task.current_attempt += 1
         annotation_artifact = self._write_stage_artifact(
             task,
@@ -88,8 +91,8 @@ class SubagentRuntime:
                 index=task.current_attempt,
                 stage="annotation",
                 status=AttemptStatus.SUCCEEDED,
-                started_at=utc_now(),
-                finished_at=utc_now(),
+                started_at=annotation_started_at,
+                finished_at=annotation_finished_at,
                 provider_id=annotation_result.provider,
                 model=annotation_result.model,
                 effort=None,
@@ -137,6 +140,7 @@ class SubagentRuntime:
 
     def _run_qc_stage(self, task: Task, annotation_artifact: ArtifactRef) -> None:
         qc_attempt_id = self._next_attempt_id(task)
+        qc_started_at = utc_now()
         qc_result = self._generate(
             "qc",
             LLMGenerateRequest(
@@ -145,10 +149,11 @@ class SubagentRuntime:
                 continuity_handle=task.metadata.get("qc_continuity_handle"),
             ),
         )
+        qc_finished_at = utc_now()
         try:
             qc_decision = _parse_qc_decision(qc_result.final_text)
         except QCParseError as exc:
-            self._record_qc_parse_error(task, qc_attempt_id, qc_result, exc)
+            self._record_qc_parse_error(task, qc_attempt_id, qc_result, exc, started_at=qc_started_at)
             raise
         task.current_attempt += 1
         qc_artifact = self._write_stage_artifact(
@@ -165,8 +170,8 @@ class SubagentRuntime:
                 index=task.current_attempt,
                 stage="qc",
                 status=AttemptStatus.SUCCEEDED,
-                started_at=utc_now(),
-                finished_at=utc_now(),
+                started_at=qc_started_at,
+                finished_at=qc_finished_at,
                 provider_id=qc_result.provider,
                 model=qc_result.model,
                 effort=None,
@@ -248,7 +253,10 @@ class SubagentRuntime:
         attempt_id: str,
         result: LLMGenerateResult,
         error: QCParseError,
+        *,
+        started_at: datetime,
     ) -> None:
+        finished_at = utc_now()
         task.current_attempt += 1
         artifact = self._write_stage_artifact(
             task,
@@ -264,8 +272,8 @@ class SubagentRuntime:
                 index=task.current_attempt,
                 stage="qc",
                 status=AttemptStatus.FAILED,
-                started_at=utc_now(),
-                finished_at=utc_now(),
+                started_at=started_at,
+                finished_at=finished_at,
                 provider_id=result.provider,
                 model=result.model,
                 route_role="qc",
