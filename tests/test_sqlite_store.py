@@ -306,3 +306,64 @@ def test_delete_runtime_lease_releases_slot(tmp_path):
     )
     assert store.save_runtime_lease(b) is True
     store.close()
+
+
+def test_coordination_record_append_and_list(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    store.append_coordination_record("rule_updates", {"id": 1, "project_id": "p"})
+    store.append_coordination_record("rule_updates", {"id": 2, "project_id": "p"})
+    store.append_coordination_record("long_tail_issues", {"id": 3, "project_id": "p"})
+
+    rules = store.list_coordination_records("rule_updates")
+    assert [r["id"] for r in rules] == [1, 2]
+    long_tail = store.list_coordination_records("long_tail_issues")
+    assert [r["id"] for r in long_tail] == [3]
+    store.close()
+
+
+def test_runtime_heartbeat_roundtrip(tmp_path):
+    from datetime import datetime, timezone
+    store = SqliteStore.open(tmp_path)
+    assert store.load_runtime_heartbeat() is None
+
+    now = datetime.now(timezone.utc)
+    store.save_runtime_heartbeat(now)
+    loaded = store.load_runtime_heartbeat()
+    assert loaded.isoformat() == now.isoformat()
+    store.close()
+
+
+def test_runtime_cycle_stats_append_and_list(tmp_path):
+    from datetime import datetime, timezone
+    from annotation_pipeline_skill.core.runtime import RuntimeCycleStats
+    store = SqliteStore.open(tmp_path)
+    s = RuntimeCycleStats(
+        cycle_id="c-1", started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        started=1, accepted=0, failed=0, capacity_available=3,
+    )
+    store.append_runtime_cycle_stats(s)
+    assert store.list_runtime_cycle_stats() == [s]
+    store.close()
+
+
+def test_runtime_snapshot_save_and_load(tmp_path):
+    from datetime import datetime, timezone
+    from annotation_pipeline_skill.core.runtime import (
+        CapacitySnapshot, QueueCounts, RuntimeSnapshot, RuntimeStatus,
+    )
+    store = SqliteStore.open(tmp_path)
+    snap = RuntimeSnapshot(
+        generated_at=datetime.now(timezone.utc),
+        runtime_status=RuntimeStatus(healthy=True, heartbeat_at=None, heartbeat_age_seconds=None, active=False),
+        queue_counts=QueueCounts(
+            pending=0, annotating=0, validating=0, qc=0, human_review=0, accepted=0, rejected=0,
+        ),
+        active_runs=[], capacity=CapacitySnapshot(
+            max_concurrent_tasks=4, max_starts_per_cycle=2, active_count=0, available_slots=4,
+        ),
+        stale_tasks=[], due_retries=[], project_summaries=[], cycle_stats=[],
+    )
+    store.save_runtime_snapshot(snap)
+    assert store.load_runtime_snapshot() == snap
+    store.close()

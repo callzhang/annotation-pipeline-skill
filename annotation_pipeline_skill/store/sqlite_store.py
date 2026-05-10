@@ -14,7 +14,12 @@ from annotation_pipeline_skill.core.models import (
     OutboxRecord,
     Task,
 )
-from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeLease
+from annotation_pipeline_skill.core.runtime import (
+    ActiveRun,
+    RuntimeCycleStats,
+    RuntimeLease,
+    RuntimeSnapshot,
+)
 from annotation_pipeline_skill.core.states import TaskStatus
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -446,3 +451,68 @@ class SqliteStore:
 
     def delete_runtime_lease(self, lease_id: str) -> None:
         self._conn.execute("DELETE FROM runtime_leases WHERE lease_id = ?", (lease_id,))
+
+    def append_coordination_record(self, kind: str, record: dict) -> None:
+        self._conn.execute(
+            "INSERT INTO coordination_records (kind, record_json, created_at) VALUES (?, ?, ?)",
+            (kind, json.dumps(record, sort_keys=True), record.get("created_at") or ""),
+        )
+
+    def list_coordination_records(self, kind: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT record_json FROM coordination_records WHERE kind = ? ORDER BY rowid_pk",
+            (kind,),
+        ).fetchall()
+        return [json.loads(r["record_json"]) for r in rows]
+
+    @property
+    def _runtime_dir(self) -> Path:
+        return self.root / "runtime"
+
+    @property
+    def _runtime_heartbeat_path(self) -> Path:
+        return self._runtime_dir / "heartbeat.json"
+
+    @property
+    def _runtime_cycle_path(self) -> Path:
+        return self._runtime_dir / "cycle_stats.jsonl"
+
+    @property
+    def _runtime_snapshot_path(self) -> Path:
+        return self._runtime_dir / "runtime_snapshot.json"
+
+    def save_runtime_heartbeat(self, heartbeat_at) -> None:
+        self._runtime_heartbeat_path.write_text(
+            json.dumps({"heartbeat_at": heartbeat_at.isoformat()}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def load_runtime_heartbeat(self):
+        from datetime import datetime
+        if not self._runtime_heartbeat_path.exists():
+            return None
+        payload = json.loads(self._runtime_heartbeat_path.read_text(encoding="utf-8"))
+        return datetime.fromisoformat(payload["heartbeat_at"])
+
+    def append_runtime_cycle_stats(self, stats) -> None:
+        with self._runtime_cycle_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(stats.to_dict(), sort_keys=True) + "\n")
+
+    def list_runtime_cycle_stats(self):
+        if not self._runtime_cycle_path.exists():
+            return []
+        return [
+            RuntimeCycleStats.from_dict(json.loads(line))
+            for line in self._runtime_cycle_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def save_runtime_snapshot(self, snap) -> None:
+        self._runtime_snapshot_path.write_text(
+            json.dumps(snap.to_dict(), sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def load_runtime_snapshot(self):
+        if not self._runtime_snapshot_path.exists():
+            return None
+        return RuntimeSnapshot.from_dict(json.loads(self._runtime_snapshot_path.read_text(encoding="utf-8")))
