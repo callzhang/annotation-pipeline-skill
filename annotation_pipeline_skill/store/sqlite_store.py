@@ -11,6 +11,7 @@ from annotation_pipeline_skill.core.models import (
     AuditEvent,
     FeedbackDiscussionEntry,
     FeedbackRecord,
+    OutboxRecord,
     Task,
 )
 from annotation_pipeline_skill.core.states import TaskStatus
@@ -325,3 +326,50 @@ class SqliteStore:
             })
             for r in rows
         ]
+
+    def save_outbox(self, record) -> None:
+        d = record.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO outbox_records (
+                record_id, task_id, kind, payload_json, status,
+                retry_count, next_retry_at, last_error, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(record_id) DO UPDATE SET
+                kind=excluded.kind,
+                payload_json=excluded.payload_json,
+                status=excluded.status,
+                retry_count=excluded.retry_count,
+                next_retry_at=excluded.next_retry_at,
+                last_error=excluded.last_error
+            """,
+            (
+                d["record_id"], d["task_id"], d["kind"],
+                json.dumps(d["payload"], sort_keys=True),
+                d["status"], d["retry_count"], d["next_retry_at"], d["last_error"], d["created_at"],
+            ),
+        )
+
+    def _row_to_outbox(self, r):
+        return OutboxRecord.from_dict({
+            "record_id": r["record_id"], "task_id": r["task_id"], "kind": r["kind"],
+            "payload": json.loads(r["payload_json"]), "status": r["status"],
+            "retry_count": r["retry_count"], "next_retry_at": r["next_retry_at"],
+            "last_error": r["last_error"], "created_at": r["created_at"],
+        })
+
+    def list_outbox(self):
+        rows = self._conn.execute("SELECT * FROM outbox_records ORDER BY created_at").fetchall()
+        return [self._row_to_outbox(r) for r in rows]
+
+    def list_pending_outbox(self, *, now):
+        rows = self._conn.execute(
+            """
+            SELECT * FROM outbox_records
+            WHERE status = ?
+              AND (next_retry_at IS NULL OR next_retry_at <= ?)
+            ORDER BY created_at
+            """,
+            ("pending", now.isoformat()),
+        ).fetchall()
+        return [self._row_to_outbox(r) for r in rows]

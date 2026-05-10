@@ -190,3 +190,46 @@ def test_append_and_list_artifact(tmp_path):
     store.append_artifact(a)
     assert store.list_artifacts("task-1") == [a]
     store.close()
+
+
+from annotation_pipeline_skill.core.models import OutboxRecord
+from annotation_pipeline_skill.core.states import OutboxKind, OutboxStatus
+
+
+def test_save_and_list_outbox(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    rec = OutboxRecord.new("task-1", OutboxKind.STATUS, {"foo": "bar"})
+    store.save_outbox(rec)
+
+    listed = store.list_outbox()
+    assert len(listed) == 1 and listed[0] == rec
+    store.close()
+
+
+def test_save_outbox_is_upsert(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    rec = OutboxRecord.new("task-1", OutboxKind.STATUS, {"foo": "bar"})
+    store.save_outbox(rec)
+    rec.status = OutboxStatus.SENT
+    store.save_outbox(rec)
+
+    listed = store.list_outbox()
+    assert listed[0].status is OutboxStatus.SENT
+    store.close()
+
+
+def test_list_pending_outbox_filters_by_status_and_retry(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    store = SqliteStore.open(tmp_path)
+
+    a = OutboxRecord.new("t-1", OutboxKind.STATUS, {})
+    b = OutboxRecord.new("t-2", OutboxKind.STATUS, {})
+    b.status = OutboxStatus.SENT
+    c = OutboxRecord.new("t-3", OutboxKind.STATUS, {})
+    c.next_retry_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    for r in (a, b, c):
+        store.save_outbox(r)
+
+    pending = store.list_pending_outbox(now=datetime.now(timezone.utc))
+    assert [r.record_id for r in pending] == [a.record_id]
+    store.close()
