@@ -14,6 +14,7 @@ from annotation_pipeline_skill.core.models import (
     OutboxRecord,
     Task,
 )
+from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeLease
 from annotation_pipeline_skill.core.states import TaskStatus
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -373,3 +374,75 @@ class SqliteStore:
             ("pending", now.isoformat()),
         ).fetchall()
         return [self._row_to_outbox(r) for r in rows]
+
+    def save_active_run(self, run) -> None:
+        d = run.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO active_runs (
+                run_id, task_id, stage, attempt_id, provider_target,
+                started_at, heartbeat_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                stage=excluded.stage,
+                attempt_id=excluded.attempt_id,
+                provider_target=excluded.provider_target,
+                heartbeat_at=excluded.heartbeat_at,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                d["run_id"], d["task_id"], d["stage"], d["attempt_id"], d["provider_target"],
+                d["started_at"], d["heartbeat_at"],
+                json.dumps(d["metadata"], sort_keys=True),
+            ),
+        )
+
+    def list_active_runs(self):
+        rows = self._conn.execute("SELECT * FROM active_runs ORDER BY started_at").fetchall()
+        return [
+            ActiveRun.from_dict({
+                "run_id": r["run_id"], "task_id": r["task_id"], "stage": r["stage"],
+                "attempt_id": r["attempt_id"], "provider_target": r["provider_target"],
+                "started_at": r["started_at"], "heartbeat_at": r["heartbeat_at"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+
+    def delete_active_run(self, run_id: str) -> None:
+        self._conn.execute("DELETE FROM active_runs WHERE run_id = ?", (run_id,))
+
+    def save_runtime_lease(self, lease) -> bool:
+        d = lease.to_dict()
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO runtime_leases (
+                    lease_id, task_id, stage, acquired_at, heartbeat_at,
+                    expires_at, owner, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    d["lease_id"], d["task_id"], d["stage"],
+                    d["acquired_at"], d["heartbeat_at"], d["expires_at"], d["owner"],
+                    json.dumps(d["metadata"], sort_keys=True),
+                ),
+            )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def list_runtime_leases(self):
+        rows = self._conn.execute("SELECT * FROM runtime_leases ORDER BY acquired_at").fetchall()
+        return [
+            RuntimeLease.from_dict({
+                "lease_id": r["lease_id"], "task_id": r["task_id"], "stage": r["stage"],
+                "acquired_at": r["acquired_at"], "heartbeat_at": r["heartbeat_at"],
+                "expires_at": r["expires_at"], "owner": r["owner"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+
+    def delete_runtime_lease(self, lease_id: str) -> None:
+        self._conn.execute("DELETE FROM runtime_leases WHERE lease_id = ?", (lease_id,))

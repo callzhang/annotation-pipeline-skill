@@ -233,3 +233,76 @@ def test_list_pending_outbox_filters_by_status_and_retry(tmp_path):
     pending = store.list_pending_outbox(now=datetime.now(timezone.utc))
     assert [r.record_id for r in pending] == [a.record_id]
     store.close()
+
+
+from datetime import datetime, timedelta, timezone
+
+from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeLease
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def test_active_run_save_list_delete(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    run = ActiveRun(
+        run_id="run-1", task_id="t-1", stage="annotate", attempt_id="a-1",
+        provider_target="local", started_at=_now(), heartbeat_at=_now(),
+    )
+    store.save_active_run(run)
+    assert store.list_active_runs() == [run]
+
+    store.delete_active_run("run-1")
+    assert store.list_active_runs() == []
+    store.close()
+
+
+def test_save_runtime_lease_returns_true_on_first_acquire(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    lease = RuntimeLease(
+        lease_id="L1", task_id="t-1", stage="annotate",
+        acquired_at=_now(), heartbeat_at=_now(), expires_at=_now() + timedelta(minutes=10),
+        owner="worker-A",
+    )
+    assert store.save_runtime_lease(lease) is True
+    assert len(store.list_runtime_leases()) == 1
+    store.close()
+
+
+def test_save_runtime_lease_returns_false_when_task_stage_locked(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    a = RuntimeLease(
+        lease_id="L1", task_id="t-1", stage="annotate",
+        acquired_at=_now(), heartbeat_at=_now(), expires_at=_now() + timedelta(minutes=10),
+        owner="worker-A",
+    )
+    b = RuntimeLease(
+        lease_id="L2", task_id="t-1", stage="annotate",
+        acquired_at=_now(), heartbeat_at=_now(), expires_at=_now() + timedelta(minutes=10),
+        owner="worker-B",
+    )
+    assert store.save_runtime_lease(a) is True
+    assert store.save_runtime_lease(b) is False
+    leases = store.list_runtime_leases()
+    assert [l.owner for l in leases] == ["worker-A"]
+    store.close()
+
+
+def test_delete_runtime_lease_releases_slot(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    a = RuntimeLease(
+        lease_id="L1", task_id="t-1", stage="annotate",
+        acquired_at=_now(), heartbeat_at=_now(), expires_at=_now() + timedelta(minutes=10),
+        owner="worker-A",
+    )
+    store.save_runtime_lease(a)
+    store.delete_runtime_lease("L1")
+
+    b = RuntimeLease(
+        lease_id="L2", task_id="t-1", stage="annotate",
+        acquired_at=_now(), heartbeat_at=_now(), expires_at=_now() + timedelta(minutes=10),
+        owner="worker-B",
+    )
+    assert store.save_runtime_lease(b) is True
+    store.close()
