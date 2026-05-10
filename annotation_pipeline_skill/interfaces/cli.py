@@ -35,14 +35,14 @@ from annotation_pipeline_skill.services.export_service import TrainingDataExport
 from annotation_pipeline_skill.services.human_review_service import HumanReviewService
 from annotation_pipeline_skill.services.outbox_dispatch_service import OutboxDispatchService, build_outbox_summary
 from annotation_pipeline_skill.services.readiness_service import build_readiness_report
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 @dataclass(frozen=True)
 class RuntimeCliContext:
     project_root: Path
     config: ProjectConfig
-    store: FileStore
+    store: SqliteStore
     registry: object
 
 
@@ -520,7 +520,7 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be > 0")
     validate_qc_sample_options(args.qc_sample_count, args.qc_sample_ratio)
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     rows = read_jsonl(args.source)
     task_prefix = args.task_prefix or args.pipeline_id
     batches = build_batches(rows, batch_size=args.batch_size, group_by=args.group_by)
@@ -561,7 +561,7 @@ def handle_create_tasks(args: argparse.Namespace) -> int:
 
 def handle_import_annotation_manager_v2(args: argparse.Namespace) -> int:
     validate_qc_sample_options(args.qc_sample_count, args.qc_sample_ratio)
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     statuses = set(args.status or ["accepted", "merged"])
     task_prefix = args.task_prefix or args.pipeline_id
     imported = 0
@@ -632,7 +632,7 @@ def _read_annotation_manager_v2_rows(output_file: Path) -> list[dict]:
 
 def _save_annotation_manager_v2_task(
     *,
-    store: FileStore,
+    store: SqliteStore,
     pipeline_id: str,
     task_id: str,
     source_task: dict,
@@ -782,7 +782,7 @@ def _save_annotation_manager_v2_task(
 
 def handle_document_create(args: argparse.Namespace) -> int:
     from annotation_pipeline_skill.core.models import AnnotationDocument
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     doc = AnnotationDocument.new(
         title=args.title,
         description=args.description,
@@ -794,7 +794,7 @@ def handle_document_create(args: argparse.Namespace) -> int:
 
 
 def handle_document_list(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     docs = store.list_documents()
     print(json.dumps({"documents": [doc.to_dict() for doc in docs]}, sort_keys=True, indent=2))
     return 0
@@ -802,7 +802,7 @@ def handle_document_list(args: argparse.Namespace) -> int:
 
 def handle_document_version_add(args: argparse.Namespace) -> int:
     from annotation_pipeline_skill.core.models import AnnotationDocumentVersion
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     content = args.content_file.read_text(encoding="utf-8")
     ver = AnnotationDocumentVersion.new(
         document_id=args.document_id,
@@ -817,14 +817,14 @@ def handle_document_version_add(args: argparse.Namespace) -> int:
 
 
 def handle_document_version_list(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     versions = store.list_document_versions(args.document_id)
     print(json.dumps({"versions": [v.to_dict() for v in versions]}, sort_keys=True, indent=2))
     return 0
 
 
 def handle_document_version_show(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     ver = store.load_document_version(args.version_id)
     print(json.dumps(ver.to_dict(), sort_keys=True, indent=2))
     return 0
@@ -922,7 +922,7 @@ def handle_runtime_once(args: argparse.Namespace) -> int:
 
 def handle_runtime_status(args: argparse.Namespace) -> int:
     runtime_config = load_runtime_config(args.project_root)
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     snapshot = store.load_runtime_snapshot()
     if snapshot is None:
         snapshot = build_runtime_snapshot(store, runtime_config)
@@ -981,9 +981,9 @@ def handle_provider_targets(args: argparse.Namespace) -> int:
 
 
 def handle_export_training_data(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     export_id = args.export_id
-    output_dir = args.output_dir or store.exports_dir / (export_id or args.project_id)
+    output_dir = args.output_dir or store.root / "exports" / (export_id or args.project_id)
     manifest = TrainingDataExportService(store).export_jsonl(
         project_id=args.project_id,
         output_dir=output_dir,
@@ -995,13 +995,13 @@ def handle_export_training_data(args: argparse.Namespace) -> int:
 
 
 def handle_report_readiness(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     print(json.dumps(build_readiness_report(store, args.project_id), sort_keys=True, indent=2))
     return 0
 
 
 def handle_outbox_status(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     print(json.dumps(build_outbox_summary(store), sort_keys=True, indent=2))
     return 0
 
@@ -1009,7 +1009,7 @@ def handle_outbox_status(args: argparse.Namespace) -> int:
 def handle_outbox_drain(args: argparse.Namespace) -> int:
     config_root = args.project_root / ".annotation-pipeline"
     callbacks_data = read_yaml(config_root / "callbacks.yaml")
-    store = FileStore(config_root)
+    store = SqliteStore.open(config_root)
     result = OutboxDispatchService(
         store,
         callbacks=callbacks_data.get("callbacks", {}),
@@ -1023,7 +1023,7 @@ def handle_outbox_drain(args: argparse.Namespace) -> int:
 
 
 def handle_human_review_decide(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     result = HumanReviewService(store).decide(
         task_id=args.task_id,
         action=args.action,
@@ -1036,14 +1036,14 @@ def handle_human_review_decide(args: argparse.Namespace) -> int:
 
 
 def handle_coordinator_report(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     report = CoordinatorService(store).build_report(project_id=args.project_id)
     print(json.dumps(report, sort_keys=True, indent=2))
     return 0
 
 
 def handle_coordinator_rule_update(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     record = CoordinatorService(store).record_rule_update(
         project_id=args.project_id,
         source=args.source,
@@ -1057,7 +1057,7 @@ def handle_coordinator_rule_update(args: argparse.Namespace) -> int:
 
 
 def handle_coordinator_long_tail_issue(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     record = CoordinatorService(store).record_long_tail_issue(
         project_id=args.project_id,
         category=args.category,
@@ -1072,7 +1072,7 @@ def handle_coordinator_long_tail_issue(args: argparse.Namespace) -> int:
 
 
 def handle_task_unblock(args: argparse.Namespace) -> int:
-    store = FileStore(args.project_root / ".annotation-pipeline")
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     task = store.load_task(args.task_id)
     event = transition_task(
         task,
@@ -1090,7 +1090,7 @@ def handle_task_unblock(args: argparse.Namespace) -> int:
 def handle_external_pull(args: argparse.Namespace) -> int:
     config_root = args.project_root / ".annotation-pipeline"
     external_data = read_yaml(config_root / "external_tasks.yaml").get("external_tasks", {})
-    store = FileStore(config_root)
+    store = SqliteStore.open(config_root)
     result = ExternalTaskService(store).pull_http_tasks(
         pipeline_id=args.project_id,
         source_id=args.source_id,
@@ -1133,7 +1133,7 @@ def handle_serve(args: argparse.Namespace) -> int:
     if not stores_map:
         print(json.dumps({"error": "no_projects_found", "workspace": str(args.workspace)}))
         return 1
-    file_stores = {key: FileStore(path / ".annotation-pipeline") for key, path in stores_map.items()}
+    file_stores = {key: SqliteStore.open(path / ".annotation-pipeline") for key, path in stores_map.items()}
     default_key = next(iter(file_stores))
     default_store = file_stores[default_key]
     runtime_once = None
@@ -1193,7 +1193,7 @@ def _runtime_context(project_root: Path) -> RuntimeCliContext:
     return RuntimeCliContext(
         project_root=project_root,
         config=config,
-        store=FileStore(config_root),
+        store=SqliteStore.open(config_root),
         registry=registry,
     )
 

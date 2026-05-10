@@ -7,7 +7,7 @@ from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime, Su
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 class StubLLMClient:
@@ -32,7 +32,7 @@ class StubLLMClient:
 
 
 def test_subagent_runtime_runs_annotation_and_qc_before_accepting(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -63,7 +63,7 @@ def test_subagent_runtime_runs_annotation_and_qc_before_accepting(tmp_path):
 
 
 def test_subagent_runtime_accepts_markdown_fenced_qc_json(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -81,7 +81,7 @@ def test_subagent_runtime_accepts_markdown_fenced_qc_json(tmp_path):
 
 
 def test_subagent_runtime_records_qc_feedback_and_returns_task_to_pending(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -110,7 +110,7 @@ def test_subagent_runtime_records_qc_feedback_and_returns_task_to_pending(tmp_pa
 
 
 def test_local_scheduler_records_qc_parse_error_without_annotator_feedback_and_retries_qc(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -144,7 +144,7 @@ def test_local_scheduler_records_qc_parse_error_without_annotator_feedback_and_r
 
 
 def test_subagent_runtime_qc_prompt_includes_task_qc_sampling_policy(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(
         task_id="task-1",
         pipeline_id="pipe",
@@ -176,7 +176,7 @@ def test_subagent_runtime_qc_prompt_includes_task_qc_sampling_policy(tmp_path):
 
 
 def test_subagent_runtime_rerun_prompt_includes_feedback_context(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.PENDING
     store.save_task(task)

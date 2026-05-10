@@ -11,11 +11,11 @@ from annotation_pipeline_skill.core.runtime import (
 )
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.services.dashboard_service import build_project_summaries
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def build_runtime_snapshot(
-    store: FileStore,
+    store: SqliteStore,
     config: RuntimeConfig,
     *,
     now: datetime | None = None,

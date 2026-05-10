@@ -3,11 +3,11 @@ import json
 from annotation_pipeline_skill.core.models import ArtifactRef, ExportManifest, FeedbackRecord, Task
 from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, OutboxKind, TaskStatus
 from annotation_pipeline_skill.services.readiness_service import build_readiness_report
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_readiness_report_recommends_export_when_accepted_tasks_are_exportable(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -42,7 +42,7 @@ def test_readiness_report_recommends_export_when_accepted_tasks_are_exportable(t
 
 
 def test_readiness_report_prioritizes_feedback_and_export_blockers(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     accepted_missing = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     accepted_missing.status = TaskStatus.ACCEPTED
     review_task = Task.new(task_id="task-2", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -73,7 +73,7 @@ def test_readiness_report_prioritizes_feedback_and_export_blockers(tmp_path):
 
 
 def test_readiness_report_marks_project_ready_after_export(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -104,7 +104,7 @@ def test_readiness_report_marks_project_ready_after_export(tmp_path):
 
 
 def test_readiness_report_surfaces_latest_export_invalid_row_blockers(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -145,7 +145,7 @@ def test_readiness_report_surfaces_latest_export_invalid_row_blockers(tmp_path):
 def test_readiness_report_waits_for_external_outbox_after_export(tmp_path):
     from annotation_pipeline_skill.core.models import OutboxRecord
 
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -177,7 +177,7 @@ def test_readiness_report_blocks_on_dead_letter_outbox(tmp_path):
     from annotation_pipeline_skill.core.models import OutboxRecord
     from annotation_pipeline_skill.core.states import OutboxStatus
 
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)

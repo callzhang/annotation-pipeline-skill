@@ -1,9 +1,8 @@
-import json
 from datetime import datetime, timezone
 
 from annotation_pipeline_skill.core.models import Task
 from annotation_pipeline_skill.core.states import TaskStatus
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 KANBAN_COLUMNS: list[tuple[str, str, TaskStatus]] = [
@@ -40,7 +39,7 @@ def operator_stage(task: Task) -> str:
     return "pending"
 
 
-def build_kanban_snapshot(store: FileStore, project_id: str | None = None, stage_view: str = "internal") -> dict:
+def build_kanban_snapshot(store: SqliteStore, project_id: str | None = None, stage_view: str = "internal") -> dict:
     tasks = sorted(store.list_tasks(), key=lambda task: task.created_at)
     if project_id is not None:
         tasks = [task for task in tasks if task.pipeline_id == project_id]
@@ -72,7 +71,7 @@ def build_kanban_snapshot(store: FileStore, project_id: str | None = None, stage
     }
 
 
-def build_project_summaries(store: FileStore) -> dict:
+def build_project_summaries(store: SqliteStore) -> dict:
     summaries: dict[str, dict] = {}
     for task in store.list_tasks():
         summary = summaries.setdefault(
@@ -95,19 +94,16 @@ def build_project_summaries(store: FileStore) -> dict:
     }
 
 
-def _dashboard_index(store: FileStore) -> dict:
+def _dashboard_index(store: SqliteStore) -> dict:
     attempts_by_task: dict[str, list[dict]] = {}
-    for path in sorted(store.attempts_dir.glob("*.jsonl")):
-        task_id = path.stem
-        attempts_by_task[task_id] = [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    feedback_counts = {
-        path.stem: sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
-        for path in sorted(store.feedback_dir.glob("*.jsonl"))
-    }
+    feedback_counts: dict[str, int] = {}
+    for task in store.list_tasks():
+        attempts = store.list_attempts(task.task_id)
+        if attempts:
+            attempts_by_task[task.task_id] = [attempt.to_dict() for attempt in attempts]
+        feedback = store.list_feedback(task.task_id)
+        if feedback:
+            feedback_counts[task.task_id] = len(feedback)
     pending_outbox_task_ids = {
         record.task_id
         for record in store.list_outbox()

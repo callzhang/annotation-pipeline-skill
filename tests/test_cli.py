@@ -6,7 +6,7 @@ from threading import Thread
 import annotation_pipeline_skill.config.loader as config_loader
 import annotation_pipeline_skill.interfaces.cli as cli
 from annotation_pipeline_skill.interfaces.cli import main
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 @contextmanager
@@ -166,7 +166,7 @@ def test_cli_create_tasks_from_jsonl(tmp_path):
         ]
     )
 
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     tasks = store.list_tasks()
     assert exit_code == 0
     assert [task.task_id for task in tasks] == ["demo-000001", "demo-000002"]
@@ -205,7 +205,7 @@ def test_cli_create_batched_jsonl_tasks(tmp_path):
         ]
     )
 
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     tasks = store.list_tasks()
     assert exit_code == 0
     assert [task.task_id for task in tasks] == [
@@ -247,7 +247,7 @@ def test_cli_create_batched_jsonl_tasks_with_qc_sample_count(tmp_path):
         ]
     )
 
-    task = FileStore(tmp_path / ".annotation-pipeline").load_task("sample-count-000001")
+    task = SqliteStore.open(tmp_path / ".annotation-pipeline").load_task("sample-count-000001")
     assert exit_code == 0
     assert task.metadata["qc_policy"] == {
         "mode": "sample_count",
@@ -285,7 +285,7 @@ def test_cli_create_batched_jsonl_tasks_with_qc_sample_ratio(tmp_path):
         ]
     )
 
-    task = FileStore(tmp_path / ".annotation-pipeline").load_task("sample-ratio-000001")
+    task = SqliteStore.open(tmp_path / ".annotation-pipeline").load_task("sample-ratio-000001")
     assert exit_code == 0
     assert task.metadata["qc_policy"]["mode"] == "sample_ratio"
     assert task.metadata["qc_policy"]["sample_ratio"] == 0.4
@@ -348,7 +348,7 @@ def test_cli_create_batched_jsonl_tasks_does_not_cross_group_boundaries(tmp_path
         ]
     )
 
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     tasks = store.list_tasks()
     assert exit_code == 0
     assert [task.source_ref["row_count"] for task in tasks] == [2, 1, 2]
@@ -419,7 +419,7 @@ def test_cli_import_annotation_manager_v2_queues_imported_annotations_for_qc(tmp
     )
 
     payload = json.loads(capsys.readouterr().out)
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = store.load_task("memory-ner-v2-review-000001")
     artifacts = store.list_artifacts(task.task_id)
     attempts = store.list_attempts(task.task_id)
@@ -446,7 +446,7 @@ def test_cli_export_training_data_writes_manifest(tmp_path, capsys):
     from annotation_pipeline_skill.core.states import TaskStatus
 
     main(["init", "--project-root", str(tmp_path)])
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     source = tmp_path / "input.jsonl"
     source.write_text(json.dumps({"text": "alpha"}) + "\n", encoding="utf-8")
     main(
@@ -500,7 +500,7 @@ def test_cli_report_readiness_returns_project_action(tmp_path, capsys):
     from annotation_pipeline_skill.core.states import TaskStatus
 
     main(["init", "--project-root", str(tmp_path)])
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -519,7 +519,7 @@ def test_cli_outbox_status_reports_counts(tmp_path, capsys):
     from annotation_pipeline_skill.core.states import OutboxKind
 
     main(["init", "--project-root", str(tmp_path)])
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     store.save_outbox(OutboxRecord.new(task_id="task-1", kind=OutboxKind.SUBMIT, payload={}))
 
     exit_code = main(["outbox", "status", "--project-root", str(tmp_path)])
@@ -535,7 +535,7 @@ def test_cli_human_review_request_changes_returns_task_to_annotating(tmp_path, c
     from annotation_pipeline_skill.core.states import TaskStatus
 
     main(["init", "--project-root", str(tmp_path)])
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.HUMAN_REVIEW
     store.save_task(task)
@@ -600,7 +600,7 @@ def test_cli_external_pull_uses_configured_http_source(tmp_path, capsys):
         )
 
     payload = json.loads(capsys.readouterr().out)
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     assert exit_code == 0
     assert payload["created"] == 1
     assert store.list_tasks()[0].pipeline_id == "pipe"

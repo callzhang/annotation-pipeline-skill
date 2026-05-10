@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -50,10 +51,10 @@ def _row_to_task(row: sqlite3.Row) -> Task:
 
 
 class SqliteStore:
-    def __init__(self, root: Path | str, conn: sqlite3.Connection):
+    def __init__(self, root: Path | str, db_path: Path):
         self.root = Path(root)
-        self._conn = conn
-        self._conn.row_factory = sqlite3.Row
+        self._db_path = Path(db_path)
+        self._local = threading.local()
 
     @classmethod
     def open(cls, root: Path | str) -> "SqliteStore":
@@ -63,17 +64,36 @@ class SqliteStore:
             (root_path / sub).mkdir(parents=True, exist_ok=True)
         db_path = root_path / "db.sqlite"
         first_time = not db_path.exists()
-        conn = sqlite3.connect(db_path, isolation_level=None, timeout=5.0)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        store = cls(root_path, db_path)
+        # Open one connection now to apply schema if first_time.
+        conn = store._conn
         if first_time:
             conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
-        return cls(root_path, conn)
+        return store
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(
+                self._db_path,
+                isolation_level=None,
+                timeout=5.0,
+                check_same_thread=False,
+            )
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
 
     def close(self) -> None:
-        self._conn.close()
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            del self._local.conn
 
     def save_task(self, task: Task) -> None:
         d = task.to_dict()

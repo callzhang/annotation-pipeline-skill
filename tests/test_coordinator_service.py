@@ -1,10 +1,10 @@
 from annotation_pipeline_skill.core.models import FeedbackRecord, Task
 from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, TaskStatus
 from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
-def _task(store: FileStore, task_id: str, status: TaskStatus) -> Task:
+def _task(store: SqliteStore, task_id: str, status: TaskStatus) -> Task:
     task = Task.new(
         task_id=task_id,
         pipeline_id="pipe",
@@ -17,7 +17,7 @@ def _task(store: FileStore, task_id: str, status: TaskStatus) -> Task:
 
 
 def test_coordinator_report_summarizes_review_feedback_and_actions(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     _task(store, "task-1", TaskStatus.HUMAN_REVIEW)
     _task(store, "task-2", TaskStatus.ACCEPTED)
     store.append_feedback(
@@ -46,7 +46,7 @@ def test_coordinator_report_summarizes_review_feedback_and_actions(tmp_path):
 
 
 def test_coordinator_records_rule_updates_and_long_tail_issues(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     service = CoordinatorService(store)
 
     rule = service.record_rule_update(

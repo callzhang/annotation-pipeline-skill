@@ -3,7 +3,7 @@ from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.llm.client import LLMGenerateResult
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 class StubLLMClient:
@@ -46,7 +46,7 @@ class FailingDiagnosticLLMClient:
 
 
 def test_local_runtime_scheduler_respects_max_starts_per_cycle(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     for index in range(1, 4):
         task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
         task.status = TaskStatus.PENDING
@@ -69,7 +69,7 @@ def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
     from datetime import datetime, timezone
     from annotation_pipeline_skill.core.runtime import ActiveRun
 
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
@@ -99,7 +99,7 @@ def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
 
 
 def test_local_runtime_scheduler_cleans_active_run_after_success(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -116,7 +116,7 @@ def test_local_runtime_scheduler_cleans_active_run_after_success(tmp_path):
 
 
 def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -147,7 +147,7 @@ def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
 
 
 def test_local_runtime_scheduler_preserves_provider_failure_diagnostics(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
     store.save_task(task)

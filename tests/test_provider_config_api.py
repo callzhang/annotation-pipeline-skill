@@ -3,7 +3,7 @@ import sys
 
 from annotation_pipeline_skill.interfaces.api import DashboardApi
 from annotation_pipeline_skill.interfaces.cli import main
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_provider_config_api_returns_profiles_targets_and_local_diagnostics(tmp_path, monkeypatch):
@@ -32,7 +32,7 @@ limits:
         encoding="utf-8",
     )
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    api = DashboardApi(FileStore(tmp_path / ".annotation-pipeline"))
+    api = DashboardApi(SqliteStore.open(tmp_path / ".annotation-pipeline"))
 
     status, _headers, body = api.handle_get("/api/providers")
 
@@ -50,7 +50,7 @@ limits:
 
 def test_provider_config_api_saves_structured_provider_configuration(tmp_path):
     main(["init", "--project-root", str(tmp_path)])
-    api = DashboardApi(FileStore(tmp_path / ".annotation-pipeline"))
+    api = DashboardApi(SqliteStore.open(tmp_path / ".annotation-pipeline"))
 
     status, _headers, body = api.handle_put(
         "/api/providers",

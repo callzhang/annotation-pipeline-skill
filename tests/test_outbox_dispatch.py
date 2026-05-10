@@ -7,7 +7,7 @@ from annotation_pipeline_skill.services.outbox_dispatch_service import (
     RetryableOutboxError,
     OutboxDispatchService,
 )
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def callbacks(url: str = "http://callback.local/submit") -> dict:
@@ -18,7 +18,7 @@ def callbacks(url: str = "http://callback.local/submit") -> dict:
 
 
 def test_outbox_dispatch_marks_submit_record_sent_and_writes_event(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -42,7 +42,7 @@ def test_outbox_dispatch_marks_submit_record_sent_and_writes_event(tmp_path):
 
 def test_outbox_dispatch_retryable_failure_sets_next_retry(tmp_path):
     now = utc_now()
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -69,7 +69,7 @@ def test_outbox_dispatch_retryable_failure_sets_next_retry(tmp_path):
 
 
 def test_outbox_dispatch_moves_retry_exhaustion_to_dead_letter(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -91,7 +91,7 @@ def test_outbox_dispatch_moves_retry_exhaustion_to_dead_letter(tmp_path):
 
 
 def test_outbox_dispatch_permanent_failure_dead_letters_immediately(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -110,7 +110,7 @@ def test_outbox_dispatch_permanent_failure_dead_letters_immediately(tmp_path):
 
 def test_outbox_dispatch_skips_not_due_records(tmp_path):
     now = utc_now()
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     record = OutboxRecord.new(task_id="task-1", kind=OutboxKind.SUBMIT, payload={})
     record.next_retry_at = now + timedelta(seconds=60)
     store.save_outbox(record)

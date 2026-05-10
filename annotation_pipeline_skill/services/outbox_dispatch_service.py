@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from annotation_pipeline_skill.core.models import AuditEvent, OutboxRecord
 from annotation_pipeline_skill.core.states import OutboxStatus
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 OutboxSender = Callable[[str, dict[str, Any], dict[str, str]], dict[str, Any] | None]
 
@@ -26,7 +26,7 @@ class PermanentOutboxError(RuntimeError):
 class OutboxDispatchService:
     def __init__(
         self,
-        store: FileStore,
+        store: SqliteStore,
         *,
         callbacks: dict,
         sender: OutboxSender | None = None,
@@ -148,10 +148,10 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dic
     return json.loads(body.decode("utf-8"))
 
 
-def build_outbox_summary(store: FileStore, project_id: str | None = None) -> dict[str, Any]:
+def build_outbox_summary(store: SqliteStore, project_id: str | None = None) -> dict[str, Any]:
     task_ids = None
     if project_id is not None:
-        task_ids = {task.task_id for task in store.list_tasks() if task.pipeline_id == project_id}
+        task_ids = {t.task_id for t in store.list_tasks_by_pipeline(project_id)}
     records = [
         record.to_dict()
         for record in store.list_outbox()

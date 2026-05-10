@@ -10,11 +10,11 @@ from annotation_pipeline_skill.core.runtime import (
     RuntimeSnapshot,
     RuntimeStatus,
 )
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_file_store_saves_loads_and_deletes_active_runs(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     run = ActiveRun(
         run_id="run-1",
@@ -36,7 +36,7 @@ def test_file_store_saves_loads_and_deletes_active_runs(tmp_path):
 
 
 def test_file_store_saves_heartbeat_cycle_stats_and_snapshot(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     stats = RuntimeCycleStats(
         cycle_id="cycle-1",
@@ -70,8 +70,10 @@ def test_file_store_saves_heartbeat_cycle_stats_and_snapshot(tmp_path):
 
 
 def test_file_store_raises_for_malformed_heartbeat_file(tmp_path):
-    store = FileStore(tmp_path)
-    store._write_json(store.runtime_heartbeat_path, {})
+    store = SqliteStore.open(tmp_path)
+    heartbeat_path = store.root / "runtime" / "heartbeat.json"
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat_path.write_text("{}", encoding="utf-8")
 
     with pytest.raises(KeyError):
         store.load_runtime_heartbeat()

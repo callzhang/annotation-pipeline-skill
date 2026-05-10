@@ -9,11 +9,11 @@ from annotation_pipeline_skill.core.models import ExternalTaskRef, OutboxRecord,
 from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
 from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 class ExternalTaskService:
-    def __init__(self, store: FileStore):
+    def __init__(self, store: SqliteStore):
         self.store = store
 
     def upsert_pulled_task(
@@ -92,7 +92,7 @@ class ExternalTaskService:
         for item in tasks_data:
             external_task_id = str(item["external_task_id"])
             idempotency_key = f"{system_id}:{external_task_id}"
-            existed = (self.store.tasks_dir / f"{self._task_id_for_external(idempotency_key)}.json").exists()
+            existed = self._load_existing_task(self._task_id_for_external(idempotency_key)) is not None
             task = self.upsert_pulled_task(
                 pipeline_id=pipeline_id,
                 system_id=system_id,
@@ -145,10 +145,10 @@ class ExternalTaskService:
         return record
 
     def _load_existing_task(self, task_id: str) -> Task | None:
-        path = self.store.tasks_dir / f"{task_id}.json"
-        if not path.exists():
+        try:
+            return self.store.load_task(task_id)
+        except KeyError:
             return None
-        return self.store.load_task(task_id)
 
     def _task_id_for_external(self, idempotency_key: str) -> str:
         digest = sha256(idempotency_key.encode("utf-8")).hexdigest()[:16]

@@ -7,7 +7,7 @@ from typing import Any
 
 from annotation_pipeline_skill.core.models import ArtifactRef, ExportManifest, OutboxRecord, Task
 from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 REQUIRED_TRAINING_ROW_FIELDS = [
@@ -23,7 +23,7 @@ REQUIRED_TRAINING_ROW_FIELDS = [
 
 
 class TrainingDataExportService:
-    def __init__(self, store: FileStore):
+    def __init__(self, store: SqliteStore):
         self.store = store
 
     def export_jsonl(
@@ -40,8 +40,8 @@ class TrainingDataExportService:
 
         accepted_tasks = [
             task
-            for task in self.store.list_tasks()
-            if task.pipeline_id == project_id and task.status is TaskStatus.ACCEPTED
+            for task in self.store.list_tasks_by_pipeline(project_id)
+            if task.status is TaskStatus.ACCEPTED
         ]
         rows: list[dict[str, Any]] = []
         included: list[str] = []

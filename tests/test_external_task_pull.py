@@ -5,7 +5,7 @@ from threading import Thread
 
 from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
 from annotation_pipeline_skill.services.external_task_service import ExternalTaskService
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 @contextmanager
@@ -38,7 +38,7 @@ def pull_server(response_payload: dict):
 
 
 def test_external_http_pull_creates_pending_tasks_status_outbox_and_events(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     with pull_server(
         {
             "tasks": [
@@ -66,7 +66,7 @@ def test_external_http_pull_creates_pending_tasks_status_outbox_and_events(tmp_p
 
 
 def test_external_http_pull_applies_source_qc_sampling_policy(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     with pull_server(
         {
             "tasks": [
@@ -93,7 +93,7 @@ def test_external_http_pull_applies_source_qc_sampling_policy(tmp_path):
 
 
 def test_external_http_pull_is_idempotent_on_repeated_external_ids(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     response = {"tasks": [{"external_task_id": "ext-1", "payload": {"text": "alpha"}}]}
     with pull_server(response) as (pull_url, _requests):
         first = ExternalTaskService(store).pull_http_tasks(

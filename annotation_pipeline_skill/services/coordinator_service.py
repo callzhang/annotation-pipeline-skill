@@ -10,7 +10,7 @@ from annotation_pipeline_skill.llm.profiles import ProfileValidationError
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.services.provider_config_service import build_provider_config_snapshot
 from annotation_pipeline_skill.services.readiness_service import build_readiness_report
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 RULE_UPDATE_KIND = "rule_updates"
@@ -18,7 +18,7 @@ LONG_TAIL_KIND = "long_tail_issues"
 
 
 class CoordinatorService:
-    def __init__(self, store: FileStore):
+    def __init__(self, store: SqliteStore):
         self.store = store
 
     def build_report(self, project_id: str | None = None) -> dict[str, Any]:
@@ -133,10 +133,9 @@ class CoordinatorService:
         return _filter_project_records(self.store.list_coordination_records(LONG_TAIL_KIND), project_id)
 
     def _project_tasks(self, project_id: str | None):
-        tasks = self.store.list_tasks()
         if project_id is None:
-            return tasks
-        return [task for task in tasks if task.pipeline_id == project_id]
+            return self.store.list_tasks()
+        return self.store.list_tasks_by_pipeline(project_id)
 
     def _provider_diagnostics(self) -> dict[str, Any]:
         try:

@@ -24,7 +24,7 @@ from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.provider_config_service import build_provider_config_snapshot, save_provider_config
 from annotation_pipeline_skill.services.readiness_service import build_readiness_report
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError
 
 
@@ -41,9 +41,9 @@ CONFIG_FILE_DEFINITIONS: dict[str, str] = {
 class DashboardApi:
     def __init__(
         self,
-        store: FileStore,
+        store: SqliteStore,
         *,
-        stores: dict[str, FileStore] | None = None,
+        stores: dict[str, SqliteStore] | None = None,
         default_store_key: str | None = None,
         runtime_once: Callable[[], RuntimeSnapshot] | None = None,
         runtime_config: RuntimeConfig | None = None,
@@ -54,7 +54,7 @@ class DashboardApi:
         self.runtime_once = runtime_once
         self.runtime_config = runtime_config or RuntimeConfig()
 
-    def _resolve_store(self, query: dict[str, list[str]]) -> FileStore:
+    def _resolve_store(self, query: dict[str, list[str]]) -> SqliteStore:
         key = query.get("store", [None])[0]
         if key and key in self._stores:
             return self._stores[key]
@@ -172,7 +172,7 @@ class DashboardApi:
             })
         return result
 
-    def _runtime_snapshot(self, store: FileStore) -> RuntimeSnapshot:
+    def _runtime_snapshot(self, store: SqliteStore) -> RuntimeSnapshot:
         snapshot = store.load_runtime_snapshot()
         if snapshot is not None:
             return snapshot
@@ -191,7 +191,7 @@ class DashboardApi:
         snapshot = self.runtime_once()
         return self._json_response(200, {"ok": True, "snapshot": snapshot.to_dict()})
 
-    def _provider_config_response(self, store: FileStore) -> tuple[int, dict[str, str], bytes]:
+    def _provider_config_response(self, store: SqliteStore) -> tuple[int, dict[str, str], bytes]:
         try:
             return self._json_response(200, build_provider_config_snapshot(store.root))
         except (OSError, ProfileValidationError) as exc:
@@ -204,7 +204,7 @@ class DashboardApi:
                 },
             )
 
-    def _update_provider_config_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _update_provider_config_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -221,7 +221,7 @@ class DashboardApi:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
         return status, {"content-type": "application/json"}, body
 
-    def _document_detail_response(self, store: FileStore, document_id: str) -> tuple[int, dict[str, str], bytes]:
+    def _document_detail_response(self, store: SqliteStore, document_id: str) -> tuple[int, dict[str, str], bytes]:
         try:
             doc = store.load_document(document_id)
         except FileNotFoundError:
@@ -229,7 +229,7 @@ class DashboardApi:
         versions = store.list_document_versions(document_id)
         return self._json_response(200, {"document": doc.to_dict(), "versions": [v.to_dict() for v in versions]})
 
-    def _post_document_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_document_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -246,7 +246,7 @@ class DashboardApi:
         store.save_document(doc)
         return self._json_response(200, doc.to_dict())
 
-    def _post_document_version_response(self, store: FileStore, doc_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_document_version_response(self, store: SqliteStore, doc_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             store.load_document(doc_id)
         except FileNotFoundError:
@@ -269,7 +269,7 @@ class DashboardApi:
         store.save_document_version(ver)
         return self._json_response(200, ver.to_dict())
 
-    def _task_detail_response(self, store: FileStore, task_id: str) -> tuple[int, dict[str, str], bytes]:
+    def _task_detail_response(self, store: SqliteStore, task_id: str) -> tuple[int, dict[str, str], bytes]:
         try:
             task = store.load_task(task_id)
         except FileNotFoundError:
@@ -295,7 +295,7 @@ class DashboardApi:
             },
         )
 
-    def _post_feedback_discussion_response(self, store: FileStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_feedback_discussion_response(self, store: SqliteStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             task = store.load_task(task_id)
         except FileNotFoundError:
@@ -347,7 +347,7 @@ class DashboardApi:
             },
         )
 
-    def _post_human_review_response(self, store: FileStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_human_review_response(self, store: SqliteStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -368,7 +368,7 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_human_review_decision", "detail": str(exc)})
         return self._json_response(200, result.to_dict())
 
-    def _update_task_qc_policy_response(self, store: FileStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _update_task_qc_policy_response(self, store: SqliteStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             task = store.load_task(task_id)
         except FileNotFoundError:
@@ -431,7 +431,7 @@ class DashboardApi:
             return len(payload["rows"])
         return 1
 
-    def _post_coordinator_rule_update_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_coordinator_rule_update_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -453,7 +453,7 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
         return self._json_response(200, record)
 
-    def _post_coordinator_long_tail_issue_response(self, store: FileStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _post_coordinator_long_tail_issue_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -476,7 +476,7 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
         return self._json_response(200, record)
 
-    def _read_artifact_payload(self, store: FileStore, relative_path: str) -> Any:
+    def _read_artifact_payload(self, store: SqliteStore, relative_path: str) -> Any:
         path = store.root / relative_path
         if not path.exists():
             return None
@@ -486,7 +486,7 @@ class DashboardApi:
         except json.JSONDecodeError:
             return text
 
-    def _config_files(self, store: FileStore) -> list[dict[str, Any]]:
+    def _config_files(self, store: SqliteStore) -> list[dict[str, Any]]:
         files = []
         for config_id, title in CONFIG_FILE_DEFINITIONS.items():
             path = store.root / config_id
@@ -501,7 +501,7 @@ class DashboardApi:
             )
         return files
 
-    def _update_config_response(self, store: FileStore, config_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+    def _update_config_response(self, store: SqliteStore, config_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         if config_id not in CONFIG_FILE_DEFINITIONS:
             return self._json_response(404, {"error": "config_not_found"})
         content = body.decode("utf-8")
@@ -513,7 +513,7 @@ class DashboardApi:
         path.write_text(content, encoding="utf-8")
         return self._json_response(200, {"ok": True, "id": config_id})
 
-    def _event_log(self, store: FileStore, project_id: str | None = None) -> list[dict[str, Any]]:
+    def _event_log(self, store: SqliteStore, project_id: str | None = None) -> list[dict[str, Any]]:
         events = []
         for task in store.list_tasks():
             if project_id is not None and task.pipeline_id != project_id:
@@ -604,11 +604,11 @@ def make_handler(api: DashboardApi, static_root: Path | None = None) -> type[Bas
 
 
 def serve_dashboard_api(
-    store: FileStore,
+    store: SqliteStore,
     host: str,
     port: int,
     *,
-    stores: dict[str, FileStore] | None = None,
+    stores: dict[str, SqliteStore] | None = None,
     default_store_key: str | None = None,
     runtime_once: Callable[[], RuntimeSnapshot] | None = None,
     runtime_config: RuntimeConfig | None = None,
@@ -632,7 +632,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    serve_dashboard_api(FileStore(args.store_root), host=args.host, port=args.port)
+    serve_dashboard_api(SqliteStore.open(args.store_root), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

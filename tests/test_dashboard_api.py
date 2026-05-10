@@ -4,11 +4,11 @@ from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, Feedback
 from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.interfaces.api import DashboardApi
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_dashboard_api_returns_kanban_snapshot_json(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -24,7 +24,7 @@ def test_dashboard_api_returns_kanban_snapshot_json(tmp_path):
 
 
 def test_dashboard_api_returns_projects_and_filters_kanban_by_project(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
     beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
     alpha.status = TaskStatus.PENDING
@@ -54,7 +54,7 @@ def test_dashboard_api_returns_projects_and_filters_kanban_by_project(tmp_path):
 
 
 def test_dashboard_api_returns_operator_stage_kanban_view(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.VALIDATING
     store.save_task(task)
@@ -70,7 +70,7 @@ def test_dashboard_api_returns_operator_stage_kanban_view(tmp_path):
 
 
 def test_dashboard_api_returns_404_for_unknown_route(tmp_path):
-    api = DashboardApi(FileStore(tmp_path))
+    api = DashboardApi(SqliteStore.open(tmp_path))
 
     status, headers, body = api.handle_get("/api/missing")
 
@@ -80,7 +80,7 @@ def test_dashboard_api_returns_404_for_unknown_route(tmp_path):
 
 
 def test_dashboard_api_returns_runtime_snapshot(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     api = DashboardApi(store)
 
     status, _headers, body = api.handle_get("/api/runtime")
@@ -92,7 +92,7 @@ def test_dashboard_api_returns_runtime_snapshot(tmp_path):
 
 
 def test_dashboard_api_returns_runtime_monitor_report(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     api = DashboardApi(store)
 
     status, _headers, body = api.handle_get("/api/runtime/monitor")
@@ -106,7 +106,7 @@ def test_dashboard_api_returns_runtime_monitor_report(tmp_path):
 
 
 def test_dashboard_api_runs_one_runtime_cycle_with_injected_runner(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     called = {"count": 0}
 
     def run_once():
@@ -130,7 +130,7 @@ def test_dashboard_api_runs_one_runtime_cycle_with_injected_runner(tmp_path):
 
 
 def test_dashboard_api_returns_409_when_runtime_runner_is_unavailable(tmp_path):
-    api = DashboardApi(FileStore(tmp_path))
+    api = DashboardApi(SqliteStore.open(tmp_path))
 
     status, _headers, body = api.handle_post("/api/runtime/run-once", b"{}")
 
@@ -139,7 +139,7 @@ def test_dashboard_api_returns_409_when_runtime_runner_is_unavailable(tmp_path):
 
 
 def test_dashboard_api_returns_coordinator_report_and_records_long_tail_issue(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     api = DashboardApi(store)
 
     status, _headers, body = api.handle_post(
@@ -169,7 +169,7 @@ def test_dashboard_api_returns_runtime_cycles(tmp_path):
     from datetime import datetime, timezone
     from annotation_pipeline_skill.core.runtime import RuntimeCycleStats
 
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     store.append_runtime_cycle_stats(
         RuntimeCycleStats(
@@ -193,7 +193,7 @@ def test_dashboard_api_returns_runtime_cycles(tmp_path):
 
 
 def test_dashboard_api_returns_readiness_report_for_project(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -212,7 +212,7 @@ def test_dashboard_api_returns_outbox_summary(tmp_path):
     from annotation_pipeline_skill.core.models import OutboxRecord
     from annotation_pipeline_skill.core.states import OutboxKind
 
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     store.save_outbox(OutboxRecord.new(task_id="task-1", kind=OutboxKind.SUBMIT, payload={"result": {}}))
     api = DashboardApi(store)
 
@@ -228,7 +228,7 @@ def test_dashboard_api_filters_outbox_summary_by_project(tmp_path):
     from annotation_pipeline_skill.core.models import OutboxRecord
     from annotation_pipeline_skill.core.states import OutboxKind
 
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
     beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
     store.save_task(alpha)
@@ -246,7 +246,7 @@ def test_dashboard_api_filters_outbox_summary_by_project(tmp_path):
 
 
 def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events_and_feedback(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(
         task_id="task-1",
         pipeline_id="pipe",
@@ -316,7 +316,7 @@ def test_dashboard_api_returns_task_detail_with_source_attempts_artifacts_events
 
 
 def test_dashboard_api_posts_feedback_discussion_and_accepts_by_consensus(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.QC
     feedback = FeedbackRecord.new(
@@ -357,7 +357,7 @@ def test_dashboard_api_posts_feedback_discussion_and_accepts_by_consensus(tmp_pa
 
 
 def test_dashboard_api_posts_human_review_decision(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.HUMAN_REVIEW
     store.save_task(task)
@@ -383,7 +383,7 @@ def test_dashboard_api_posts_human_review_decision(tmp_path):
 
 
 def test_dashboard_api_updates_task_qc_policy_and_appends_event(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(
         task_id="task-1",
         pipeline_id="pipe",
@@ -416,7 +416,7 @@ def test_dashboard_api_updates_task_qc_policy_and_appends_event(tmp_path):
 
 
 def test_dashboard_api_rejects_invalid_task_qc_policy(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     store.save_task(task)
     api = DashboardApi(store)
@@ -433,7 +433,7 @@ def test_dashboard_api_rejects_invalid_task_qc_policy(tmp_path):
 
 
 def test_dashboard_api_returns_config_files_and_can_update_allowed_yaml(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     (tmp_path / "annotation_rules.yaml").write_text("rules:\n  - id: default\n", encoding="utf-8")
     api = DashboardApi(store)
 
@@ -454,7 +454,7 @@ def test_dashboard_api_returns_config_files_and_can_update_allowed_yaml(tmp_path
 
 
 def test_dashboard_api_rejects_invalid_config_name(tmp_path):
-    api = DashboardApi(FileStore(tmp_path))
+    api = DashboardApi(SqliteStore.open(tmp_path))
 
     status, _headers, body = api.handle_put("/api/config/../bad.yaml", b"ok: true\n")
 
@@ -463,7 +463,7 @@ def test_dashboard_api_rejects_invalid_config_name(tmp_path):
 
 
 def test_dashboard_api_returns_event_log_across_tasks(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
     event = transition_task(task, TaskStatus.ANNOTATING, actor="test", reason="started", stage="annotation")
@@ -480,7 +480,7 @@ def test_dashboard_api_returns_event_log_across_tasks(tmp_path):
 
 
 def test_dashboard_api_filters_event_log_by_project(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
     beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
     alpha.status = TaskStatus.PENDING

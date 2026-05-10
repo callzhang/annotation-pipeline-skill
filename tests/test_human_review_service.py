@@ -6,10 +6,10 @@ from annotation_pipeline_skill.core.models import Task
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition
 from annotation_pipeline_skill.services.human_review_service import HumanReviewService
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
-def _human_review_task(store: FileStore) -> Task:
+def _human_review_task(store: SqliteStore) -> Task:
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.HUMAN_REVIEW
     store.save_task(task)
@@ -17,7 +17,7 @@ def _human_review_task(store: FileStore) -> Task:
 
 
 def test_human_review_accepts_task_and_records_decision_artifact(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     _human_review_task(store)
 
     result = HumanReviewService(store).decide(
@@ -40,7 +40,7 @@ def test_human_review_accepts_task_and_records_decision_artifact(tmp_path):
 
 
 def test_human_review_request_changes_returns_task_to_annotator_with_feedback(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     _human_review_task(store)
 
     result = HumanReviewService(store).decide(
@@ -60,7 +60,7 @@ def test_human_review_request_changes_returns_task_to_annotator_with_feedback(tm
 
 
 def test_human_review_rejects_task(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     _human_review_task(store)
 
     result = HumanReviewService(store).decide(
@@ -76,7 +76,7 @@ def test_human_review_rejects_task(tmp_path):
 
 
 def test_human_review_rejects_actions_outside_human_review(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.QC
     store.save_task(task)

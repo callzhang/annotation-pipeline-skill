@@ -3,11 +3,11 @@ import json
 from annotation_pipeline_skill.core.models import ArtifactRef, Task
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.services.export_service import TrainingDataExportService
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_export_service_writes_training_jsonl_and_manifest_for_accepted_tasks(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     accepted = Task.new(
         task_id="task-1",
         pipeline_id="pipe",
@@ -94,7 +94,7 @@ def test_export_service_creates_submit_outbox_for_external_included_tasks(tmp_pa
     from annotation_pipeline_skill.core.models import ExternalTaskRef
     from annotation_pipeline_skill.core.states import OutboxKind
 
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(
         task_id="task-1",
         pipeline_id="pipe",
@@ -136,7 +136,7 @@ def test_export_service_creates_submit_outbox_for_external_included_tasks(tmp_pa
 
 
 def test_export_service_excludes_accepted_task_when_artifact_payload_is_missing(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)
@@ -161,7 +161,7 @@ def test_export_service_excludes_accepted_task_when_artifact_payload_is_missing(
 
 
 def test_export_service_excludes_invalid_training_row_when_annotation_is_not_json(tmp_path):
-    store = FileStore(tmp_path / ".annotation-pipeline")
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "payload": {"text": "alpha"}})
     task.status = TaskStatus.ACCEPTED
     store.save_task(task)

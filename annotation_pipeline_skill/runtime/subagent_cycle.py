@@ -11,7 +11,7 @@ from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverit
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.llm.client import LLMClient, LLMGenerateRequest, LLMGenerateResult
 from annotation_pipeline_skill.services.feedback_service import build_feedback_bundle, build_feedback_consensus_summary
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 @dataclass(frozen=True)
@@ -28,12 +28,12 @@ class QCParseError(ValueError):
 
 
 class SubagentRuntime:
-    def __init__(self, store: FileStore, client_factory: Callable[[str], LLMClient]):
+    def __init__(self, store: SqliteStore, client_factory: Callable[[str], LLMClient]):
         self.store = store
         self.client_factory = client_factory
 
     def run_once(self, stage_target: str = "annotation", limit: int | None = None) -> SubagentRuntimeResult:
-        pending_tasks = [task for task in self.store.list_tasks() if task.status is TaskStatus.PENDING]
+        pending_tasks = self.store.list_tasks_by_status({TaskStatus.PENDING})
         if limit is not None:
             pending_tasks = pending_tasks[:limit]
 

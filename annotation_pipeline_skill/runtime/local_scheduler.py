@@ -10,13 +10,13 @@ from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.llm.client import LLMClient
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 class LocalRuntimeScheduler:
     def __init__(
         self,
-        store: FileStore,
+        store: SqliteStore,
         client_factory: Callable[[str], LLMClient],
         config: RuntimeConfig,
     ):

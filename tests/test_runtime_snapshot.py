@@ -5,11 +5,11 @@ from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeConfig
 from annotation_pipeline_skill.core.runtime import RuntimeLease
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_runtime_snapshot_counts_queues_capacity_projects_and_due_retries(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     pending = Task.new(task_id="alpha-1", pipeline_id="alpha", source_ref={"kind": "jsonl"})
     pending.status = TaskStatus.PENDING
@@ -54,7 +54,7 @@ def test_runtime_snapshot_counts_queues_capacity_projects_and_due_retries(tmp_pa
 
 
 def test_runtime_snapshot_marks_missing_heartbeat_unhealthy(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
 
     snapshot = build_runtime_snapshot(store, RuntimeConfig(), now=now)
@@ -64,7 +64,7 @@ def test_runtime_snapshot_marks_missing_heartbeat_unhealthy(tmp_path):
 
 
 def test_runtime_snapshot_surfaces_draft_blocked_and_cancelled_counts(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     store.save_runtime_heartbeat(now)
     statuses = [
@@ -85,7 +85,7 @@ def test_runtime_snapshot_surfaces_draft_blocked_and_cancelled_counts(tmp_path):
 
 
 def test_runtime_snapshot_detects_stale_active_runs(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     stale_at = now - timedelta(seconds=601)
     store.save_runtime_heartbeat(now)
@@ -113,7 +113,7 @@ def test_runtime_snapshot_detects_stale_active_runs(tmp_path):
 
 
 def test_runtime_snapshot_counts_leases_as_capacity_truth(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     store.save_runtime_heartbeat(now)
     task = Task.new(task_id="task-1", pipeline_id="alpha", source_ref={"kind": "jsonl"})
@@ -139,7 +139,7 @@ def test_runtime_snapshot_counts_leases_as_capacity_truth(tmp_path):
 
 
 def test_runtime_snapshot_detects_stale_leases(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     store.save_runtime_heartbeat(now)
     store.save_runtime_lease(

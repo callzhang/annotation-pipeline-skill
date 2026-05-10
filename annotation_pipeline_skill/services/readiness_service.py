@@ -5,11 +5,11 @@ from typing import Any
 from annotation_pipeline_skill.core.models import ArtifactRef, ExportManifest, Task
 from annotation_pipeline_skill.core.states import OutboxStatus, TaskStatus
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
-def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
-    tasks = [task for task in store.list_tasks() if task.pipeline_id == project_id]
+def build_readiness_report(store: SqliteStore, project_id: str) -> dict[str, Any]:
+    tasks = store.list_tasks_by_pipeline(project_id)
     accepted_tasks = [task for task in tasks if task.status is TaskStatus.ACCEPTED]
     human_review_tasks = [task for task in tasks if task.status is TaskStatus.HUMAN_REVIEW]
     manifests = [manifest for manifest in store.list_export_manifests() if manifest.project_id == project_id]
@@ -88,7 +88,7 @@ def build_readiness_report(store: FileStore, project_id: str) -> dict[str, Any]:
     }
 
 
-def _latest_annotation_artifact(store: FileStore, task: Task) -> ArtifactRef | None:
+def _latest_annotation_artifact(store: SqliteStore, task: Task) -> ArtifactRef | None:
     artifacts = [artifact for artifact in store.list_artifacts(task.task_id) if artifact.kind == "annotation_result"]
     if not artifacts:
         return None

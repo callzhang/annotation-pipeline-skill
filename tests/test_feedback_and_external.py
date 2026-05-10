@@ -2,11 +2,11 @@ from annotation_pipeline_skill.core.models import FeedbackDiscussionEntry, Feedb
 from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, OutboxKind
 from annotation_pipeline_skill.services.external_task_service import ExternalTaskService
 from annotation_pipeline_skill.services.feedback_service import build_feedback_bundle, build_feedback_consensus_summary
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_feedback_bundle_orders_records_by_creation_time(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     first = FeedbackRecord.new(
         task_id="task-1",
         attempt_id="attempt-1",
@@ -38,7 +38,7 @@ def test_feedback_bundle_orders_records_by_creation_time(tmp_path):
 
 
 def test_feedback_bundle_includes_discussion_and_consensus(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     feedback = FeedbackRecord.new(
         task_id="task-1",
         attempt_id="attempt-1",
@@ -85,7 +85,7 @@ def test_feedback_bundle_includes_discussion_and_consensus(tmp_path):
 
 
 def test_external_task_pull_is_idempotent_and_creates_status_outbox(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     service = ExternalTaskService(store)
 
     first = service.upsert_pulled_task(

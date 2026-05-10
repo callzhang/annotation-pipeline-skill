@@ -1,11 +1,11 @@
 from annotation_pipeline_skill.core.models import Attempt, FeedbackRecord, OutboxRecord, Task
 from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, OutboxKind, TaskStatus
 from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     pending = Task.new(task_id="task-pending", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     pending.status = TaskStatus.PENDING
     review = Task.new(task_id="task-review", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -47,7 +47,7 @@ def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
 
 
 def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
     store.save_task(task)
@@ -95,7 +95,7 @@ def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
 
 
 def test_dashboard_snapshot_can_return_operator_stage_columns(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     annotating = Task.new(task_id="task-annotation", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     annotating.status = TaskStatus.VALIDATING
     review = Task.new(task_id="task-qc", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -123,7 +123,7 @@ def test_dashboard_snapshot_can_return_operator_stage_columns(tmp_path):
 
 
 def test_dashboard_snapshot_filters_tasks_by_project_id(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     alpha = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
     beta = Task.new(task_id="beta-1", pipeline_id="project-beta", source_ref={"kind": "jsonl"})
     alpha.status = TaskStatus.PENDING
@@ -143,7 +143,7 @@ def test_dashboard_snapshot_filters_tasks_by_project_id(tmp_path):
 
 
 def test_dashboard_project_summaries_group_tasks_by_pipeline_id(tmp_path):
-    store = FileStore(tmp_path)
+    store = SqliteStore.open(tmp_path)
     alpha_pending = Task.new(task_id="alpha-1", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
     alpha_accepted = Task.new(task_id="alpha-2", pipeline_id="project-alpha", source_ref={"kind": "jsonl"})
     alpha_pending.status = TaskStatus.PENDING

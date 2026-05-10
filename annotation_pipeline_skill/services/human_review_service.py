@@ -8,7 +8,7 @@ from uuid import uuid4
 from annotation_pipeline_skill.core.models import ArtifactRef, Task
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
-from annotation_pipeline_skill.store.file_store import FileStore
+from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class HumanReviewDecisionResult:
 
 
 class HumanReviewService:
-    def __init__(self, store: FileStore):
+    def __init__(self, store: SqliteStore):
         self.store = store
 
     def decide(
