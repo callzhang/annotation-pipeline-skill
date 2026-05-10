@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-from annotation_pipeline_skill.core.models import Task
+from annotation_pipeline_skill.core.models import AuditEvent, Task
 from annotation_pipeline_skill.core.states import TaskStatus
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -122,3 +122,43 @@ class SqliteStore:
             values,
         ).fetchall()
         return [_row_to_task(r) for r in rows]
+
+    def append_event(self, event: AuditEvent) -> None:
+        d = event.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO audit_events (
+                event_id, task_id, previous_status, next_status, actor,
+                reason, stage, attempt_id, created_at, metadata_json, seq
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                COALESCE((SELECT MAX(seq) + 1 FROM audit_events WHERE task_id = ?), 1)
+            )
+            """,
+            (
+                d["event_id"], d["task_id"], d["previous_status"], d["next_status"],
+                d["actor"], d["reason"], d["stage"], d["attempt_id"], d["created_at"],
+                json.dumps(d["metadata"], sort_keys=True),
+                d["task_id"],
+            ),
+        )
+
+    def list_events(self, task_id: str) -> list[AuditEvent]:
+        rows = self._conn.execute(
+            "SELECT * FROM audit_events WHERE task_id = ? ORDER BY seq",
+            (task_id,),
+        ).fetchall()
+        return [
+            AuditEvent.from_dict({
+                "event_id": r["event_id"],
+                "task_id": r["task_id"],
+                "previous_status": r["previous_status"],
+                "next_status": r["next_status"],
+                "actor": r["actor"],
+                "reason": r["reason"],
+                "stage": r["stage"],
+                "attempt_id": r["attempt_id"],
+                "created_at": r["created_at"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]

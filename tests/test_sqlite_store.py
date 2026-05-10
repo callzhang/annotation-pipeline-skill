@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from annotation_pipeline_skill.core.models import Task
+from annotation_pipeline_skill.core.models import AuditEvent, Task
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
@@ -116,4 +116,23 @@ def test_save_task_roundtrips_all_fields(tmp_path):
     store.save_task(task)
     loaded = store.load_task("task-full")
     assert loaded == task
+    store.close()
+
+
+def test_append_and_list_events_preserves_order(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    e1 = AuditEvent.new("task-1", TaskStatus.DRAFT, TaskStatus.PENDING, actor="a", reason="r1", stage="ingest")
+    e2 = AuditEvent.new("task-1", TaskStatus.PENDING, TaskStatus.ANNOTATING, actor="a", reason="r2", stage="annotate")
+
+    store.append_event(e1)
+    store.append_event(e2)
+
+    rows = store.list_events("task-1")
+    assert [e.event_id for e in rows] == [e1.event_id, e2.event_id]
+    store.close()
+
+
+def test_list_events_returns_empty_for_unknown_task(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    assert store.list_events("nope") == []
     store.close()
