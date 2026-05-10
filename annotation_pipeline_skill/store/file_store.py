@@ -1,3 +1,10 @@
+"""Read-only legacy JSON/JSONL store retained ONLY for the one-shot
+``scripts/migrate_filestore_to_sqlite.py`` migration script.
+
+Production code uses ``annotation_pipeline_skill.store.sqlite_store.SqliteStore``.
+This module will be removed once the migration is no longer needed.
+"""
+
 from __future__ import annotations
 
 import json
