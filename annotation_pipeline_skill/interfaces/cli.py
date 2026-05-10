@@ -1133,9 +1133,9 @@ def handle_serve(args: argparse.Namespace) -> int:
     if not stores_map:
         print(json.dumps({"error": "no_projects_found", "workspace": str(args.workspace)}))
         return 1
-    file_stores = {key: SqliteStore.open(path / ".annotation-pipeline") for key, path in stores_map.items()}
-    default_key = next(iter(file_stores))
-    default_store = file_stores[default_key]
+    stores = {key: SqliteStore.open(path / ".annotation-pipeline") for key, path in stores_map.items()}
+    default_key = next(iter(stores))
+    default_store = stores[default_key]
     runtime_once = None
     runtime_config = None
     try:
@@ -1167,7 +1167,7 @@ def handle_serve(args: argparse.Namespace) -> int:
         default_store,
         host=args.host,
         port=args.port,
-        stores=file_stores,
+        stores=stores,
         default_store_key=default_key,
         runtime_once=runtime_once,
         runtime_config=runtime_config,

@@ -61,3 +61,22 @@ def test_migrate_refuses_to_run_against_non_empty_db(tmp_path):
 
     with pytest.raises(RuntimeError, match="not empty"):
         migrate(src, dst, archive_genesis=False)
+
+
+def test_migrate_refuses_when_dst_is_inside_src(tmp_path):
+    import pytest
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = src / "child"
+    with pytest.raises(RuntimeError, match="disjoint"):
+        migrate(src, dst, archive_genesis=False)
+
+
+def test_migrate_refuses_when_src_is_inside_dst(tmp_path):
+    import pytest
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    src = dst / "child"
+    src.mkdir()
+    with pytest.raises(RuntimeError, match="disjoint"):
+        migrate(src, dst, archive_genesis=False)

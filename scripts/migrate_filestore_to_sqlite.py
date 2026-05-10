@@ -4,6 +4,12 @@ Usage:
     python scripts/migrate_filestore_to_sqlite.py --src <old-root> --dst <new-root>
 
 Idempotency: refuses to run if target already has tasks unless --force is given.
+
+Note: --force only bypasses the emptiness check. It does NOT wipe the target.
+Re-running against a target that already contains audit data for the same task
+IDs will fail with IntegrityError on append tables (audit_events, attempts,
+feedback_records, feedback_discussions, artifact_refs). For a clean re-run,
+delete the target directory and re-invoke.
 """
 from __future__ import annotations
 
@@ -20,6 +26,18 @@ from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 def migrate(src: Path | str, dst: Path | str, *, archive_genesis: bool = True, force: bool = False) -> dict:
     src = Path(src)
     dst = Path(dst)
+
+    src_resolved = src.resolve()
+    dst_resolved = dst.resolve()
+    if (
+        src_resolved == dst_resolved
+        or src_resolved in dst_resolved.parents
+        or dst_resolved in src_resolved.parents
+    ):
+        raise RuntimeError(
+            f"src ({src_resolved}) and dst ({dst_resolved}) must be disjoint "
+            f"directories; one cannot be inside the other"
+        )
 
     fs = FileStore(src)
     store = SqliteStore.open(dst)
@@ -92,7 +110,8 @@ def main(argv=None):
     parser.add_argument("--no-archive", action="store_true",
                         help="skip archiving the source tree to backups/genesis-*")
     parser.add_argument("--force", action="store_true",
-                        help="run even if target DB already has tasks")
+                        help="bypass the non-empty-target check (does NOT wipe target; "
+                             "append tables will fail loudly on duplicate keys)")
     args = parser.parse_args(argv)
 
     report = migrate(args.src, args.dst,
