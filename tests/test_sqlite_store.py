@@ -425,3 +425,18 @@ def test_document_version_sha256_is_stored(tmp_path):
         ).fetchone()[0]
     assert sha == expected
     store.close()
+
+
+def test_save_and_list_export_manifest(tmp_path):
+    from annotation_pipeline_skill.core.models import ExportManifest
+    store = SqliteStore.open(tmp_path)
+    m = ExportManifest.new(
+        project_id="p", output_paths=["exports/e/training.jsonl"],
+        task_ids_included=["t-1"], task_ids_excluded=[],
+        artifact_ids=["a-1"], source_files=["in.jsonl"],
+        annotation_rules_hash=None, schema_version="v1",
+        validator_version="vv1", validation_summary={"ok": 1},
+    )
+    store.save_export_manifest(m)
+    assert store.list_export_manifests() == [m]
+    store.close()

@@ -12,6 +12,7 @@ from annotation_pipeline_skill.core.models import (
     ArtifactRef,
     Attempt,
     AuditEvent,
+    ExportManifest,
     FeedbackDiscussionEntry,
     FeedbackRecord,
     OutboxRecord,
@@ -612,3 +613,61 @@ class SqliteStore:
             (document_id,),
         ).fetchall()
         return [self._row_to_doc_version(r) for r in rows]
+
+    def save_export_manifest(self, manifest) -> None:
+        d = manifest.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO export_manifests (
+                export_id, project_id, created_at,
+                output_paths_json, task_ids_included_json, task_ids_excluded_json,
+                artifact_ids_json, source_files_json,
+                annotation_rules_hash, schema_version, validator_version,
+                validation_summary_json, known_limitations_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(export_id) DO UPDATE SET
+                project_id=excluded.project_id,
+                output_paths_json=excluded.output_paths_json,
+                task_ids_included_json=excluded.task_ids_included_json,
+                task_ids_excluded_json=excluded.task_ids_excluded_json,
+                artifact_ids_json=excluded.artifact_ids_json,
+                source_files_json=excluded.source_files_json,
+                annotation_rules_hash=excluded.annotation_rules_hash,
+                schema_version=excluded.schema_version,
+                validator_version=excluded.validator_version,
+                validation_summary_json=excluded.validation_summary_json,
+                known_limitations_json=excluded.known_limitations_json
+            """,
+            (
+                d["export_id"], d["project_id"], d["created_at"],
+                json.dumps(d["output_paths"], sort_keys=True),
+                json.dumps(d["task_ids_included"], sort_keys=True),
+                json.dumps(d["task_ids_excluded"], sort_keys=True),
+                json.dumps(d["artifact_ids"], sort_keys=True),
+                json.dumps(d["source_files"], sort_keys=True),
+                d["annotation_rules_hash"], d["schema_version"], d["validator_version"],
+                json.dumps(d["validation_summary"], sort_keys=True),
+                json.dumps(d["known_limitations"], sort_keys=True),
+            ),
+        )
+
+    def list_export_manifests(self):
+        rows = self._conn.execute(
+            "SELECT * FROM export_manifests ORDER BY project_id, created_at"
+        ).fetchall()
+        return [
+            ExportManifest.from_dict({
+                "export_id": r["export_id"], "project_id": r["project_id"],
+                "created_at": r["created_at"],
+                "output_paths": json.loads(r["output_paths_json"]),
+                "task_ids_included": json.loads(r["task_ids_included_json"]),
+                "task_ids_excluded": json.loads(r["task_ids_excluded_json"]),
+                "artifact_ids": json.loads(r["artifact_ids_json"]),
+                "source_files": json.loads(r["source_files_json"]),
+                "annotation_rules_hash": r["annotation_rules_hash"],
+                "schema_version": r["schema_version"], "validator_version": r["validator_version"],
+                "validation_summary": json.loads(r["validation_summary_json"]),
+                "known_limitations": json.loads(r["known_limitations_json"]),
+            })
+            for r in rows
+        ]
