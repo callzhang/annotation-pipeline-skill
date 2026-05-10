@@ -55,6 +55,39 @@ annotation-pipeline export training-data \
   --export-id export-001
 ```
 
+### Workspace database
+
+Each workspace has a SQLite-backed metadata store (`db.sqlite`).
+
+Initialize a fresh workspace:
+
+```
+annotation-pipeline db init --root .annotation-pipeline
+```
+
+Create a backup snapshot (recommended hourly via cron):
+
+```
+annotation-pipeline db backup --root .annotation-pipeline
+```
+
+Migrate from a legacy JSON-based workspace (one-time):
+
+```
+PYTHONPATH=. python scripts/migrate_filestore_to_sqlite.py \
+    --src /path/to/old-workspace \
+    --dst /path/to/.annotation-pipeline
+```
+
+The migration archives the source JSON tree to
+`<dst>/backups/genesis-YYYYMMDD/` for recovery.
+
+Export the DB back to a JSON tree (debugging / archival):
+
+```
+annotation-pipeline db dump-json --root .annotation-pipeline --out ./dump
+```
+
 ## Current Slice
 
 Implemented in the first backend foundation slice:

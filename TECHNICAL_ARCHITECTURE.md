@@ -365,46 +365,26 @@ ExecutionRecord:
 
 ## 7. 存储架构
 
-### 7.1 默认实现：文件系统 Store
+### 7.1 默认实现：SqliteStore
 
-MVP 使用文件系统，建议结构：
+`SqliteStore` (`annotation_pipeline_skill/store/sqlite_store.py`) is the
+authoritative metadata store. Every workspace contains:
 
-```text
-.annotation-pipeline/
-  project.json
-  tasks/
-    <task_id>.json
-  attempts/
-    <task_id>/
-      attempt-001.json
-  events/
-    <task_id>.jsonl
-  runtime/
-    runs/
-      <run_id>.json
-  settings/
-    providers.json
-    annotators.json
-    stage_routes.json
-    scheduler.json
-  external/
-    inbox/
-    outbox/
-    dead_letters/
-  artifacts/
-    <task_id>/
-      raw_slice.jsonl
-      output.jsonl
-      validation.json
-      qc.json
-      merge.json
-      previews/
-        bbox_overlay.png
-  feedback/
-    <task_id>.jsonl
-  snapshots/
-    dashboard.json
-```
+- `db.sqlite` — task / event / attempt / feedback / outbox / lease / document
+  metadata in 13 tables (see `store/schema.sql`). WAL mode, single-machine
+  multi-process safe; per-thread connections via `threading.local()` so the
+  threaded HTTP dashboard can share the store safely.
+- `artifacts/` — annotation result files referenced from `artifact_refs.path`.
+- `document_versions/<doc>/<version>.md` — guideline content; DB row stores
+  path + sha256.
+- `exports/<export_id>/` — export output trees referenced from
+  `export_manifests.output_paths_json`.
+- `runtime/` — heartbeat, cycle stats, latest snapshot (file-only; low volume).
+- `backups/` — periodic SQLite snapshots and the genesis JSON archive.
+
+Recovery: WAL handles in-process crash safety; `apl db backup` produces
+point-in-time snapshots; the pre-migration JSON tree is permanently archived
+under `backups/genesis-YYYYMMDD/` and is the from-zero ground truth.
 
 ### 7.2 存储原则
 

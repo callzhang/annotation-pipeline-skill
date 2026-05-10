@@ -339,3 +339,46 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
 The dispatcher sends JSON POST requests to `callbacks.yaml`. A successful response marks the record `sent` and writes an audit event. Retryable failures keep the record `pending` with `retry_count`, `next_retry_at`, and `last_error`. Permanent failures or exhausted retries move to `dead_letter`; readiness reports those as blockers until an operator resolves them.
 
 The dashboard Outbox tab shows the same records and follows the selected project filter. Use it with the Readiness tab: pending outbox records mean the export is not delivered yet, and dead-letter records require operator inspection before the training data handoff.
+
+## Backups & Recovery
+
+### Snapshots
+
+```
+annotation-pipeline db backup --root <workspace>
+```
+
+Default retention: 24 hourly + 30 daily, tunable via `--hourly-keep` / `--daily-keep`.
+
+Schedule hourly with cron:
+
+```
+0 * * * * annotation-pipeline db backup --root /path/to/workspace
+```
+
+### Restore
+
+A snapshot is a self-contained `db.sqlite` file. To restore:
+
+```
+cp backups/sqlite-YYYY-MM-DD-HHMM.sqlite db.sqlite
+```
+
+Stop any running scheduler / dashboard server first.
+
+### Genesis archive
+
+The one-time migration archives the original JSON tree to
+`backups/genesis-YYYYMMDD/`. This is your from-zero recovery source if
+both the live DB and snapshots are lost. Keep it.
+
+### `apl serve` workspace layout
+
+`apl serve --workspace <X>` looks for `<X>/.annotation-pipeline` (the
+per-project SQLite root). When testing the migration script in isolation,
+either point `--dst` at `<X>/.annotation-pipeline` directly, or symlink:
+
+```
+ln -s /tmp/migrated-db /tmp/wks/.annotation-pipeline
+annotation-pipeline serve --workspace /tmp/wks
+```

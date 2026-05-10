@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-05-10
+
+- BREAKING: replaced JSON/JSONL `FileStore` with `SqliteStore` (single
+  `db.sqlite` per workspace, WAL mode, per-thread connections). Indexed
+  queries on `(pipeline_id, status, created_at)` replace full-directory
+  scans for hot paths in `coordinator_service`, `readiness_service`,
+  `export_service`, `outbox_dispatch_service`, and `subagent_cycle`.
+- New CLI: `db init`, `db status`, `db backup`, `db dump-json`.
+- Migration: run
+  `PYTHONPATH=. python scripts/migrate_filestore_to_sqlite.py
+  --src <old-root> --dst <new-root>` once; the script archives the
+  source tree to `backups/genesis-YYYYMMDD/` for recovery.
+- Atomic runtime lease acquisition via `UNIQUE(task_id, stage)` constraint
+  (replaces filesystem `open("x")` trick).
+- `RuntimeLease`, `OutboxRecord` dispatcher, and task scheduler now use
+  indexed SQL queries instead of in-memory filtering.
+- Runtime monitoring (`heartbeat.json`, `cycle_stats.jsonl`,
+  `runtime_snapshot.json`) remains file-based.
+- `FileStore` retained at `store/file_store.py` solely for the migration
+  script; will be removed in a future release.
+
 ## v0.1.0 - 2026-05-05
 
 Initial local-first release for an agent-operated annotation pipeline skill.
