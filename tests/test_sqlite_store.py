@@ -136,3 +136,57 @@ def test_list_events_returns_empty_for_unknown_task(tmp_path):
     store = SqliteStore.open(tmp_path)
     assert store.list_events("nope") == []
     store.close()
+
+
+from annotation_pipeline_skill.core.models import (
+    ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord,
+)
+from annotation_pipeline_skill.core.states import (
+    AttemptStatus, FeedbackSeverity, FeedbackSource,
+)
+
+
+def test_append_and_list_attempts(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    a = Attempt(
+        attempt_id="att-1", task_id="task-1", index=0, stage="annotate",
+        status=AttemptStatus.SUCCEEDED,
+    )
+    store.append_attempt(a)
+    assert store.list_attempts("task-1") == [a]
+    store.close()
+
+
+def test_append_and_list_feedback(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    f = FeedbackRecord.new(
+        task_id="task-1", attempt_id="att-1",
+        source_stage=FeedbackSource.QC, severity=FeedbackSeverity.ERROR,
+        category="missing_entity", message="m", target={"f": "x"},
+        suggested_action="rerun", created_by="qc",
+    )
+    store.append_feedback(f)
+    assert store.list_feedback("task-1") == [f]
+    store.close()
+
+
+def test_append_and_list_feedback_discussion(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    d = FeedbackDiscussionEntry.new(
+        task_id="task-1", feedback_id="fb-1",
+        role="annotator", stance="agree", message="ok", created_by="annotator-1",
+    )
+    store.append_feedback_discussion(d)
+    assert store.list_feedback_discussions("task-1") == [d]
+    store.close()
+
+
+def test_append_and_list_artifact(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    a = ArtifactRef.new(
+        task_id="task-1", kind="annotation_result",
+        path="artifacts/task-1.json", content_type="application/json",
+    )
+    store.append_artifact(a)
+    assert store.list_artifacts("task-1") == [a]
+    store.close()

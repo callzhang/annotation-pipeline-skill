@@ -5,7 +5,14 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-from annotation_pipeline_skill.core.models import AuditEvent, Task
+from annotation_pipeline_skill.core.models import (
+    ArtifactRef,
+    Attempt,
+    AuditEvent,
+    FeedbackDiscussionEntry,
+    FeedbackRecord,
+    Task,
+)
 from annotation_pipeline_skill.core.states import TaskStatus
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -157,6 +164,162 @@ class SqliteStore:
                 "reason": r["reason"],
                 "stage": r["stage"],
                 "attempt_id": r["attempt_id"],
+                "created_at": r["created_at"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+
+    def append_attempt(self, attempt) -> None:
+        d = attempt.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO attempts (
+                attempt_id, task_id, idx, stage, status,
+                started_at, finished_at, provider_id, model, effort,
+                route_role, summary, error_json, artifacts_json, seq
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                COALESCE((SELECT MAX(seq) + 1 FROM attempts WHERE task_id = ?), 1)
+            )
+            """,
+            (
+                d["attempt_id"], d["task_id"], d["index"], d["stage"], d["status"],
+                d["started_at"], d["finished_at"], d["provider_id"], d["model"], d["effort"],
+                d["route_role"], d["summary"],
+                json.dumps(d["error"], sort_keys=True) if d["error"] else None,
+                json.dumps(d["artifacts"], sort_keys=True),
+                d["task_id"],
+            ),
+        )
+
+    def list_attempts(self, task_id: str):
+        rows = self._conn.execute(
+            "SELECT * FROM attempts WHERE task_id = ? ORDER BY seq",
+            (task_id,),
+        ).fetchall()
+        return [
+            Attempt.from_dict({
+                "attempt_id": r["attempt_id"], "task_id": r["task_id"],
+                "index": r["idx"], "stage": r["stage"], "status": r["status"],
+                "started_at": r["started_at"], "finished_at": r["finished_at"],
+                "provider_id": r["provider_id"], "model": r["model"], "effort": r["effort"],
+                "route_role": r["route_role"], "summary": r["summary"],
+                "error": json.loads(r["error_json"]) if r["error_json"] else None,
+                "artifacts": json.loads(r["artifacts_json"]),
+            })
+            for r in rows
+        ]
+
+    def append_feedback(self, feedback) -> None:
+        d = feedback.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO feedback_records (
+                feedback_id, task_id, attempt_id, source_stage, severity,
+                category, message, target_json, suggested_action,
+                created_at, created_by, metadata_json, seq
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                COALESCE((SELECT MAX(seq) + 1 FROM feedback_records WHERE task_id = ?), 1)
+            )
+            """,
+            (
+                d["feedback_id"], d["task_id"], d["attempt_id"], d["source_stage"], d["severity"],
+                d["category"], d["message"],
+                json.dumps(d["target"], sort_keys=True),
+                d["suggested_action"], d["created_at"], d["created_by"],
+                json.dumps(d["metadata"], sort_keys=True),
+                d["task_id"],
+            ),
+        )
+
+    def list_feedback(self, task_id: str):
+        rows = self._conn.execute(
+            "SELECT * FROM feedback_records WHERE task_id = ? ORDER BY seq",
+            (task_id,),
+        ).fetchall()
+        return [
+            FeedbackRecord.from_dict({
+                "feedback_id": r["feedback_id"], "task_id": r["task_id"],
+                "attempt_id": r["attempt_id"], "source_stage": r["source_stage"],
+                "severity": r["severity"], "category": r["category"], "message": r["message"],
+                "target": json.loads(r["target_json"]),
+                "suggested_action": r["suggested_action"],
+                "created_at": r["created_at"], "created_by": r["created_by"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+
+    def append_feedback_discussion(self, entry) -> None:
+        d = entry.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO feedback_discussions (
+                entry_id, task_id, feedback_id, role, stance, message,
+                agreed_points_json, disputed_points_json, proposed_resolution,
+                consensus, created_at, created_by, metadata_json, seq
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                COALESCE((SELECT MAX(seq) + 1 FROM feedback_discussions WHERE task_id = ?), 1)
+            )
+            """,
+            (
+                d["entry_id"], d["task_id"], d["feedback_id"], d["role"], d["stance"], d["message"],
+                json.dumps(d["agreed_points"], sort_keys=True),
+                json.dumps(d["disputed_points"], sort_keys=True),
+                d["proposed_resolution"], 1 if d["consensus"] else 0,
+                d["created_at"], d["created_by"],
+                json.dumps(d["metadata"], sort_keys=True),
+                d["task_id"],
+            ),
+        )
+
+    def list_feedback_discussions(self, task_id: str):
+        rows = self._conn.execute(
+            "SELECT * FROM feedback_discussions WHERE task_id = ? ORDER BY seq",
+            (task_id,),
+        ).fetchall()
+        return [
+            FeedbackDiscussionEntry.from_dict({
+                "entry_id": r["entry_id"], "task_id": r["task_id"],
+                "feedback_id": r["feedback_id"], "role": r["role"], "stance": r["stance"],
+                "message": r["message"],
+                "agreed_points": json.loads(r["agreed_points_json"]),
+                "disputed_points": json.loads(r["disputed_points_json"]),
+                "proposed_resolution": r["proposed_resolution"],
+                "consensus": bool(r["consensus"]),
+                "created_at": r["created_at"], "created_by": r["created_by"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+
+    def append_artifact(self, artifact) -> None:
+        d = artifact.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO artifact_refs (
+                artifact_id, task_id, kind, path, content_type,
+                created_at, metadata_json, seq
+            ) VALUES (?, ?, ?, ?, ?, ?, ?,
+                COALESCE((SELECT MAX(seq) + 1 FROM artifact_refs WHERE task_id = ?), 1)
+            )
+            """,
+            (
+                d["artifact_id"], d["task_id"], d["kind"], d["path"], d["content_type"],
+                d["created_at"], json.dumps(d["metadata"], sort_keys=True),
+                d["task_id"],
+            ),
+        )
+
+    def list_artifacts(self, task_id: str):
+        rows = self._conn.execute(
+            "SELECT * FROM artifact_refs WHERE task_id = ? ORDER BY seq",
+            (task_id,),
+        ).fetchall()
+        return [
+            ArtifactRef.from_dict({
+                "artifact_id": r["artifact_id"], "task_id": r["task_id"],
+                "kind": r["kind"], "path": r["path"], "content_type": r["content_type"],
                 "created_at": r["created_at"],
                 "metadata": json.loads(r["metadata_json"]),
             })
