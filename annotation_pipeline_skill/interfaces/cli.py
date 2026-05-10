@@ -400,7 +400,75 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--port", type=int, default=8765)
     serve_parser.set_defaults(handler=handle_serve)
 
+    _register_db_commands(subparsers)
+
     return parser
+
+
+def _register_db_commands(subparsers) -> None:
+    db = subparsers.add_parser("db", help="database utilities")
+    db_sub = db.add_subparsers(dest="db_command", required=True)
+
+    p_init = db_sub.add_parser("init", help="initialize an empty SqliteStore at --root")
+    p_init.add_argument("--root", required=True)
+    p_init.set_defaults(handler=_cmd_db_init)
+
+    p_status = db_sub.add_parser("status", help="print row counts")
+    p_status.add_argument("--root", required=True)
+    p_status.set_defaults(handler=_cmd_db_status)
+
+    p_backup = db_sub.add_parser("backup", help="snapshot db.sqlite + prune")
+    p_backup.add_argument("--root", required=True)
+    p_backup.add_argument("--hourly-keep", type=int, default=24)
+    p_backup.add_argument("--daily-keep", type=int, default=30)
+    p_backup.set_defaults(handler=_cmd_db_backup)
+
+    p_dump = db_sub.add_parser("dump-json", help="export DB to JSON tree")
+    p_dump.add_argument("--root", required=True)
+    p_dump.add_argument("--out", required=True)
+    p_dump.set_defaults(handler=_cmd_db_dump_json)
+
+
+def _cmd_db_init(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    SqliteStore.open(args.root).close()
+    return 0
+
+
+def _cmd_db_status(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    store = SqliteStore.open(args.root)
+    print(f"tasks: {len(store.list_tasks())}")
+    print(f"outbox: {len(store.list_outbox())}")
+    print(f"documents: {len(store.list_documents())}")
+    print(f"exports: {len(store.list_export_manifests())}")
+    print(f"active_runs: {len(store.list_active_runs())}")
+    print(f"leases: {len(store.list_runtime_leases())}")
+    store.close()
+    return 0
+
+
+def _cmd_db_backup(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.store.backup import prune_snapshots, snapshot
+    root = Path(args.root)
+    out = snapshot(root / "db.sqlite", root / "backups")
+    deleted = prune_snapshots(
+        root / "backups",
+        hourly_keep=args.hourly_keep,
+        daily_keep=args.daily_keep,
+    )
+    print(f"created: {out}")
+    print(f"pruned: {len(deleted)}")
+    return 0
+
+
+def _cmd_db_dump_json(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.store.dump import dump_to_json
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    store = SqliteStore.open(args.root)
+    dump_to_json(store, Path(args.out))
+    store.close()
+    return 0
 
 
 def handle_init(args: argparse.Namespace) -> int:

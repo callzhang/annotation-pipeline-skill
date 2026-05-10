@@ -604,3 +604,53 @@ def test_cli_external_pull_uses_configured_http_source(tmp_path, capsys):
     assert exit_code == 0
     assert payload["created"] == 1
     assert store.list_tasks()[0].pipeline_id == "pipe"
+
+
+def test_cli_db_init_creates_db(tmp_path, monkeypatch):
+    from annotation_pipeline_skill.interfaces.cli import main
+    monkeypatch.chdir(tmp_path)
+
+    rc = main(["db", "init", "--root", str(tmp_path / "ws")])
+
+    assert rc == 0
+    assert (tmp_path / "ws" / "db.sqlite").exists()
+
+
+def test_cli_db_backup_creates_snapshot(tmp_path):
+    from annotation_pipeline_skill.interfaces.cli import main
+    rc = main(["db", "init", "--root", str(tmp_path / "ws")])
+    assert rc == 0
+
+    rc = main(["db", "backup", "--root", str(tmp_path / "ws")])
+    assert rc == 0
+    snaps = list((tmp_path / "ws" / "backups").glob("sqlite-*.sqlite"))
+    assert len(snaps) == 1
+
+
+def test_cli_db_dump_json_round_trips(tmp_path):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.interfaces.cli import main
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    rc = main(["db", "init", "--root", str(tmp_path / "ws")])
+    assert rc == 0
+    store = SqliteStore.open(tmp_path / "ws")
+    store.save_task(Task.new(task_id="t-1", pipeline_id="p", source_ref={}))
+    store.close()
+
+    rc = main(["db", "dump-json",
+               "--root", str(tmp_path / "ws"),
+               "--out", str(tmp_path / "out")])
+    assert rc == 0
+    assert (tmp_path / "out" / "tasks" / "t-1.json").exists()
+
+
+def test_cli_db_status_prints_counts(tmp_path, capsys):
+    from annotation_pipeline_skill.interfaces.cli import main
+    rc = main(["db", "init", "--root", str(tmp_path / "ws")])
+    assert rc == 0
+
+    rc = main(["db", "status", "--root", str(tmp_path / "ws")])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "tasks: 0" in captured.out
