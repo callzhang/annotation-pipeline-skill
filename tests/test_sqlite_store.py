@@ -367,3 +367,61 @@ def test_runtime_snapshot_save_and_load(tmp_path):
     store.save_runtime_snapshot(snap)
     assert store.load_runtime_snapshot() == snap
     store.close()
+
+
+def test_save_and_load_document(tmp_path):
+    from annotation_pipeline_skill.core.models import AnnotationDocument
+    store = SqliteStore.open(tmp_path)
+    doc = AnnotationDocument.new(title="t", description="d", created_by="u")
+    store.save_document(doc)
+    assert store.load_document(doc.document_id) == doc
+    assert store.list_documents() == [doc]
+    store.close()
+
+
+def test_save_document_version_writes_content_to_file(tmp_path):
+    import hashlib
+    from annotation_pipeline_skill.core.models import AnnotationDocument, AnnotationDocumentVersion
+    store = SqliteStore.open(tmp_path)
+    doc = AnnotationDocument.new(title="t", description="d", created_by="u")
+    store.save_document(doc)
+    ver = AnnotationDocumentVersion.new(
+        document_id=doc.document_id, version="v1", content="# Title\n\nbody",
+        changelog="initial", created_by="u",
+    )
+
+    store.save_document_version(ver)
+
+    content_path = tmp_path / "document_versions" / doc.document_id / "v1.md"
+    assert content_path.exists()
+    assert content_path.read_text(encoding="utf-8") == "# Title\n\nbody"
+
+    loaded = store.load_document_version(ver.version_id)
+    assert loaded == ver
+
+    versions = store.list_document_versions(doc.document_id)
+    assert versions == [ver]
+    store.close()
+
+
+def test_document_version_sha256_is_stored(tmp_path):
+    import hashlib
+    import sqlite3
+    from annotation_pipeline_skill.core.models import AnnotationDocument, AnnotationDocumentVersion
+    store = SqliteStore.open(tmp_path)
+    doc = AnnotationDocument.new(title="t", description="d", created_by="u")
+    store.save_document(doc)
+    ver = AnnotationDocumentVersion.new(
+        document_id=doc.document_id, version="v1", content="abc",
+        changelog="x", created_by="u",
+    )
+    store.save_document_version(ver)
+
+    expected = hashlib.sha256(b"abc").hexdigest()
+    with sqlite3.connect(tmp_path / "db.sqlite") as conn:
+        sha = conn.execute(
+            "SELECT content_sha256 FROM document_versions WHERE version_id = ?",
+            (ver.version_id,),
+        ).fetchone()[0]
+    assert sha == expected
+    store.close()

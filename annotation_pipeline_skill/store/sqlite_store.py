@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
 from typing import Iterable
 
 from annotation_pipeline_skill.core.models import (
+    AnnotationDocument,
+    AnnotationDocumentVersion,
     ArtifactRef,
     Attempt,
     AuditEvent,
@@ -516,3 +519,96 @@ class SqliteStore:
         if not self._runtime_snapshot_path.exists():
             return None
         return RuntimeSnapshot.from_dict(json.loads(self._runtime_snapshot_path.read_text(encoding="utf-8")))
+
+    def save_document(self, doc) -> None:
+        d = doc.to_dict()
+        self._conn.execute(
+            """
+            INSERT INTO documents (document_id, title, description, created_at, created_by, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_id) DO UPDATE SET
+                title=excluded.title,
+                description=excluded.description,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                d["document_id"], d["title"], d["description"], d["created_at"], d["created_by"],
+                json.dumps(d["metadata"], sort_keys=True),
+            ),
+        )
+
+    def load_document(self, document_id: str):
+        row = self._conn.execute("SELECT * FROM documents WHERE document_id = ?", (document_id,)).fetchone()
+        if row is None:
+            raise KeyError(document_id)
+        return AnnotationDocument.from_dict({
+            "document_id": row["document_id"], "title": row["title"], "description": row["description"],
+            "created_at": row["created_at"], "created_by": row["created_by"],
+            "metadata": json.loads(row["metadata_json"]),
+        })
+
+    def list_documents(self):
+        rows = self._conn.execute("SELECT * FROM documents ORDER BY created_at").fetchall()
+        return [
+            AnnotationDocument.from_dict({
+                "document_id": r["document_id"], "title": r["title"], "description": r["description"],
+                "created_at": r["created_at"], "created_by": r["created_by"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+
+    def _content_path_for(self, document_id: str, version: str) -> Path:
+        return self.root / "document_versions" / document_id / f"{version}.md"
+
+    def save_document_version(self, ver) -> None:
+        d = ver.to_dict()
+        content = d["content"]
+        path = self._content_path_for(d["document_id"], d["version"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        rel_path = path.relative_to(self.root).as_posix()
+        self._conn.execute(
+            """
+            INSERT INTO document_versions (
+                version_id, document_id, version, content_path, content_sha256,
+                changelog, created_at, created_by, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(version_id) DO UPDATE SET
+                content_path=excluded.content_path,
+                content_sha256=excluded.content_sha256,
+                changelog=excluded.changelog,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                d["version_id"], d["document_id"], d["version"], rel_path, sha,
+                d["changelog"], d["created_at"], d["created_by"],
+                json.dumps(d["metadata"], sort_keys=True),
+            ),
+        )
+
+    def _row_to_doc_version(self, row):
+        path = self.root / row["content_path"]
+        content = path.read_text(encoding="utf-8")
+        return AnnotationDocumentVersion.from_dict({
+            "version_id": row["version_id"], "document_id": row["document_id"],
+            "version": row["version"], "content": content,
+            "changelog": row["changelog"], "created_at": row["created_at"],
+            "created_by": row["created_by"], "metadata": json.loads(row["metadata_json"]),
+        })
+
+    def load_document_version(self, version_id: str):
+        row = self._conn.execute(
+            "SELECT * FROM document_versions WHERE version_id = ?", (version_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(version_id)
+        return self._row_to_doc_version(row)
+
+    def list_document_versions(self, document_id: str):
+        rows = self._conn.execute(
+            "SELECT * FROM document_versions WHERE document_id = ? ORDER BY created_at",
+            (document_id,),
+        ).fetchall()
+        return [self._row_to_doc_version(r) for r in rows]
