@@ -991,3 +991,45 @@ def test_cli_import_jsonl_prelabeled_appends_attempt_record(tmp_path):
         assert attempt.provider_id == "prelabel"
         assert attempt.stage == "annotation"
         assert attempt.summary == "imported from v2 annotation"
+        # attempt_id must be scoped by task_id so subsequent pipelines / re-runs
+        # don't collide on the globally-unique attempts.attempt_id primary key.
+        assert attempt.attempt_id == f"{task_id}-attempt-0-prelabel"
+
+
+def test_cli_import_jsonl_prelabeled_two_pipelines_no_attempt_id_collision(tmp_path):
+    """Importing two pipelines with overlapping batch indices must succeed.
+
+    Regression test: previously attempt_id was `attempt-prelabel-{batch_idx}`
+    which collided whenever batch_idx repeated across imports.
+    """
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=10)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    for pipeline in ("pipeline_a", "pipeline_b"):
+        rc = main(
+            [
+                "import",
+                "jsonl-prelabeled",
+                "--project-root",
+                str(tmp_path),
+                "--source",
+                str(source),
+                "--pipeline-id",
+                pipeline,
+                "--batch-size",
+                "10",
+                "--output-schema-file",
+                str(schema_file),
+            ]
+        )
+        assert rc == 0
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    # Both pipelines created their batch 0 task successfully — no collision.
+    assert store.load_task("pipeline_a-000000").pipeline_id == "pipeline_a"
+    assert store.load_task("pipeline_b-000000").pipeline_id == "pipeline_b"
+    a_attempts = store.list_attempts("pipeline_a-000000")
+    b_attempts = store.list_attempts("pipeline_b-000000")
+    assert len(a_attempts) == 1 and len(b_attempts) == 1
+    assert a_attempts[0].attempt_id != b_attempts[0].attempt_id

@@ -962,7 +962,9 @@ def _save_jsonl_prelabeled_task(
     annotation_types: list[str],
     modality: str,
 ) -> None:
-    attempt_id = f"attempt-prelabel-{batch_idx:06d}"
+    # Scope by task_id so re-imports across pipelines never collide on the
+    # globally-unique attempts.attempt_id primary key.
+    attempt_id = f"{task_id}-attempt-0-prelabel"
     row_ids = [str(row.get("task_id") or row.get("row_id") or f"row-{i}") for i, row in enumerate(batch)]
     batched_schema = _batched_output_schema(output_schema, schema_defs, batch_size=len(batch))
     rows_payload = [
