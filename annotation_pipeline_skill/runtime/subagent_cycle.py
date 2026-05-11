@@ -132,7 +132,22 @@ class SubagentRuntime:
             stage="validation",
             attempt_id=annotation_attempt_id,
         )
-        validation_failure = self._check_annotation_validation(task, annotation_result.final_text)
+        task.metadata["continuity_handle"] = annotation_result.continuity_handle
+        self._run_validation_and_qc(
+            task,
+            annotation_artifact,
+            annotation_attempt_id,
+            annotation_result.final_text,
+        )
+
+    def _run_validation_and_qc(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+        annotation_attempt_id: str,
+        annotation_final_text: str,
+    ) -> None:
+        validation_failure = self._check_annotation_validation(task, annotation_final_text)
         if validation_failure is not None:
             self._record_validation_feedback(
                 task,
@@ -158,7 +173,6 @@ class SubagentRuntime:
             stage="qc",
             attempt_id=annotation_attempt_id,
         )
-        task.metadata["continuity_handle"] = annotation_result.continuity_handle
         self._run_qc_stage(task, annotation_artifact)
         self.store.save_task(task)
 
