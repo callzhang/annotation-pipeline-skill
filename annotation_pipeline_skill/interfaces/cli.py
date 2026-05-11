@@ -345,6 +345,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     human_review_decide.set_defaults(handler=handle_human_review_decide)
 
+    human_review_correct = human_review_subparsers.add_parser(
+        "correct", help="submit a schema-validated correction for a task in HUMAN_REVIEW"
+    )
+    human_review_correct.add_argument("--root", required=True)
+    human_review_correct.add_argument("--task", required=True)
+    human_review_correct.add_argument(
+        "--answer-file", required=True, help="path to a JSON file containing the corrected answer"
+    )
+    human_review_correct.add_argument("--actor", required=True)
+    human_review_correct.add_argument("--note", default=None)
+    human_review_correct.set_defaults(handler=handle_human_review_correct)
+
     coordinator_parser = subparsers.add_parser("coordinator")
     coordinator_subparsers = coordinator_parser.add_subparsers(required=True)
 
@@ -1032,6 +1044,29 @@ def handle_human_review_decide(args: argparse.Namespace) -> int:
         correction_mode=args.correction_mode,
     )
     print(json.dumps(result.to_dict(), sort_keys=True, indent=2))
+    return 0
+
+
+def handle_human_review_correct(args: argparse.Namespace) -> int:
+    from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+
+    answer = json.loads(Path(args.answer_file).read_text(encoding="utf-8"))
+    store = SqliteStore.open(args.root)
+    try:
+        result = HumanReviewService(store).submit_correction(
+            task_id=args.task,
+            answer=answer,
+            actor=args.actor,
+            note=args.note,
+        )
+    except SchemaValidationError as exc:
+        print("schema validation failed:")
+        for err in exc.errors:
+            print(f"  - {err}")
+        store.close()
+        return 2
+    print(f"task {result.task.task_id} accepted (artifact {result.artifact.artifact_id})")
+    store.close()
     return 0
 
 

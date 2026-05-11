@@ -498,3 +498,78 @@ def test_dashboard_api_filters_event_log_by_project(tmp_path):
 
     assert status == 200
     assert [event["task_id"] for event in payload["events"]] == ["beta-1"]
+
+
+def test_post_human_review_correction_accepts_valid_answer(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-api",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["entities"],
+                        "properties": {"entities": {"type": "array"}},
+                    }
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    api = DashboardApi(store)
+    body = json.dumps({"actor": "r", "answer": {"entities": []}, "note": "ok"}).encode("utf-8")
+    status, _headers, response = api.handle_post("/api/tasks/t-api/human_review_correction", body)
+    assert status == 200, response
+    payload = json.loads(response)
+    assert payload["task"]["status"] == "accepted"
+
+
+def test_post_human_review_correction_rejects_invalid_answer_400(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-api-bad",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {"type": "object", "required": ["entities"]}
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    api = DashboardApi(store)
+    body = json.dumps({"actor": "r", "answer": {"wrong": []}, "note": None}).encode("utf-8")
+    status, _headers, response = api.handle_post("/api/tasks/t-api-bad/human_review_correction", body)
+    assert status == 400
+    payload = json.loads(response)
+    assert payload["error"] == "schema_validation_failed"
+    assert isinstance(payload["details"], list) and payload["details"]
+
+
+def test_post_human_review_correction_rejects_invalid_state_409(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-api-state",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"annotation_guidance": {"output_schema": {"type": "object"}}}},
+    )
+    task.status = TaskStatus.PENDING  # not HUMAN_REVIEW
+    store.save_task(task)
+
+    api = DashboardApi(store)
+    body = json.dumps({"actor": "r", "answer": {}, "note": None}).encode("utf-8")
+    status, _headers, response = api.handle_post("/api/tasks/t-api-state/human_review_correction", body)
+    assert status == 409
+    payload = json.loads(response)
+    assert payload["error"] == "invalid_transition"

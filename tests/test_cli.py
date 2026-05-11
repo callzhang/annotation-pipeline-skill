@@ -654,3 +654,79 @@ def test_cli_db_status_prints_counts(tmp_path, capsys):
     assert rc == 0
     captured = capsys.readouterr()
     assert "tasks: 0" in captured.out
+
+
+def test_cli_human_review_correct_accepts_answer_file(tmp_path):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    root = tmp_path / "ws"
+    rc = main(["db", "init", "--root", str(root)])
+    assert rc == 0
+    store = SqliteStore.open(root)
+    task = Task.new(
+        task_id="t-cli-hr",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["entities"],
+                        "properties": {"entities": {"type": "array"}},
+                    }
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+    store.close()
+
+    answer_path = tmp_path / "answer.json"
+    answer_path.write_text(json.dumps({"entities": []}), encoding="utf-8")
+
+    rc = main([
+        "human-review", "correct",
+        "--root", str(root),
+        "--task", "t-cli-hr",
+        "--answer-file", str(answer_path),
+        "--actor", "reviewer-1",
+    ])
+    assert rc == 0
+    store = SqliteStore.open(root)
+    assert store.load_task("t-cli-hr").status is TaskStatus.ACCEPTED
+
+
+def test_cli_human_review_correct_returns_nonzero_on_schema_fail(tmp_path):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    root = tmp_path / "ws"
+    main(["db", "init", "--root", str(root)])
+    store = SqliteStore.open(root)
+    task = Task.new(
+        task_id="t-cli-bad",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {"annotation_guidance": {"output_schema": {"type": "object", "required": ["entities"]}}},
+        },
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+    store.close()
+
+    answer_path = tmp_path / "bad.json"
+    answer_path.write_text(json.dumps({"wrong": []}), encoding="utf-8")
+
+    rc = main([
+        "human-review", "correct",
+        "--root", str(root),
+        "--task", "t-cli-bad",
+        "--answer-file", str(answer_path),
+        "--actor", "r",
+    ])
+    assert rc != 0

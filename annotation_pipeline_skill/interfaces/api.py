@@ -13,6 +13,7 @@ import yaml
 from annotation_pipeline_skill.core.models import AuditEvent, FeedbackDiscussionEntry, Task, utc_now
 from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
 from annotation_pipeline_skill.core.runtime import RuntimeConfig, RuntimeSnapshot
+from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
 from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
@@ -156,6 +157,9 @@ class DashboardApi:
         if route.startswith("/api/tasks/") and route.endswith("/human-review"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/human-review").strip("/")
             return self._post_human_review_response(store, task_id, body)
+        if route.startswith("/api/tasks/") and route.endswith("/human_review_correction"):
+            task_id = route.removeprefix("/api/tasks/").removesuffix("/human_review_correction").strip("/")
+            return self._post_human_review_correction(store, task_id, body)
         if route.startswith("/api/tasks/") and route.endswith("/feedback-discussions"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/feedback-discussions").strip("/")
             return self._post_feedback_discussion_response(store, task_id, body)
@@ -366,6 +370,34 @@ class DashboardApi:
             return self._json_response(404, {"error": "task_not_found"})
         except (InvalidTransition, ValueError) as exc:
             return self._json_response(400, {"error": "invalid_human_review_decision", "detail": str(exc)})
+        return self._json_response(200, result.to_dict())
+
+    def _post_human_review_correction(
+        self, store: SqliteStore, task_id: str, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError:
+            return self._json_response(400, {"error": "invalid_json"})
+        if not isinstance(data, dict):
+            return self._json_response(400, {"error": "invalid_json"})
+        actor = data.get("actor")
+        answer = data.get("answer")
+        note = data.get("note")
+        if not isinstance(actor, str) or not actor.strip():
+            return self._json_response(400, {"error": "actor_required"})
+        if not isinstance(answer, dict):
+            return self._json_response(400, {"error": "answer_must_be_object"})
+
+        svc = HumanReviewService(store)
+        try:
+            result = svc.submit_correction(task_id=task_id, answer=answer, actor=actor, note=note)
+        except FileNotFoundError:
+            return self._json_response(404, {"error": "task_not_found"})
+        except InvalidTransition as exc:
+            return self._json_response(409, {"error": "invalid_transition", "detail": str(exc)})
+        except SchemaValidationError as exc:
+            return self._json_response(400, {"error": "schema_validation_failed", "details": exc.errors})
         return self._json_response(200, result.to_dict())
 
     def _update_task_qc_policy_response(self, store: SqliteStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
