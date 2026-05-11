@@ -4,8 +4,11 @@ from annotation_pipeline_skill.interfaces.cli import main
 
 
 def test_provider_doctor_validates_llm_profiles(tmp_path):
-    main(["init", "--project-root", str(tmp_path)])
-    profiles = tmp_path / ".annotation-pipeline" / "llm_profiles.yaml"
+    project = tmp_path / "proj"
+    main(["init", "--project-root", str(project)])
+    # llm_profiles.yaml is workspace-global; overwrite the seeded default with a
+    # custom valid registry to exercise validation against the resolver.
+    profiles = tmp_path / "llm_profiles.yaml"
     profiles.write_text(
         """
 profiles:
@@ -20,12 +23,15 @@ targets:
         encoding="utf-8",
     )
 
-    assert main(["provider", "doctor", "--project-root", str(tmp_path)]) == 0
+    assert main(["provider", "doctor", "--project-root", str(project)]) == 0
 
 
 def test_provider_doctor_rejects_invalid_llm_profiles(tmp_path):
-    main(["init", "--project-root", str(tmp_path)])
-    profiles = tmp_path / ".annotation-pipeline" / "llm_profiles.yaml"
+    project = tmp_path / "proj"
+    main(["init", "--project-root", str(project)])
+    # Workspace-global file is the source of truth; clobber it with an invalid
+    # registry to make sure `doctor` reports failure.
+    profiles = tmp_path / "llm_profiles.yaml"
     profiles.write_text(
         """
 profiles:
@@ -38,13 +44,14 @@ targets:
         encoding="utf-8",
     )
 
-    assert main(["provider", "doctor", "--project-root", str(tmp_path)]) == 1
+    assert main(["provider", "doctor", "--project-root", str(project)]) == 1
 
 
 def test_provider_targets_exposes_ui_relevant_profile_fields(tmp_path, capsys):
-    main(["init", "--project-root", str(tmp_path)])
+    project = tmp_path / "proj"
+    main(["init", "--project-root", str(project)])
 
-    assert main(["provider", "targets", "--project-root", str(tmp_path)]) == 0
+    assert main(["provider", "targets", "--project-root", str(project)]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["annotation"] == {

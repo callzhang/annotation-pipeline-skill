@@ -35,18 +35,56 @@ def external_pull_server(response_payload):
 
 
 def test_cli_init_creates_project_layout(tmp_path):
-    exit_code = main(["init", "--project-root", str(tmp_path)])
+    project = tmp_path / "proj"
+    exit_code = main(["init", "--project-root", str(project)])
 
     assert exit_code == 0
-    config_root = tmp_path / ".annotation-pipeline"
+    config_root = project / ".annotation-pipeline"
     assert not (config_root / "providers.yaml").exists()
     assert not (config_root / "stage_routes.yaml").exists()
     assert (config_root / "workflow.yaml").exists()
-    assert (config_root / "llm_profiles.yaml").exists()
     assert (config_root / "annotators.yaml").exists()
     assert (config_root / "tasks").is_dir()
     assert (config_root / "exports").is_dir()
     assert (config_root / "coordination").is_dir()
+    # llm_profiles.yaml is workspace-global, NOT per-project.
+    assert not (config_root / "llm_profiles.yaml").exists()
+    assert (tmp_path / "llm_profiles.yaml").exists()
+
+
+def test_cli_init_does_not_overwrite_existing_workspace_llm_profiles(tmp_path):
+    workspace_profiles = tmp_path / "llm_profiles.yaml"
+    workspace_profiles.write_text("existing: content\n", encoding="utf-8")
+
+    main(["init", "--project-root", str(tmp_path / "proj")])
+
+    assert workspace_profiles.read_text(encoding="utf-8") == "existing: content\n"
+
+
+def test_cli_init_seeds_workspace_llm_profiles_when_absent(tmp_path):
+    project = tmp_path / "proj"
+    main(["init", "--project-root", str(project)])
+
+    content = (tmp_path / "llm_profiles.yaml").read_text(encoding="utf-8")
+    assert "profiles:" in content
+    assert "targets:" in content
+    assert "deepseek_flash" in content
+
+
+def test_cli_init_accepts_explicit_workspace_flag(tmp_path):
+    ws = tmp_path / "shared"
+    main(
+        [
+            "init",
+            "--project-root",
+            str(tmp_path / "proj-a"),
+            "--workspace",
+            str(ws),
+        ]
+    )
+    assert (ws / "llm_profiles.yaml").exists()
+    # Per-project dir must NOT also contain it.
+    assert not (tmp_path / "proj-a" / ".annotation-pipeline" / "llm_profiles.yaml").exists()
 
 
 def test_cli_init_writes_runtime_config(tmp_path):

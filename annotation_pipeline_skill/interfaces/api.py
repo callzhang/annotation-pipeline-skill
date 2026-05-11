@@ -32,10 +32,11 @@ from annotation_pipeline_skill.llm.profiles import ProfileValidationError
 CONFIG_FILE_DEFINITIONS: dict[str, str] = {
     "annotation_rules.yaml": "Annotation Rules",
     "annotators.yaml": "Annotation Agents",
-    "llm_profiles.yaml": "Subagent Providers",
     "workflow.yaml": "Workflow",
     "external_tasks.yaml": "External Task API",
     "callbacks.yaml": "Callbacks",
+    # llm_profiles.yaml is workspace-global; edit via the Providers panel,
+    # not the per-project Config panel.
 }
 
 

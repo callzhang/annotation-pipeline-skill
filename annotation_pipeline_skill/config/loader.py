@@ -37,11 +37,13 @@ def load_project_config(
         callbacks_data=callbacks_data,
         workflow_data=workflow_data,
     )
-    validate_project_config(
-        config,
-        config_root,
-        workspace_root=Path(workspace_root) if workspace_root is not None else None,
-    )
+    # Default workspace_root to the parent of project_root so the workspace-global
+    # llm_profiles.yaml is discovered without callers needing to pass it explicitly.
+    if workspace_root is not None:
+        resolved_workspace = Path(workspace_root)
+    else:
+        resolved_workspace = Path(project_root).parent
+    validate_project_config(config, config_root, workspace_root=resolved_workspace)
     return config
 
 

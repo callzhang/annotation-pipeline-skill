@@ -239,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    init_parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="Workspace dir for the shared llm_profiles.yaml. Defaults to <project-root>.parent.",
+    )
     init_parser.set_defaults(handler=handle_init)
 
     doctor_parser = subparsers.add_parser("doctor")
@@ -567,10 +573,20 @@ def handle_init(args: argparse.Namespace) -> int:
         "document_versions",
     ):
         (config_root / name).mkdir(parents=True, exist_ok=True)
+    # Per-project config files (everything except llm_profiles.yaml, which is workspace-global).
     for filename, content in CONFIG_FILES.items():
+        if filename == "llm_profiles.yaml":
+            continue
         path = config_root / filename
         if not path.exists():
             path.write_text(content, encoding="utf-8")
+    # Workspace-global llm_profiles.yaml. Seed only when absent so subsequent
+    # `apl init` invocations in the same workspace don't clobber edits.
+    workspace = args.workspace if args.workspace is not None else args.project_root.parent
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace_profiles = workspace / "llm_profiles.yaml"
+    if not workspace_profiles.exists():
+        workspace_profiles.write_text(CONFIG_FILES["llm_profiles.yaml"], encoding="utf-8")
     return 0
 
 
