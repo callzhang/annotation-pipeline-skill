@@ -440,3 +440,99 @@ def test_save_and_list_export_manifest(tmp_path):
     store.save_export_manifest(m)
     assert store.list_export_manifests() == [m]
     store.close()
+
+
+def test_delete_pipeline_removes_tasks_and_children(tmp_path):
+    store = SqliteStore.open(tmp_path)
+
+    # Two tasks in pipeline_a and one in pipeline_b.
+    task_a1 = _make_task("a-1", pipeline_id="pipeline_a")
+    task_a2 = _make_task("a-2", pipeline_id="pipeline_a")
+    task_b1 = _make_task("b-1", pipeline_id="pipeline_b")
+    for t in (task_a1, task_a2, task_b1):
+        store.save_task(t)
+
+    # Children for each task — events, attempts, feedback, discussions, artifacts.
+    for tid in ("a-1", "a-2", "b-1"):
+        store.append_event(
+            AuditEvent.new(tid, TaskStatus.DRAFT, TaskStatus.PENDING, actor="x", reason="r", stage="ingest")
+        )
+        store.append_attempt(
+            Attempt(attempt_id=f"{tid}-att-1", task_id=tid, index=0, stage="annotate", status=AttemptStatus.SUCCEEDED)
+        )
+        store.append_feedback(
+            FeedbackRecord.new(
+                task_id=tid, attempt_id=f"{tid}-att-1",
+                source_stage=FeedbackSource.QC, severity=FeedbackSeverity.ERROR,
+                category="cat", message="m", target={"x": "y"},
+                suggested_action="rerun", created_by="qc",
+            )
+        )
+        store.append_feedback_discussion(
+            FeedbackDiscussionEntry.new(
+                task_id=tid, feedback_id="fb-1",
+                role="annotator", stance="agree", message="ok", created_by="annotator-1",
+            )
+        )
+        store.append_artifact(
+            ArtifactRef.new(
+                task_id=tid, kind="annotation_result",
+                path=f"artifact_payloads/{tid}/annotation_result.json",
+                content_type="application/json",
+            )
+        )
+        store.save_outbox(OutboxRecord.new(tid, OutboxKind.STATUS, {"v": 1}))
+
+    # On-disk artifact files for each task.
+    artifact_root = store.root / "artifact_payloads"
+    for tid in ("a-1", "a-2", "b-1"):
+        d = artifact_root / tid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "annotation_result.json").write_text("{}", encoding="utf-8")
+
+    report = store.delete_pipeline("pipeline_a")
+
+    # Tasks: only pipeline_b remains.
+    remaining = [t.task_id for t in store.list_tasks()]
+    assert remaining == ["b-1"]
+
+    # pipeline_a children gone, pipeline_b children intact.
+    assert store.list_events("a-1") == [] and store.list_events("a-2") == []
+    assert len(store.list_events("b-1")) == 1
+    assert store.list_attempts("a-1") == [] and store.list_attempts("a-2") == []
+    assert len(store.list_attempts("b-1")) == 1
+    assert store.list_feedback("a-1") == [] and store.list_feedback("a-2") == []
+    assert len(store.list_feedback("b-1")) == 1
+    assert store.list_feedback_discussions("a-1") == [] and store.list_feedback_discussions("a-2") == []
+    assert len(store.list_feedback_discussions("b-1")) == 1
+    assert store.list_artifacts("a-1") == [] and store.list_artifacts("a-2") == []
+    assert len(store.list_artifacts("b-1")) == 1
+    outbox_task_ids = {r.task_id for r in store.list_outbox()}
+    assert outbox_task_ids == {"b-1"}
+
+    # On-disk dirs gone for pipeline_a, intact for pipeline_b.
+    assert not (artifact_root / "a-1").exists()
+    assert not (artifact_root / "a-2").exists()
+    assert (artifact_root / "b-1" / "annotation_result.json").exists()
+
+    # Report has correct counts.
+    assert report["tasks"] == 2
+    assert report["audit_events"] == 2
+    assert report["attempts"] == 2
+    assert report["feedback_records"] == 2
+    assert report["feedback_discussions"] == 2
+    assert report["artifact_refs"] == 2
+    assert report["outbox_records"] == 2
+    assert report["active_runs"] == 0
+    assert report["runtime_leases"] == 0
+    assert report["artifact_files"] == 2
+
+    store.close()
+
+
+def test_delete_pipeline_returns_zero_counts_when_pipeline_missing(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    report = store.delete_pipeline("nope")
+    assert report["tasks"] == 0
+    assert report["artifact_files"] == 0
+    store.close()

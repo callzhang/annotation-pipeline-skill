@@ -1071,3 +1071,90 @@ def test_cli_import_jsonl_prelabeled_two_pipelines_no_attempt_id_collision(tmp_p
     b_attempts = store.list_attempts("pipeline_b-000000")
     assert len(a_attempts) == 1 and len(b_attempts) == 1
     assert a_attempts[0].attempt_id != b_attempts[0].attempt_id
+
+
+def test_cli_pipeline_delete_preview_then_force(tmp_path, capsys):
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=3)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "1",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()  # drain import output
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    pre_tasks = [t for t in store.list_tasks() if t.pipeline_id == "v3"]
+    assert len(pre_tasks) == 3
+
+    # Preview (no --force): tasks still present.
+    rc = main(
+        [
+            "pipeline",
+            "delete",
+            "--project-root",
+            str(tmp_path),
+            "--pipeline-id",
+            "v3",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    payload = json.loads(out)
+    assert "would_delete" in payload
+    assert payload["would_delete"]["tasks"] == 3
+    store2 = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    assert len([t for t in store2.list_tasks() if t.pipeline_id == "v3"]) == 3
+
+    # With --force: tasks gone.
+    rc = main(
+        [
+            "pipeline",
+            "delete",
+            "--project-root",
+            str(tmp_path),
+            "--pipeline-id",
+            "v3",
+            "--force",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["deleted"]["tasks"] == 3
+
+    store3 = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    assert [t for t in store3.list_tasks() if t.pipeline_id == "v3"] == []
+
+
+def test_cli_pipeline_delete_nonexistent_returns_1(tmp_path, capsys):
+    main(["init", "--project-root", str(tmp_path)])
+
+    rc = main(
+        [
+            "pipeline",
+            "delete",
+            "--project-root",
+            str(tmp_path),
+            "--pipeline-id",
+            "does-not-exist",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    payload = json.loads(out)
+    assert payload == {"error": "pipeline_not_found", "pipeline_id": "does-not-exist"}

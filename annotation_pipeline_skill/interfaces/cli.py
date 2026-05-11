@@ -468,6 +468,14 @@ def build_parser() -> argparse.ArgumentParser:
     task_unblock.add_argument("--reason", default="manually unblocked")
     task_unblock.set_defaults(handler=handle_task_unblock)
 
+    pipeline_parser = subparsers.add_parser("pipeline")
+    pipeline_subs = pipeline_parser.add_subparsers(required=True)
+    p_delete = pipeline_subs.add_parser("delete")
+    p_delete.add_argument("--project-root", type=Path, default=Path.cwd())
+    p_delete.add_argument("--pipeline-id", required=True)
+    p_delete.add_argument("--force", action="store_true")
+    p_delete.set_defaults(handler=handle_pipeline_delete)
+
     external_parser = subparsers.add_parser("external")
     external_subparsers = external_parser.add_subparsers(required=True)
 
@@ -1428,6 +1436,27 @@ def handle_task_unblock(args: argparse.Namespace) -> int:
     store.save_task(task)
     store.append_event(event)
     print(json.dumps({"task": task.to_dict(), "event": event.to_dict()}, sort_keys=True, indent=2))
+    return 0
+
+
+def handle_pipeline_delete(args: argparse.Namespace) -> int:
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
+    matching = [t for t in store.list_tasks() if t.pipeline_id == args.pipeline_id]
+    if not matching:
+        print(json.dumps({"error": "pipeline_not_found", "pipeline_id": args.pipeline_id}, indent=2))
+        return 1
+    if not args.force:
+        preview = {
+            "would_delete": {
+                "tasks": len(matching),
+                "task_ids": [t.task_id for t in matching],
+            },
+            "hint": "Re-run with --force to actually delete.",
+        }
+        print(json.dumps(preview, indent=2))
+        return 0
+    report = store.delete_pipeline(args.pipeline_id)
+    print(json.dumps({"deleted": report}, indent=2))
     return 0
 
 

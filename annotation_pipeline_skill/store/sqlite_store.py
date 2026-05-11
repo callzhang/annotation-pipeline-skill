@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
@@ -160,6 +161,89 @@ class SqliteStore:
             values,
         ).fetchall()
         return [_row_to_task(r) for r in rows]
+
+    def delete_pipeline(self, pipeline_id: str) -> dict[str, int]:
+        """Cascade-delete every task with the given pipeline_id and all of its
+        children, plus the on-disk artifact_payloads directory for each task.
+
+        Returns a dict of {table_name: rows_deleted} including an
+        "artifact_files" entry counting on-disk files removed.
+        """
+        task_rows = self._conn.execute(
+            "SELECT task_id FROM tasks WHERE pipeline_id = ?",
+            (pipeline_id,),
+        ).fetchall()
+        task_ids = [r["task_id"] for r in task_rows]
+
+        empty_report = {
+            "tasks": 0,
+            "audit_events": 0,
+            "attempts": 0,
+            "feedback_records": 0,
+            "feedback_discussions": 0,
+            "artifact_refs": 0,
+            "outbox_records": 0,
+            "active_runs": 0,
+            "runtime_leases": 0,
+            "artifact_files": 0,
+        }
+        if not task_ids:
+            return empty_report
+
+        child_tables = (
+            "audit_events",
+            "attempts",
+            "feedback_records",
+            "feedback_discussions",
+            "artifact_refs",
+            "outbox_records",
+            "active_runs",
+            "runtime_leases",
+        )
+
+        # Chunk IN-clause args to stay well under SQLite's variable limit.
+        chunk_size = 500
+        chunks = [task_ids[i : i + chunk_size] for i in range(0, len(task_ids), chunk_size)]
+
+        report = dict(empty_report)
+        report["tasks"] = len(task_ids)
+
+        # Pre-count child rows for the report.
+        for table in child_tables:
+            total = 0
+            for chunk in chunks:
+                placeholders = ",".join("?" for _ in chunk)
+                row = self._conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {table} WHERE task_id IN ({placeholders})",
+                    chunk,
+                ).fetchone()
+                total += row["c"]
+            report[table] = total
+
+        with self._conn:
+            for table in child_tables:
+                for chunk in chunks:
+                    placeholders = ",".join("?" for _ in chunk)
+                    self._conn.execute(
+                        f"DELETE FROM {table} WHERE task_id IN ({placeholders})",
+                        chunk,
+                    )
+            self._conn.execute(
+                "DELETE FROM tasks WHERE pipeline_id = ?",
+                (pipeline_id,),
+            )
+
+        # Remove on-disk artifact_payloads/<task_id>/ directories.
+        files_removed = 0
+        artifact_root = self.root / "artifact_payloads"
+        for tid in task_ids:
+            task_dir = artifact_root / tid
+            if task_dir.exists():
+                # Count files before removal for the report.
+                files_removed += sum(1 for _ in task_dir.rglob("*") if _.is_file())
+                shutil.rmtree(task_dir, ignore_errors=False)
+        report["artifact_files"] = files_removed
+        return report
 
     def append_event(self, event: AuditEvent) -> None:
         d = event.to_dict()
