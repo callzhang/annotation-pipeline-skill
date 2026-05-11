@@ -111,14 +111,30 @@ runtime:
     cli_kind: codex
     cli_binary: codex
     model: gpt-5.4-mini
-    reasoning_effort: none
+    reasoning_effort: medium
     timeout_seconds: 900
     no_progress_timeout_seconds: 30
-  local_claude:
+  local_codex_full:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4
+    reasoning_effort: medium
+    timeout_seconds: 900
+    no_progress_timeout_seconds: 30
+  local_claude_sonnet:
     provider: local_cli
     cli_kind: claude
     cli_binary: claude
-    model: claude-sonnet-4-6
+    model: sonnet
+    permission_mode: dontAsk
+    timeout_seconds: 900
+    no_progress_timeout_seconds: 30
+  local_claude_haiku:
+    provider: local_cli
+    cli_kind: claude
+    cli_binary: claude
+    model: haiku
     permission_mode: dontAsk
     timeout_seconds: 900
     no_progress_timeout_seconds: 30
@@ -143,18 +159,47 @@ runtime:
     api_key_env: DEEPSEEK_API_KEY
     base_url: https://api.deepseek.com
     timeout_seconds: 300
+  deepseek_chat:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    timeout_seconds: 300
   glm_flash:
     provider: openai_compatible
     provider_flavor: glm
     model: glm-4-flash
-    api_key_env: BIGMODEL_MCP_API_KEY
+    api_key_env:
+      - BIGMODEL_MCP_API_KEY
+      - ZHIPUAI_API_KEY
     base_url: https://open.bigmodel.cn/api/paas/v4
     timeout_seconds: 120
   glm_air:
     provider: openai_compatible
     provider_flavor: glm
     model: glm-4.5-air
-    api_key_env: BIGMODEL_MCP_API_KEY
+    api_key_env:
+      - GLM_CODING_API_KEY
+      - BIGMODEL_MCP_API_KEY
+    base_url: https://open.bigmodel.cn/api/coding/paas/v4
+    timeout_seconds: 300
+  glm_46:
+    provider: openai_compatible
+    provider_flavor: glm
+    model: glm-4.6
+    api_key_env:
+      - GLM_CODING_API_KEY
+      - BIGMODEL_MCP_API_KEY
+    base_url: https://open.bigmodel.cn/api/coding/paas/v4
+    timeout_seconds: 300
+  glm_51:
+    provider: openai_compatible
+    provider_flavor: glm
+    model: glm-5.1
+    api_key_env:
+      - GLM_CODING_API_KEY
+      - BIGMODEL_MCP_API_KEY
     base_url: https://open.bigmodel.cn/api/coding/paas/v4
     timeout_seconds: 300
   minimax_default:

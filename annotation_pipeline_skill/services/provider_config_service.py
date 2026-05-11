@@ -127,17 +127,24 @@ def _profile_diagnostics(profile: LLMProfile, *, env: Mapping[str, str]) -> dict
             }
         )
     else:
-        key_present = bool(profile.api_key) or bool(profile.api_key_env and env.get(profile.api_key_env))
+        key_present = bool(profile.api_key) or bool(profile.api_key_env and profile.resolve_api_key(env))
+        env_label: str | None
+        if profile.api_key_env is None:
+            env_label = None
+        elif isinstance(profile.api_key_env, str):
+            env_label = profile.api_key_env
+        else:
+            env_label = ", ".join(profile.api_key_env)
         checks.append(
             {
                 "id": "api_key_env_present",
                 "status": "ok" if key_present else "error",
                 "message": (
-                    f"{profile.api_key_env} is available"
-                    if key_present and profile.api_key_env
+                    f"{env_label} is available"
+                    if key_present and env_label
                     else "inline api_key configured"
                     if key_present
-                    else f"{profile.api_key_env} is missing"
+                    else f"{env_label} is missing"
                 ),
             }
         )

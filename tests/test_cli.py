@@ -730,3 +730,79 @@ def test_cli_human_review_correct_returns_nonzero_on_schema_fail(tmp_path):
         "--actor", "r",
     ])
     assert rc != 0
+
+
+def test_default_llm_profiles_template_covers_memory_ner_models():
+    """The init template should include profiles for all models in memory-ner/providers.yaml."""
+    import yaml
+    from annotation_pipeline_skill.interfaces.cli import CONFIG_FILES
+
+    template = yaml.safe_load(CONFIG_FILES["llm_profiles.yaml"])
+    profile_models = {p["model"] for p in template["profiles"].values()}
+    # codex
+    assert "gpt-5.4" in profile_models
+    assert "gpt-5.4-mini" in profile_models
+    # claude (CLI shortnames matching memory-ner)
+    assert "sonnet" in profile_models or "claude-sonnet-4-6" in profile_models
+    # deepseek
+    assert "deepseek-v4-flash" in profile_models
+    assert "deepseek-v4-pro" in profile_models
+    assert "deepseek-chat" in profile_models
+    # glm
+    assert "glm-4-flash" in profile_models
+    assert "glm-4.5-air" in profile_models
+    assert "glm-4.6" in profile_models
+    assert "glm-5.1" in profile_models
+    # minimax
+    assert "MiniMax-M2.7" in profile_models
+
+
+def test_default_llm_profiles_glm_coding_models_use_coding_endpoint_with_fallback_key():
+    """glm-4.5-air, glm-4.6, glm-5.1 must use the coding endpoint + GLM_CODING_API_KEY fallback chain."""
+    import yaml
+    from annotation_pipeline_skill.interfaces.cli import CONFIG_FILES
+
+    template = yaml.safe_load(CONFIG_FILES["llm_profiles.yaml"])
+    coding_models = {"glm-4.5-air", "glm-4.6", "glm-5.1"}
+    for profile_name, profile in template["profiles"].items():
+        if profile.get("model") in coding_models:
+            assert profile["base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4", (
+                f"{profile_name} should use coding endpoint, got {profile.get('base_url')}"
+            )
+            key_env = profile["api_key_env"]
+            # Must be a list and include GLM_CODING_API_KEY first, BIGMODEL_MCP_API_KEY second
+            assert isinstance(key_env, list), f"{profile_name} api_key_env should be a list"
+            assert key_env[0] == "GLM_CODING_API_KEY", f"{profile_name} primary env must be GLM_CODING_API_KEY"
+            assert "BIGMODEL_MCP_API_KEY" in key_env, f"{profile_name} should include BIGMODEL_MCP_API_KEY fallback"
+
+
+def test_default_llm_profiles_glm_non_coding_models_use_public_endpoint():
+    import yaml
+    from annotation_pipeline_skill.interfaces.cli import CONFIG_FILES
+
+    template = yaml.safe_load(CONFIG_FILES["llm_profiles.yaml"])
+    for profile_name, profile in template["profiles"].items():
+        if profile.get("model") == "glm-4-flash":
+            assert profile["base_url"] == "https://open.bigmodel.cn/api/paas/v4"
+            return
+    raise AssertionError("template missing glm-4-flash profile")
+
+
+def test_default_llm_profiles_template_is_valid_yaml_and_registry():
+    """Template must load cleanly through load_llm_registry."""
+    from annotation_pipeline_skill.interfaces.cli import CONFIG_FILES
+    from annotation_pipeline_skill.llm.profiles import load_llm_registry
+
+    # Round-trip through file because load_llm_registry expects a path
+    import tempfile
+    from pathlib import Path
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as f:
+        f.write(CONFIG_FILES["llm_profiles.yaml"])
+        path = Path(f.name)
+    try:
+        registry = load_llm_registry(path)
+        # All declared targets must resolve to existing profiles.
+        for target in registry.targets:
+            registry.resolve(target)
+    finally:
+        path.unlink(missing_ok=True)
