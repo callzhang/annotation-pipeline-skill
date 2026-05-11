@@ -9,14 +9,22 @@ from annotation_pipeline_skill.config.models import (
     ProjectConfig,
 )
 from annotation_pipeline_skill.core.runtime import RuntimeConfig
-from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
+from annotation_pipeline_skill.llm.profiles import (
+    ProfileValidationError,
+    load_llm_registry,
+    resolve_llm_profiles_path,
+)
 
 
 class ConfigValidationError(ValueError):
     pass
 
 
-def load_project_config(project_root: Path | str) -> ProjectConfig:
+def load_project_config(
+    project_root: Path | str,
+    *,
+    workspace_root: Path | str | None = None,
+) -> ProjectConfig:
     config_root = Path(project_root) / ".annotation-pipeline"
     annotators_data = read_yaml(config_root / "annotators.yaml")
     external_data = read_yaml(config_root / "external_tasks.yaml")
@@ -29,7 +37,11 @@ def load_project_config(project_root: Path | str) -> ProjectConfig:
         callbacks_data=callbacks_data,
         workflow_data=workflow_data,
     )
-    validate_project_config(config, config_root)
+    validate_project_config(
+        config,
+        config_root,
+        workspace_root=Path(workspace_root) if workspace_root is not None else None,
+    )
     return config
 
 
@@ -55,10 +67,25 @@ def load_runtime_config(project_root: Path | str) -> RuntimeConfig:
     return RuntimeConfig.from_dict(workflow_data.get("runtime") or {})
 
 
-def validate_project_config(config: ProjectConfig, config_root: Path, llm_registry=None) -> None:
+def validate_project_config(
+    config: ProjectConfig,
+    config_root: Path,
+    llm_registry=None,
+    *,
+    workspace_root: Path | None = None,
+) -> None:
     if llm_registry is None:
+        profiles_path = resolve_llm_profiles_path(
+            workspace_root=workspace_root,
+            project_config_root=config_root,
+        )
+        if profiles_path is None:
+            raise ConfigValidationError(
+                f"no llm_profiles.yaml found under workspace_root={workspace_root} "
+                f"or project_config_root={config_root}"
+            )
         try:
-            llm_registry = load_llm_registry(config_root / "llm_profiles.yaml")
+            llm_registry = load_llm_registry(profiles_path)
         except (OSError, ProfileValidationError) as exc:
             raise ConfigValidationError(str(exc)) from exc
     for annotator_id, annotator in config.annotators.items():

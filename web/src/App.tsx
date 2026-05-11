@@ -275,7 +275,7 @@ export default function App() {
       {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "outbox" ? <OutboxPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
-      {viewMode === "providers" ? <ProvidersPanel storeKey={selectedStoreKey} /> : null}
+      {viewMode === "providers" ? <ProvidersPanel /> : null}
       {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "config" ? <ConfigPanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}

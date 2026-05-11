@@ -26,7 +26,11 @@ from annotation_pipeline_skill.interfaces.api import serve_dashboard_api
 from annotation_pipeline_skill.llm.local_cli import LocalCLIClient
 from annotation_pipeline_skill.llm.openai_compatible import OpenAICompatibleClient
 from annotation_pipeline_skill.llm.openai_responses import OpenAIResponsesClient
-from annotation_pipeline_skill.llm.profiles import ProfileValidationError, load_llm_registry
+from annotation_pipeline_skill.llm.profiles import (
+    ProfileValidationError,
+    load_llm_registry,
+    resolve_llm_profiles_path,
+)
 from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
@@ -1236,17 +1240,32 @@ def handle_runtime_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_project_profiles_path(project_root: Path) -> Path | None:
+    """Return the llm_profiles.yaml path to use, preferring workspace-global."""
+    project_root = Path(project_root)
+    return resolve_llm_profiles_path(
+        workspace_root=project_root.parent,
+        project_config_root=project_root / ".annotation-pipeline",
+    )
+
+
 def handle_provider_doctor(args: argparse.Namespace) -> int:
+    path = _resolve_project_profiles_path(args.project_root)
+    if path is None:
+        return 1
     try:
-        load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
+        load_llm_registry(path)
     except (OSError, ProfileValidationError):
         return 1
     return 0
 
 
 def handle_provider_targets(args: argparse.Namespace) -> int:
+    path = _resolve_project_profiles_path(args.project_root)
+    if path is None:
+        return 1
     try:
-        registry = load_llm_registry(args.project_root / ".annotation-pipeline" / "llm_profiles.yaml")
+        registry = load_llm_registry(path)
     except (OSError, ProfileValidationError):
         return 1
     payload = {}
@@ -1445,8 +1464,15 @@ def handle_serve(args: argparse.Namespace) -> int:
     default_store = stores[default_key]
     runtime_once = None
     runtime_config = None
+    workspace_root = Path(args.workspace).resolve()
     try:
-        registry = load_llm_registry(default_store.root / "llm_profiles.yaml")
+        profiles_path = resolve_llm_profiles_path(
+            workspace_root=workspace_root,
+            project_config_root=default_store.root,
+        )
+        if profiles_path is None:
+            raise FileNotFoundError("llm_profiles.yaml not found in workspace or project")
+        registry = load_llm_registry(profiles_path)
         default_project_root = stores_map[default_key]
         config_root = default_project_root / ".annotation-pipeline"
         annotators_data = read_yaml(config_root / "annotators.yaml")
@@ -1478,6 +1504,7 @@ def handle_serve(args: argparse.Namespace) -> int:
         default_store_key=default_key,
         runtime_once=runtime_once,
         runtime_config=runtime_config,
+        workspace_root=workspace_root,
     )
     return 0
 
@@ -1485,11 +1512,21 @@ def handle_serve(args: argparse.Namespace) -> int:
 def _runtime_context(project_root: Path) -> RuntimeCliContext:
     project_root = Path(project_root)
     config_root = project_root / ".annotation-pipeline"
+    workspace_root = project_root.parent
     annotators_data = read_yaml(config_root / "annotators.yaml")
     external_data = read_yaml(config_root / "external_tasks.yaml")
     callbacks_data = read_yaml(config_root / "callbacks.yaml")
     workflow_data = read_yaml(config_root / "workflow.yaml")
-    registry = load_llm_registry(config_root / "llm_profiles.yaml")
+    profiles_path = resolve_llm_profiles_path(
+        workspace_root=workspace_root,
+        project_config_root=config_root,
+    )
+    if profiles_path is None:
+        raise FileNotFoundError(
+            f"no llm_profiles.yaml found under workspace_root={workspace_root} "
+            f"or project_config_root={config_root}"
+        )
+    registry = load_llm_registry(profiles_path)
     config = build_project_config_from_data(
         annotators_data=annotators_data,
         external_data=external_data,

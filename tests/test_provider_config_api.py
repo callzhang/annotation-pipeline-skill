@@ -32,7 +32,11 @@ limits:
         encoding="utf-8",
     )
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    api = DashboardApi(SqliteStore.open(tmp_path / ".annotation-pipeline"))
+    # No workspace-global file → falls back to project-local llm_profiles.yaml.
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=tmp_path / "workspace",
+    )
 
     status, _headers, body = api.handle_get("/api/providers")
 
@@ -50,7 +54,12 @@ limits:
 
 def test_provider_config_api_saves_structured_provider_configuration(tmp_path):
     main(["init", "--project-root", str(tmp_path)])
-    api = DashboardApi(SqliteStore.open(tmp_path / ".annotation-pipeline"))
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
 
     status, _headers, body = api.handle_put(
         "/api/providers",
@@ -87,8 +96,73 @@ def test_provider_config_api_saves_structured_provider_configuration(tmp_path):
     )
 
     payload = json.loads(body.decode("utf-8"))
-    saved = (tmp_path / ".annotation-pipeline" / "llm_profiles.yaml").read_text(encoding="utf-8")
+    # Save always writes to workspace-global, never to project-local.
+    saved = (workspace_root / "llm_profiles.yaml").read_text(encoding="utf-8")
     assert status == 200
     assert payload["targets"]["qc"] == "deepseek_default"
     assert "provider_flavor: deepseek" in saved
     assert "local_cli_global_concurrency: 3" in saved
+
+
+def test_provider_config_api_reads_workspace_global_when_present(tmp_path, monkeypatch):
+    main(["init", "--project-root", str(tmp_path)])
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    # Workspace-global takes precedence over the project-local file written by init.
+    (workspace_root / "llm_profiles.yaml").write_text(
+        f"""
+profiles:
+  global_python:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: {sys.executable}
+    model: workspace-model
+targets:
+  annotation: global_python
+""",
+        encoding="utf-8",
+    )
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
+
+    status, _headers, body = api.handle_get("/api/providers")
+
+    payload = json.loads(body.decode("utf-8"))
+    assert status == 200
+    assert payload["profiles"][0]["name"] == "global_python"
+    assert payload["profiles"][0]["model"] == "workspace-model"
+
+
+def test_provider_config_api_save_creates_workspace_file_when_absent(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
+    assert not (workspace_root / "llm_profiles.yaml").exists()
+
+    status, _headers, _body = api.handle_put(
+        "/api/providers",
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "local_codex",
+                        "provider": "local_cli",
+                        "cli_kind": "codex",
+                        "cli_binary": "codex",
+                        "model": "gpt-5.4-mini",
+                    }
+                ],
+                "targets": {"annotation": "local_codex"},
+                "limits": {"local_cli_global_concurrency": None},
+            }
+        ).encode("utf-8"),
+    )
+
+    assert status == 200
+    assert (workspace_root / "llm_profiles.yaml").exists()

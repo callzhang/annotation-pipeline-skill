@@ -5,11 +5,10 @@ import type { ProviderConfigSnapshot, ProviderName, ProviderProfileConfig } from
 
 const stageTargets = ["annotation", "qc", "coordinator", "human_review"];
 
-interface ProvidersPanelProps {
-  storeKey: string | null;
-}
-
-export function ProvidersPanel({ storeKey }: ProvidersPanelProps) {
+export function ProvidersPanel() {
+  // Providers are workspace-global: a single llm_profiles.yaml shared across
+  // every project in the workspace. We always pass storeKey=null so the API
+  // resolves to the workspace-level file (with project-local fallback).
   const [snapshot, setSnapshot] = useState<ProviderConfigSnapshot | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null);
   const [newProviderKind, setNewProviderKind] = useState<ProviderName>("local_cli");
@@ -20,7 +19,7 @@ export function ProvidersPanel({ storeKey }: ProvidersPanelProps) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    fetchProviderConfig(storeKey)
+    fetchProviderConfig(null)
       .then((nextSnapshot) => {
         if (!active) return;
         setSnapshot(nextSnapshot);
@@ -36,7 +35,7 @@ export function ProvidersPanel({ storeKey }: ProvidersPanelProps) {
     return () => {
       active = false;
     };
-  }, [storeKey]);
+  }, []);
 
   const selected = useMemo(
     () => snapshot?.profiles.find((profile) => profile.name === selectedProfile) ?? null,
@@ -83,7 +82,7 @@ export function ProvidersPanel({ storeKey }: ProvidersPanelProps) {
 
   async function validateProviders() {
     setMessage(null);
-    const nextSnapshot = await fetchProviderConfig(storeKey);
+    const nextSnapshot = await fetchProviderConfig(null);
     setSnapshot(nextSnapshot);
     setSelectedProfile((current) => current ?? nextSnapshot.profiles[0]?.name ?? null);
     setMessage("Provider validation refreshed");
@@ -94,7 +93,7 @@ export function ProvidersPanel({ storeKey }: ProvidersPanelProps) {
     setSaving(true);
     setMessage(null);
     try {
-      const saved = await saveProviderConfig(providerConfigPayload(snapshot), storeKey);
+      const saved = await saveProviderConfig(providerConfigPayload(snapshot), null);
       setSnapshot(saved);
       setSelectedProfile((current) => current ?? saved.profiles[0]?.name ?? null);
       setMessage("Provider configuration saved");

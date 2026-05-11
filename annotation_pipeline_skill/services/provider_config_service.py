@@ -8,7 +8,13 @@ from typing import Any, Mapping
 
 import yaml
 
-from annotation_pipeline_skill.llm.profiles import LLMProfile, ProfileValidationError, load_llm_registry
+from annotation_pipeline_skill.llm.profiles import (
+    LLM_PROFILES_FILENAME,
+    LLMProfile,
+    ProfileValidationError,
+    load_llm_registry,
+    resolve_llm_profiles_path,
+)
 
 
 PROFILE_FIELDS = (
@@ -31,9 +37,19 @@ PROFILE_FIELDS = (
 def build_provider_config_snapshot(
     config_root: Path,
     *,
+    workspace_root: Path | None = None,
     env: Mapping[str, str] = os.environ,
 ) -> dict[str, Any]:
-    registry = load_llm_registry(config_root / "llm_profiles.yaml")
+    profiles_path = resolve_llm_profiles_path(
+        workspace_root=workspace_root,
+        project_config_root=config_root,
+    )
+    if profiles_path is None:
+        raise FileNotFoundError(
+            f"no {LLM_PROFILES_FILENAME} found under workspace_root={workspace_root} "
+            f"or project_config_root={config_root}"
+        )
+    registry = load_llm_registry(profiles_path)
     profiles = [_profile_to_dict(profile) for profile in registry.profiles.values()]
     diagnostics = {
         profile.name: _profile_diagnostics(profile, env=env)
@@ -48,7 +64,14 @@ def build_provider_config_snapshot(
     }
 
 
-def save_provider_config(config_root: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+def save_provider_config(
+    config_root: Path,
+    payload: Mapping[str, Any],
+    *,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
+    if workspace_root is None:
+        raise ValueError("workspace_root is required to save provider configuration")
     data = _payload_to_yaml_data(payload)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".yaml") as handle:
         temp_path = Path(handle.name)
@@ -58,9 +81,11 @@ def save_provider_config(config_root: Path, payload: Mapping[str, Any]) -> dict[
     finally:
         temp_path.unlink(missing_ok=True)
 
-    target_path = config_root / "llm_profiles.yaml"
+    workspace_path = Path(workspace_root)
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    target_path = workspace_path / LLM_PROFILES_FILENAME
     target_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    return build_provider_config_snapshot(config_root)
+    return build_provider_config_snapshot(config_root, workspace_root=workspace_root)
 
 
 def _payload_to_yaml_data(payload: Mapping[str, Any]) -> dict[str, Any]:

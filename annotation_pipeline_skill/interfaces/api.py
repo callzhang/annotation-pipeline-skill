@@ -48,12 +48,21 @@ class DashboardApi:
         default_store_key: str | None = None,
         runtime_once: Callable[[], RuntimeSnapshot] | None = None,
         runtime_config: RuntimeConfig | None = None,
+        workspace_root: Path | None = None,
     ):
         self.store = store
         self._stores = stores or {}
         self._default_store_key = default_store_key
         self.runtime_once = runtime_once
         self.runtime_config = runtime_config or RuntimeConfig()
+        # workspace_root holds the dir that owns the shared llm_profiles.yaml.
+        # When provided, it's used for both reads (with project-local fallback)
+        # and writes (always to the workspace path). Defaults to the parent of
+        # the store's project root (i.e. <store.root>/../.. → workspace).
+        if workspace_root is not None:
+            self.workspace_root: Path = Path(workspace_root)
+        else:
+            self.workspace_root = store.root.parent.parent
 
     def _resolve_store(self, query: dict[str, list[str]]) -> SqliteStore:
         key = query.get("store", [None])[0]
@@ -197,8 +206,11 @@ class DashboardApi:
 
     def _provider_config_response(self, store: SqliteStore) -> tuple[int, dict[str, str], bytes]:
         try:
-            return self._json_response(200, build_provider_config_snapshot(store.root))
-        except (OSError, ProfileValidationError) as exc:
+            return self._json_response(
+                200,
+                build_provider_config_snapshot(store.root, workspace_root=self.workspace_root),
+            )
+        except (FileNotFoundError, OSError, ProfileValidationError) as exc:
             return self._json_response(
                 400,
                 {
@@ -216,8 +228,8 @@ class DashboardApi:
         if not isinstance(payload, dict):
             return self._json_response(400, {"error": "invalid_payload"})
         try:
-            snapshot = save_provider_config(store.root, payload)
-        except (OSError, ProfileValidationError) as exc:
+            snapshot = save_provider_config(store.root, payload, workspace_root=self.workspace_root)
+        except (FileNotFoundError, OSError, ProfileValidationError) as exc:
             return self._json_response(400, {"error": "invalid_provider_config", "detail": str(exc)})
         return self._json_response(200, snapshot)
 
@@ -644,6 +656,7 @@ def serve_dashboard_api(
     default_store_key: str | None = None,
     runtime_once: Callable[[], RuntimeSnapshot] | None = None,
     runtime_config: RuntimeConfig | None = None,
+    workspace_root: Path | None = None,
 ) -> None:
     server = ThreadingHTTPServer(
         (host, port),
@@ -653,6 +666,7 @@ def serve_dashboard_api(
             default_store_key=default_store_key,
             runtime_once=runtime_once,
             runtime_config=runtime_config,
+            workspace_root=workspace_root,
         )),
     )
     server.serve_forever()
