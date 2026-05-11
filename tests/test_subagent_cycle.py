@@ -350,3 +350,98 @@ def test_annotator_output_without_schema_is_passed_through(tmp_path):
 
     task_after = store.load_task("t-noschema")
     assert task_after.status is TaskStatus.ACCEPTED
+
+
+def test_qc_rejection_escalates_to_human_review_after_n_rounds(tmp_path):
+    """After 3 QC rejections, task transitions to HUMAN_REVIEW instead of PENDING."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import FeedbackSource, TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-loop",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "Acme",
+                "annotation_guidance": {
+                    "output_schema": {"type": "object"}  # permissive: annotator always passes
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    # Stub: every annotation passes schema; every QC rejects.
+    class _StubClient:
+        async def generate(self, request):
+            instructions = request.instructions
+            if "qc subagent" in instructions.lower():
+                final = '{"passed": false, "message": "still bad", "failures": [{"category": "x", "message": "still bad"}]}'
+            else:
+                final = '{"entities": []}'
+            return LLMGenerateResult(
+                final_text=final, raw_response={}, usage={}, diagnostics={},
+                runtime="stub", provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient(), max_qc_rounds=3)
+
+    for _ in range(3):
+        runtime.run_once()
+
+    task_after = store.load_task("t-loop")
+    assert task_after.status is TaskStatus.HUMAN_REVIEW, f"got {task_after.status}"
+
+    qc_feedbacks = [f for f in store.list_feedback("t-loop") if f.source_stage is FeedbackSource.QC]
+    assert len(qc_feedbacks) == 3
+
+
+def test_qc_rejection_loops_normally_under_threshold(tmp_path):
+    """1 or 2 QC rejections still go back to PENDING."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-loop2",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "x", "annotation_guidance": {"output_schema": {"type": "object"}}}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    class _StubClient:
+        async def generate(self, request):
+            instructions = request.instructions
+            if "qc subagent" in instructions.lower():
+                final = '{"passed": false, "message": "bad", "failures": [{"category": "x", "message": "bad"}]}'
+            else:
+                final = '{"entities": []}'
+            return LLMGenerateResult(
+                final_text=final, raw_response={}, usage={}, diagnostics={},
+                runtime="stub", provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient(), max_qc_rounds=3)
+    runtime.run_once()
+    runtime.run_once()
+
+    task_after = store.load_task("t-loop2")
+    assert task_after.status is TaskStatus.PENDING
+
+
+def test_subagent_runtime_defaults_max_qc_rounds_to_3(tmp_path):
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    store = SqliteStore.open(tmp_path)
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: None)
+    assert runtime.max_qc_rounds == 3

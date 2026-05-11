@@ -39,7 +39,11 @@ class LocalRuntimeScheduler:
         ]
         selected_tasks = runnable_tasks[:start_limit]
 
-        runtime = SubagentRuntime(store=self.store, client_factory=self.client_factory)
+        runtime = SubagentRuntime(
+            store=self.store,
+            client_factory=self.client_factory,
+            max_qc_rounds=self.config.max_qc_rounds,
+        )
         started = 0
         accepted = 0
         failed = 0

@@ -33,9 +33,16 @@ class QCParseError(ValueError):
 
 
 class SubagentRuntime:
-    def __init__(self, store: SqliteStore, client_factory: Callable[[str], LLMClient]):
+    def __init__(
+        self,
+        store: SqliteStore,
+        client_factory: Callable[[str], LLMClient],
+        *,
+        max_qc_rounds: int = 3,
+    ):
         self.store = store
         self.client_factory = client_factory
+        self.max_qc_rounds = max_qc_rounds
 
     def run_once(self, stage_target: str = "annotation", limit: int | None = None) -> SubagentRuntimeResult:
         pending_tasks = self.store.list_tasks_by_status({TaskStatus.PENDING})
@@ -220,14 +227,34 @@ class SubagentRuntime:
         else:
             feedback = _feedback_from_qc_decision(task, qc_attempt_id, qc_decision)
             self.store.append_feedback(feedback)
-            self._transition(
-                task,
-                TaskStatus.PENDING,
-                reason="subagent qc requested annotator rerun",
-                stage="qc",
-                attempt_id=qc_attempt_id,
-                metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
+            qc_failure_count = sum(
+                1 for f in self.store.list_feedback(task.task_id)
+                if f.source_stage is FeedbackSource.QC
             )
+            if qc_failure_count >= self.max_qc_rounds:
+                self._transition(
+                    task,
+                    TaskStatus.HUMAN_REVIEW,
+                    reason="auto-escalated after repeated QC rejections",
+                    stage="qc",
+                    attempt_id=qc_attempt_id,
+                    metadata={
+                        "auto_escalated": True,
+                        "qc_failure_count": qc_failure_count,
+                        "max_qc_rounds": self.max_qc_rounds,
+                        "feedback_id": feedback.feedback_id,
+                        "qc_artifact_id": qc_artifact.artifact_id,
+                    },
+                )
+            else:
+                self._transition(
+                    task,
+                    TaskStatus.PENDING,
+                    reason="subagent qc requested annotator rerun",
+                    stage="qc",
+                    attempt_id=qc_attempt_id,
+                    metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
+                )
         self.store.save_task(task)
 
     def _record_feedback_resolution(
