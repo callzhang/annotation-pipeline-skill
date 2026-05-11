@@ -213,7 +213,7 @@ export default function App() {
               >
                 {stores.map((s) => (
                   <option key={s.key} value={s.key}>
-                    {s.name} ({s.task_count})
+                    {s.name} ({s.task_count} tasks)
                   </option>
                 ))}
               </select>
@@ -228,7 +228,7 @@ export default function App() {
               <option value="">All pipelines</option>
               {projects.map((project) => (
                 <option key={project.project_id} value={project.project_id}>
-                  {project.project_id} ({project.task_count})
+                  {project.project_id} ({project.task_count} tasks)
                 </option>
               ))}
             </select>
