@@ -445,3 +445,198 @@ def test_subagent_runtime_defaults_max_qc_rounds_to_3(tmp_path):
     store = SqliteStore.open(tmp_path)
     runtime = SubagentRuntime(store=store, client_factory=lambda _t: None)
     assert runtime.max_qc_rounds == 3
+
+
+def _seed_prelabeled_task(store, *, task_id, annotation_text, output_schema=None):
+    """Create a PENDING task with a prelabeled annotation_result artifact already on disk."""
+    from annotation_pipeline_skill.core.models import ArtifactRef, Attempt
+    from annotation_pipeline_skill.core.states import AttemptStatus
+
+    payload = {
+        "text": "alpha",
+    }
+    if output_schema is not None:
+        payload["annotation_guidance"] = {"output_schema": output_schema}
+    task = Task.new(
+        task_id=task_id,
+        pipeline_id="pipe",
+        source_ref={"kind": "jsonl_prelabeled", "payload": payload},
+        metadata={"prelabeled": True},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    artifact_path = f"artifact_payloads/{task_id}/prelabeled-annotation.json"
+    full_path = store.root / artifact_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_text(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "text": annotation_text,
+                "raw_response": {"source": "v2_prelabel"},
+                "usage": {},
+                "diagnostics": {"source": "prelabel"},
+            },
+            sort_keys=True,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    artifact = ArtifactRef.new(
+        task_id=task_id,
+        kind="annotation_result",
+        path=artifact_path,
+        content_type="application/json",
+        metadata={"runtime": "import", "provider": "prelabel"},
+    )
+    store.append_artifact(artifact)
+    attempt = Attempt(
+        attempt_id=f"attempt-prelabel-{task_id}",
+        task_id=task_id,
+        index=0,
+        stage="annotation",
+        status=AttemptStatus.SUCCEEDED,
+        provider_id="prelabel",
+        model="v2_baseline",
+        summary="imported from v2 annotation",
+    )
+    store.append_attempt(attempt)
+    return task
+
+
+def test_prelabeled_task_skips_annotation_and_runs_qc(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    _seed_prelabeled_task(
+        store,
+        task_id="pre-1",
+        annotation_text='{"labels":[{"text":"alpha","type":"ENTITY"}]}',
+    )
+
+    call_log = []
+
+    class TrackingClient:
+        def __init__(self, target, final_text):
+            self.target = target
+            self.final_text = final_text
+
+        async def generate(self, request):
+            call_log.append(self.target)
+            return LLMGenerateResult(
+                runtime="test_runtime",
+                provider=self.target,
+                model="test-model",
+                continuity_handle="handle",
+                final_text=self.final_text,
+                usage={},
+                raw_response={},
+                diagnostics={},
+            )
+
+    def client_factory(target):
+        if target == "qc":
+            return TrackingClient("qc", '{"passed": true, "summary": "acceptable"}')
+        return TrackingClient("annotation", "SHOULD NOT BE CALLED")
+
+    runtime = SubagentRuntime(store=store, client_factory=client_factory)
+    runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("pre-1")
+    assert loaded.status is TaskStatus.ACCEPTED
+    # Annotation LLM never called
+    assert "annotation" not in call_log
+    assert call_log == ["qc"]
+    # Stages recorded: existing prelabel attempt + new qc attempt only
+    attempts = store.list_attempts("pre-1")
+    stages = [a.stage for a in attempts]
+    assert stages.count("annotation") == 1  # only the seeded prelabel attempt
+    assert "qc" in stages
+    artifacts = store.list_artifacts("pre-1")
+    assert any(a.kind == "annotation_result" for a in artifacts)
+    assert any(a.kind == "qc_result" for a in artifacts)
+
+
+def test_prelabeled_task_falls_through_to_normal_annotation_after_qc_failure(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    _seed_prelabeled_task(
+        store,
+        task_id="pre-2",
+        annotation_text='{"labels":[]}',
+    )
+
+    annotation_calls = {"count": 0}
+
+    def client_factory(target):
+        if target == "qc":
+            return StubLLMClient(
+                final_text='{"passed": false, "message": "rejected", "category": "quality", "severity": "warning", "suggested_action": "annotator_rerun"}',
+                provider="qc",
+            )
+        annotation_calls["count"] += 1
+        return StubLLMClient(
+            final_text='{"labels":[{"text":"alpha","type":"ENTITY"}]}',
+            provider="annotator",
+        )
+
+    runtime = SubagentRuntime(store=store, client_factory=client_factory)
+
+    # First run: prelabeled path, QC fails -> PENDING
+    runtime.run_once(stage_target="annotation")
+    loaded = store.load_task("pre-2")
+    assert loaded.status is TaskStatus.PENDING
+    assert loaded.current_attempt >= 1
+    assert annotation_calls["count"] == 0  # prelabeled path skipped annotation LLM
+
+    # Second run: now current_attempt > 0, prelabeled branch must NOT fire.
+    # Annotation LLM must be invoked. Use a QC stub that rejects again to keep test simple.
+    runtime.run_once(stage_target="annotation")
+    assert annotation_calls["count"] == 1
+    attempts = store.list_attempts("pre-2")
+    annotation_stages = [a for a in attempts if a.stage == "annotation"]
+    # Seeded prelabel + new annotation attempt
+    assert len(annotation_stages) >= 2
+    assert any(a.provider_id == "annotator" for a in annotation_stages)
+
+
+def test_prelabeled_task_fails_schema_validation_on_existing_artifact(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    _seed_prelabeled_task(
+        store,
+        task_id="pre-3",
+        annotation_text='{"wrong_field": []}',
+        output_schema={
+            "type": "object",
+            "required": ["labels"],
+            "properties": {"labels": {"type": "array"}},
+        },
+    )
+
+    qc_called = {"count": 0}
+
+    class _StubClient:
+        def __init__(self, target):
+            self.target = target
+
+        async def generate(self, request):
+            if self.target == "qc":
+                qc_called["count"] += 1
+            return LLMGenerateResult(
+                runtime="stub",
+                provider=self.target,
+                model="m",
+                continuity_handle=None,
+                final_text='{"passed": true}',
+                usage={},
+                raw_response={},
+                diagnostics={},
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda t: _StubClient(t))
+    runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("pre-3")
+    assert loaded.status is TaskStatus.PENDING
+    # Schema validation gate blocked QC entirely
+    assert qc_called["count"] == 0
+    feedbacks = store.list_feedback("pre-3")
+    assert any(f.category == "schema_invalid" for f in feedbacks), f"got {[f.category for f in feedbacks]}"

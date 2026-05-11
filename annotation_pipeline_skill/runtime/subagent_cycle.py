@@ -78,6 +78,51 @@ class SubagentRuntime:
             self._run_qc_only(task)
             return
 
+        if (
+            task.status is TaskStatus.PENDING
+            and task.current_attempt == 0
+            and task.metadata.get("prelabeled")
+        ):
+            prelabeled = [
+                artifact for artifact in self.store.list_artifacts(task.task_id)
+                if artifact.kind == "annotation_result"
+            ]
+            if prelabeled:
+                annotation_artifact = prelabeled[-1]
+                attempts = self.store.list_attempts(task.task_id)
+                annotation_attempt_id = (
+                    attempts[-1].attempt_id if attempts else f"prelabeled-{task.task_id}"
+                )
+                task.current_attempt = 1
+                payload = self._read_artifact_payload(annotation_artifact)
+                if isinstance(payload, dict):
+                    final_text = payload.get("text", json.dumps(payload, sort_keys=True))
+                else:
+                    final_text = json.dumps(payload, sort_keys=True)
+                self._transition(
+                    task,
+                    TaskStatus.ANNOTATING,
+                    reason="prelabeled annotation reused; skipping LLM annotation",
+                    stage="annotation",
+                    attempt_id=annotation_attempt_id,
+                    metadata={"prelabeled": True},
+                )
+                self._transition(
+                    task,
+                    TaskStatus.VALIDATING,
+                    reason="prelabeled annotation ready for schema validation",
+                    stage="validation",
+                    attempt_id=annotation_attempt_id,
+                    metadata={"prelabeled": True},
+                )
+                self._run_validation_and_qc(
+                    task,
+                    annotation_artifact,
+                    annotation_attempt_id,
+                    final_text,
+                )
+                return
+
         guideline = self._load_guideline(task)
         annotation_attempt_id = self._next_attempt_id(task)
         self._transition(
