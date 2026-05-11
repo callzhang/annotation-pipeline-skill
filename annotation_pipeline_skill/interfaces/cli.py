@@ -452,7 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     external_pull.set_defaults(handler=handle_external_pull)
 
     serve_parser = subparsers.add_parser("serve")
-    serve_parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    serve_parser.add_argument("--workspace", type=Path, default=Path.cwd() / "projects")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
     serve_parser.set_defaults(handler=handle_serve)
