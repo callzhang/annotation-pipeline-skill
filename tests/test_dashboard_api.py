@@ -69,6 +69,35 @@ def test_dashboard_api_returns_operator_stage_kanban_view(tmp_path):
     assert payload["columns"][1]["cards"][0]["operator_stage"] == "annotation"
 
 
+def test_dashboard_api_returns_stores_list_with_task_count(tmp_path):
+    project_a = tmp_path / "project-a" / ".annotation-pipeline"
+    project_b = tmp_path / "project-b" / ".annotation-pipeline"
+    store_a = SqliteStore.open(project_a)
+    store_b = SqliteStore.open(project_b)
+    # Two tasks across two pipelines in project-a; one task in project-b.
+    t1 = Task.new(task_id="a-1", pipeline_id="pipe-1", source_ref={"kind": "jsonl"})
+    t2 = Task.new(task_id="a-2", pipeline_id="pipe-2", source_ref={"kind": "jsonl"})
+    t3 = Task.new(task_id="b-1", pipeline_id="pipe-x", source_ref={"kind": "jsonl"})
+    store_a.save_task(t1)
+    store_a.save_task(t2)
+    store_b.save_task(t3)
+    api = DashboardApi(
+        store_a,
+        stores={"project-a": store_a, "project-b": store_b},
+        default_store_key="project-a",
+    )
+
+    status, _headers, body = api.handle_get("/api/stores")
+
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    by_key = {s["key"]: s for s in payload["stores"]}
+    assert by_key["project-a"]["task_count"] == 2
+    assert by_key["project-a"]["pipeline_count"] == 2
+    assert by_key["project-b"]["task_count"] == 1
+    assert by_key["project-b"]["pipeline_count"] == 1
+
+
 def test_dashboard_api_returns_404_for_unknown_route(tmp_path):
     api = DashboardApi(SqliteStore.open(tmp_path))
 

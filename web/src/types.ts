@@ -52,6 +52,7 @@ export interface StoreInfo {
   name: string;
   path: string;
   pipeline_count: number;
+  task_count: number;
 }
 
 export interface StoresSnapshot {

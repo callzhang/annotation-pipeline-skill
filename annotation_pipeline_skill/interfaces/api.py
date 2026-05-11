@@ -181,11 +181,13 @@ class DashboardApi:
     def _stores_list(self) -> list[dict]:
         result = []
         for key, s in self._stores.items():
+            tasks = s.list_tasks()
             result.append({
                 "key": key,
                 "name": s.root.parent.name,
                 "path": str(s.root.parent),
-                "pipeline_count": len({task.pipeline_id for task in s.list_tasks()}),
+                "pipeline_count": len({task.pipeline_id for task in tasks}),
+                "task_count": len(tasks),
             })
         return result
 

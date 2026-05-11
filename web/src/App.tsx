@@ -213,7 +213,7 @@ export default function App() {
               >
                 {stores.map((s) => (
                   <option key={s.key} value={s.key}>
-                    {s.name}
+                    {s.name} ({s.task_count})
                   </option>
                 ))}
               </select>
