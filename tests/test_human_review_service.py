@@ -89,3 +89,131 @@ def test_human_review_rejects_actions_outside_human_review(tmp_path):
             feedback="Accept",
             correction_mode="manual_annotation",
         )
+
+
+def test_submit_correction_schema_valid_answer_accepts_task(tmp_path):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.human_review_service import HumanReviewService
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-hr",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["entities"],
+                        "properties": {"entities": {"type": "array"}},
+                    }
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    svc = HumanReviewService(store)
+    result = svc.submit_correction(
+        task_id="t-hr",
+        answer={"entities": [{"text": "Acme", "label": "ORG"}]},
+        actor="reviewer-1",
+        note="manual fix",
+    )
+
+    assert result.task.status is TaskStatus.ACCEPTED
+    artifacts = [a for a in store.list_artifacts("t-hr") if a.kind == "human_review_answer"]
+    assert len(artifacts) == 1
+
+
+def test_submit_correction_schema_invalid_answer_raises_and_keeps_status(tmp_path):
+    import pytest
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.human_review_service import HumanReviewService
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-hr-bad",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {"type": "object", "required": ["entities"]}
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    svc = HumanReviewService(store)
+    with pytest.raises(SchemaValidationError):
+        svc.submit_correction(
+            task_id="t-hr-bad",
+            answer={"wrong_key": []},
+            actor="reviewer-1",
+            note=None,
+        )
+
+    task_after = store.load_task("t-hr-bad")
+    assert task_after.status is TaskStatus.HUMAN_REVIEW
+
+
+def test_submit_correction_missing_schema_raises(tmp_path):
+    import pytest
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.human_review_service import HumanReviewService
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-hr-noschema",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "x"}},
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    svc = HumanReviewService(store)
+    with pytest.raises(SchemaValidationError) as exc:
+        svc.submit_correction(
+            task_id="t-hr-noschema",
+            answer={"anything": True},
+            actor="r",
+            note=None,
+        )
+    assert exc.value.errors[0]["kind"] == "missing_schema"
+
+
+def test_submit_correction_rejects_when_task_not_in_human_review(tmp_path):
+    import pytest
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.core.transitions import InvalidTransition
+    from annotation_pipeline_skill.services.human_review_service import HumanReviewService
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-pending",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"annotation_guidance": {"output_schema": {"type": "object"}}}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    svc = HumanReviewService(store)
+    with pytest.raises(InvalidTransition):
+        svc.submit_correction(task_id="t-pending", answer={}, actor="r", note=None)

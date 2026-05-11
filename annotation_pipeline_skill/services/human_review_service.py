@@ -6,6 +6,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from annotation_pipeline_skill.core.models import ArtifactRef, Task
+from annotation_pipeline_skill.core.schema_validation import (
+    SchemaValidationError,
+    validate_payload_against_task_schema,
+)
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
@@ -22,6 +26,20 @@ class HumanReviewDecisionResult:
             "task": self.task.to_dict(),
             "decision": self.decision,
             "artifact": self.artifact.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class HumanCorrectionResult:
+    task: Task
+    artifact: ArtifactRef
+    answer: dict
+
+    def to_dict(self) -> dict:
+        return {
+            "task": self.task.to_dict(),
+            "artifact": self.artifact.to_dict(),
+            "answer": self.answer,
         }
 
 
@@ -68,6 +86,56 @@ class HumanReviewService:
         self.store.append_event(event)
         self.store.save_task(task)
         return HumanReviewDecisionResult(task=task, decision=decision, artifact=artifact)
+
+    def submit_correction(
+        self,
+        *,
+        task_id: str,
+        answer: dict,
+        actor: str,
+        note: str | None,
+    ) -> HumanCorrectionResult:
+        task = self.store.load_task(task_id)
+        if task.status is not TaskStatus.HUMAN_REVIEW:
+            raise InvalidTransition(f"task {task_id} is not in human_review")
+
+        # Schema-validate. Raises SchemaValidationError on failure (missing schema OR mismatch).
+        validate_payload_against_task_schema(task, answer)
+
+        artifact = self._write_correction_artifact(task_id, answer, actor=actor, note=note)
+        event = transition_task(
+            task,
+            TaskStatus.ACCEPTED,
+            actor=actor,
+            reason="human review submitted corrected answer",
+            stage="human_review",
+            metadata={
+                "human_authored": True,
+                "answer_artifact_id": artifact.artifact_id,
+                "answer_artifact_path": artifact.path,
+                "note": note,
+            },
+        )
+        self.store.append_artifact(artifact)
+        self.store.append_event(event)
+        self.store.save_task(task)
+        return HumanCorrectionResult(task=task, artifact=artifact, answer=answer)
+
+    def _write_correction_artifact(self, task_id: str, answer: dict, *, actor: str, note: str | None) -> ArtifactRef:
+        relative_path = Path("artifact_payloads") / task_id / f"human_review_answer-{uuid4().hex}.json"
+        absolute_path = self.store.root / relative_path
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        absolute_path.write_text(
+            json.dumps({"answer": answer, "actor": actor, "note": note}, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return ArtifactRef.new(
+            task_id=task_id,
+            kind="human_review_answer",
+            path=relative_path.as_posix(),
+            content_type="application/json",
+            metadata={"actor": actor, "note": note},
+        )
 
     def _transition_for_action(self, action: str) -> tuple[TaskStatus, str]:
         if action == "accept":
