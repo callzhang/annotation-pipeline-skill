@@ -7,6 +7,11 @@ from datetime import datetime
 from typing import Any, Callable
 
 from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task, utc_now
+from annotation_pipeline_skill.core.schema_validation import (
+    SchemaValidationError,
+    load_output_schema,
+    validate_payload_against_task_schema,
+)
 from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.llm.client import LLMClient, LLMGenerateRequest, LLMGenerateResult
@@ -120,12 +125,19 @@ class SubagentRuntime:
             stage="validation",
             attempt_id=annotation_attempt_id,
         )
-        if not annotation_result.final_text.strip():
-            self._record_validation_feedback(task, annotation_attempt_id)
+        validation_failure = self._check_annotation_validation(task, annotation_result.final_text)
+        if validation_failure is not None:
+            self._record_validation_feedback(
+                task,
+                annotation_attempt_id,
+                category=validation_failure["category"],
+                message=validation_failure["message"],
+                target=validation_failure.get("target", {}),
+            )
             self._transition(
                 task,
                 TaskStatus.PENDING,
-                reason="deterministic validation failed",
+                reason=validation_failure["reason"],
                 stage="validation",
                 attempt_id=annotation_attempt_id,
             )
@@ -317,20 +329,57 @@ class SubagentRuntime:
     def _next_attempt_id(self, task: Task) -> str:
         return f"{task.task_id}-attempt-{task.current_attempt + 1}"
 
-    def _record_validation_feedback(self, task: Task, attempt_id: str) -> None:
+    def _record_validation_feedback(
+        self,
+        task: Task,
+        attempt_id: str,
+        *,
+        category: str = "empty_annotation",
+        message: str = "Annotation result was empty.",
+        target: dict | None = None,
+    ) -> None:
         self.store.append_feedback(
             FeedbackRecord.new(
                 task_id=task.task_id,
                 attempt_id=attempt_id,
                 source_stage=FeedbackSource.VALIDATION,
                 severity=FeedbackSeverity.BLOCKING,
-                category="empty_annotation",
-                message="Annotation result was empty.",
-                target={},
+                category=category,
+                message=message,
+                target=target or {},
                 suggested_action="annotator_rerun",
                 created_by="validation",
             )
         )
+
+    def _check_annotation_validation(self, task: Task, final_text: str) -> dict | None:
+        if not final_text.strip():
+            return {
+                "category": "empty_annotation",
+                "message": "Annotation result was empty.",
+                "reason": "deterministic validation failed",
+            }
+        schema = load_output_schema(task)
+        if schema is None:
+            return None
+        try:
+            payload = json.loads(_strip_markdown_json_fence(final_text))
+        except json.JSONDecodeError as exc:
+            return {
+                "category": "schema_invalid",
+                "message": f"Annotation result is not valid JSON: {exc}",
+                "reason": "schema validation failed",
+            }
+        try:
+            validate_payload_against_task_schema(task, payload)
+        except SchemaValidationError as exc:
+            return {
+                "category": "schema_invalid",
+                "message": f"Annotation result failed schema validation: {exc}",
+                "reason": "schema validation failed",
+                "target": {"errors": exc.errors},
+            }
+        return None
 
     def _annotation_prompt(self, task: Task) -> str:
         return json.dumps(

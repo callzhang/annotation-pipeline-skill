@@ -219,3 +219,134 @@ def test_subagent_runtime_rerun_prompt_includes_feedback_context(tmp_path):
     assert discussions[0].metadata["resolution_source"] == "subsequent_qc_pass"
     assert build_feedback_consensus_summary(store, "task-1")["open_feedback"] == []
     assert json.loads((tmp_path / artifacts[2].path).read_text(encoding="utf-8"))["text"] == '{"labels":[{"text":"alpha","type":"ENTITY"}]}'
+
+
+def test_annotator_output_failing_schema_records_blocking_feedback_and_loops(tmp_path):
+    """Annotator returns JSON that fails task.output_schema -> validation feedback + PENDING."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-1",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "Acme",
+                "annotation_guidance": {
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["entities"],
+                        "properties": {"entities": {"type": "array"}},
+                    }
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    class _StubClient:
+        async def generate(self, request):
+            return LLMGenerateResult(
+                final_text='{"wrong_field": []}',
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient())
+    runtime.run_task(store.load_task("t-1"))
+
+    task_after = store.load_task("t-1")
+    assert task_after.status is TaskStatus.PENDING
+
+    feedbacks = store.list_feedback("t-1")
+    schema_fb = [f for f in feedbacks if f.source_stage is FeedbackSource.VALIDATION and f.category == "schema_invalid"]
+    assert schema_fb, f"expected schema_invalid feedback, got {[f.category for f in feedbacks]}"
+    assert schema_fb[0].severity is FeedbackSeverity.BLOCKING
+
+
+def test_annotator_output_invalid_json_records_validation_feedback(tmp_path):
+    """Annotator returns non-JSON text -> schema_invalid feedback (parse error)."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import FeedbackSource, TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-3",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "Acme",
+                "annotation_guidance": {
+                    "output_schema": {"type": "object", "required": ["entities"]}
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    class _StubClient:
+        async def generate(self, request):
+            return LLMGenerateResult(
+                final_text="not json at all",
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient())
+    runtime.run_task(store.load_task("t-3"))
+
+    task_after = store.load_task("t-3")
+    assert task_after.status is TaskStatus.PENDING
+    feedbacks = store.list_feedback("t-3")
+    assert any(f.source_stage is FeedbackSource.VALIDATION and f.category == "schema_invalid" for f in feedbacks)
+
+
+def test_annotator_output_without_schema_is_passed_through(tmp_path):
+    """Task with no output_schema does not trigger schema_invalid gate; reaches QC."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-noschema",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "Acme"}},  # no annotation_guidance
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    call = {"n": 0}
+    class _StubClient:
+        async def generate(self, request):
+            call["n"] += 1
+            if call["n"] == 1:
+                return LLMGenerateResult(
+                    final_text='{"entities": []}',
+                    raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                    provider="stub", model="stub", continuity_handle=None,
+                )
+            return LLMGenerateResult(
+                final_text='{"passed": true}',
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient())
+    runtime.run_task(store.load_task("t-noschema"))
+
+    task_after = store.load_task("t-noschema")
+    assert task_after.status is TaskStatus.ACCEPTED
