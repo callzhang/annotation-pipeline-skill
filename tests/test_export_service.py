@@ -61,6 +61,7 @@ def test_export_service_writes_training_jsonl_and_manifest_for_accepted_tasks(tm
             "annotation": '{"labels":[{"text":"alpha"}]}',
             "annotation_artifact_id": artifact.artifact_id,
             "annotation_artifact_path": artifact.path,
+            "human_authored": False,
         }
     ]
     assert manifest.project_id == "pipe"
@@ -197,3 +198,82 @@ def test_export_service_excludes_invalid_training_row_when_annotation_is_not_jso
         }
     ]
     assert (store.root / "exports/export-1/training_data.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_export_uses_human_review_answer_when_present(tmp_path):
+    import json
+    from annotation_pipeline_skill.core.models import ArtifactRef, Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.export_service import TrainingDataExportService
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-hr-export",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "x"}},
+    )
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+
+    # Write an annotation_result and a human_review_answer for this task on disk.
+    art_dir = tmp_path / "artifact_payloads" / "t-hr-export"
+    art_dir.mkdir(parents=True, exist_ok=True)
+    ann_path = art_dir / "annotation_result.json"
+    ann_path.write_text(json.dumps({"text": {"entities": ["wrong"]}}), encoding="utf-8")
+    hr_path = art_dir / "human_review_answer.json"
+    hr_path.write_text(json.dumps({"answer": {"entities": ["RIGHT"]}, "actor": "r", "note": "fix"}), encoding="utf-8")
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-hr-export", kind="annotation_result",
+        path="artifact_payloads/t-hr-export/annotation_result.json",
+        content_type="application/json",
+    ))
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-hr-export", kind="human_review_answer",
+        path="artifact_payloads/t-hr-export/human_review_answer.json",
+        content_type="application/json",
+    ))
+
+    svc = TrainingDataExportService(store)
+    out_dir = tmp_path / "out"
+    manifest = svc.export_jsonl(project_id="p", output_dir=out_dir)
+    output = (tmp_path / manifest.output_paths[0]).read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in output.splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]["annotation"] == {"entities": ["RIGHT"]}
+    assert rows[0]["human_authored"] is True
+
+
+def test_export_uses_annotation_result_when_no_human_answer(tmp_path):
+    import json
+    from annotation_pipeline_skill.core.models import ArtifactRef, Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.export_service import TrainingDataExportService
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-ann-only",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "x"}},
+    )
+    task.status = TaskStatus.ACCEPTED
+    store.save_task(task)
+    art_dir = tmp_path / "artifact_payloads" / "t-ann-only"
+    art_dir.mkdir(parents=True, exist_ok=True)
+    (art_dir / "annotation_result.json").write_text(
+        json.dumps({"text": {"entities": ["from_annotator"]}}), encoding="utf-8"
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-ann-only", kind="annotation_result",
+        path="artifact_payloads/t-ann-only/annotation_result.json",
+        content_type="application/json",
+    ))
+
+    svc = TrainingDataExportService(store)
+    manifest = svc.export_jsonl(project_id="p", output_dir=tmp_path / "out")
+    output = (tmp_path / manifest.output_paths[0]).read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in output.splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]["annotation"] == {"entities": ["from_annotator"]}
+    assert rows[0]["human_authored"] is False

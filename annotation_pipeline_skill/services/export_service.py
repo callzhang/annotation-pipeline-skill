@@ -57,15 +57,16 @@ class TrainingDataExportService:
         )
 
         for task in accepted_tasks:
-            annotation_artifact = self._latest_annotation_artifact(task)
-            if annotation_artifact is None:
+            pick = self._final_answer_artifact(task)
+            if pick is None:
                 excluded.append({"task_id": task.task_id, "reason": "missing_annotation_result"})
                 continue
-            annotation_payload = self._read_artifact_payload(annotation_artifact)
+            artifact, human_authored = pick
+            annotation_payload = self._read_artifact_payload(artifact)
             if annotation_payload is None:
                 excluded.append({"task_id": task.task_id, "reason": "missing_annotation_payload"})
                 continue
-            row = self._training_row(task, annotation_artifact, annotation_payload)
+            row = self._training_row(task, artifact, annotation_payload, human_authored=human_authored)
             validation_errors = self._validate_training_row(row)
             if validation_errors:
                 row_errors.append({"task_id": task.task_id, "errors": validation_errors})
@@ -79,7 +80,7 @@ class TrainingDataExportService:
                 continue
             rows.append(row)
             included.append(task.task_id)
-            artifact_ids.append(annotation_artifact.artifact_id)
+            artifact_ids.append(artifact.artifact_id)
             if enqueue_external_submit and task.external_ref is not None:
                 self._enqueue_submit(task, export_id=export_id, row=row)
 
@@ -112,11 +113,16 @@ class TrainingDataExportService:
         self.store.save_export_manifest(manifest)
         return manifest
 
-    def _latest_annotation_artifact(self, task: Task) -> ArtifactRef | None:
-        artifacts = [artifact for artifact in self.store.list_artifacts(task.task_id) if artifact.kind == "annotation_result"]
-        if not artifacts:
-            return None
-        return artifacts[-1]
+    def _final_answer_artifact(self, task: Task) -> tuple[ArtifactRef, bool] | None:
+        """Return (artifact, human_authored) for this task's final answer. Prefer human_review_answer."""
+        artifacts = self.store.list_artifacts(task.task_id)
+        human_answers = [a for a in artifacts if a.kind == "human_review_answer"]
+        if human_answers:
+            return (human_answers[-1], True)
+        annotations = [a for a in artifacts if a.kind == "annotation_result"]
+        if annotations:
+            return (annotations[-1], False)
+        return None
 
     def _read_artifact_payload(self, artifact: ArtifactRef) -> Any:
         path = self.store.root / artifact.path
@@ -124,8 +130,18 @@ class TrainingDataExportService:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _training_row(self, task: Task, artifact: ArtifactRef, artifact_payload: Any) -> dict[str, Any]:
-        annotation = artifact_payload.get("text", artifact_payload) if isinstance(artifact_payload, dict) else artifact_payload
+    def _training_row(
+        self,
+        task: Task,
+        artifact: ArtifactRef,
+        artifact_payload: Any,
+        *,
+        human_authored: bool,
+    ) -> dict[str, Any]:
+        if human_authored:
+            annotation = artifact_payload.get("answer") if isinstance(artifact_payload, dict) else artifact_payload
+        else:
+            annotation = artifact_payload.get("text", artifact_payload) if isinstance(artifact_payload, dict) else artifact_payload
         return {
             "task_id": task.task_id,
             "pipeline_id": task.pipeline_id,
@@ -135,6 +151,7 @@ class TrainingDataExportService:
             "annotation": annotation,
             "annotation_artifact_id": artifact.artifact_id,
             "annotation_artifact_path": artifact.path,
+            "human_authored": human_authored,
         }
 
     def _validate_training_row(self, row: dict[str, Any]) -> list[str]:
