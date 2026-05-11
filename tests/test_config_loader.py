@@ -83,3 +83,16 @@ annotators:
 
     with pytest.raises(ConfigValidationError, match="missing_target"):
         load_project_config(tmp_path)
+
+
+def test_load_runtime_config_picks_up_max_qc_rounds(tmp_path):
+    from annotation_pipeline_skill.config.loader import load_runtime_config
+    root = tmp_path / "proj"
+    cfg_dir = root / ".annotation-pipeline"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "workflow.yaml").write_text(
+        "runtime:\n  max_qc_rounds: 7\n",
+        encoding="utf-8",
+    )
+    runtime_cfg = load_runtime_config(root)
+    assert runtime_cfg.max_qc_rounds == 7

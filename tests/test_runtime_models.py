@@ -163,6 +163,24 @@ def test_unhealthy_runtime_status_with_missing_heartbeat_round_trips_through_dic
     )
 
 
+def test_runtime_config_parses_max_qc_rounds():
+    from annotation_pipeline_skill.core.runtime import RuntimeConfig
+    cfg = RuntimeConfig.from_dict({"max_qc_rounds": 5})
+    assert cfg.max_qc_rounds == 5
+
+
+def test_runtime_config_max_qc_rounds_defaults_to_3():
+    from annotation_pipeline_skill.core.runtime import RuntimeConfig
+    cfg = RuntimeConfig()
+    assert cfg.max_qc_rounds == 3
+
+
+def test_runtime_config_to_dict_includes_max_qc_rounds():
+    from annotation_pipeline_skill.core.runtime import RuntimeConfig
+    cfg = RuntimeConfig(max_qc_rounds=7)
+    assert cfg.to_dict()["max_qc_rounds"] == 7
+
+
 def test_runtime_snapshot_loads_with_omitted_empty_list_fields():
     generated_at = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
 

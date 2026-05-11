@@ -13,6 +13,7 @@ class RuntimeConfig:
     stale_after_seconds: int = 600
     retry_delay_seconds: int = 3600
     loop_interval_seconds: int = 5
+    max_qc_rounds: int = 3
 
     def to_dict(self) -> dict:
         return {
@@ -21,6 +22,7 @@ class RuntimeConfig:
             "stale_after_seconds": self.stale_after_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
             "loop_interval_seconds": self.loop_interval_seconds,
+            "max_qc_rounds": self.max_qc_rounds,
         }
 
     @classmethod
@@ -31,6 +33,7 @@ class RuntimeConfig:
             stale_after_seconds=data.get("stale_after_seconds", 600),
             retry_delay_seconds=data.get("retry_delay_seconds", 3600),
             loop_interval_seconds=data.get("loop_interval_seconds", 5),
+            max_qc_rounds=data.get("max_qc_rounds", 3),
         )
 
 
