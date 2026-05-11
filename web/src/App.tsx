@@ -85,6 +85,11 @@ export default function App() {
         setProjects(projectSnapshot.projects);
         setSnapshot(nextSnapshot);
         setError(null);
+        // Auto-select the only project when no explicit choice is made, so
+        // single-project workspaces don't strand users on the "Select one project" empty state.
+        if (!selectedProjectId && projectSnapshot.projects.length === 1) {
+          setProject(projectSnapshot.projects[0].project_id);
+        }
       })
       .catch((reason: unknown) => {
         if (!active) return;
