@@ -5,9 +5,10 @@ import type { OutboxSummary } from "../types";
 
 interface OutboxPanelProps {
   projectId: string | null;
+  storeKey: string | null;
 }
 
-export function OutboxPanel({ projectId }: OutboxPanelProps) {
+export function OutboxPanel({ projectId, storeKey }: OutboxPanelProps) {
   const [summary, setSummary] = useState<OutboxSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,7 +16,7 @@ export function OutboxPanel({ projectId }: OutboxPanelProps) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    fetchOutboxSummary(projectId)
+    fetchOutboxSummary(projectId, storeKey)
       .then((nextSummary) => {
         if (!active) return;
         setSummary(nextSummary);
@@ -31,7 +32,7 @@ export function OutboxPanel({ projectId }: OutboxPanelProps) {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, storeKey]);
 
   if (loading) return <section className="work-panel">Loading outbox</section>;
   if (!summary) return <section className="work-panel notice compact">{error ?? "Outbox unavailable"}</section>;

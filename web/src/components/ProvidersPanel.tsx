@@ -5,7 +5,11 @@ import type { ProviderConfigSnapshot, ProviderName, ProviderProfileConfig } from
 
 const stageTargets = ["annotation", "qc", "coordinator", "human_review"];
 
-export function ProvidersPanel() {
+interface ProvidersPanelProps {
+  storeKey: string | null;
+}
+
+export function ProvidersPanel({ storeKey }: ProvidersPanelProps) {
   const [snapshot, setSnapshot] = useState<ProviderConfigSnapshot | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null);
   const [newProviderKind, setNewProviderKind] = useState<ProviderName>("local_cli");
@@ -15,7 +19,8 @@ export function ProvidersPanel() {
 
   useEffect(() => {
     let active = true;
-    fetchProviderConfig()
+    setLoading(true);
+    fetchProviderConfig(storeKey)
       .then((nextSnapshot) => {
         if (!active) return;
         setSnapshot(nextSnapshot);
@@ -31,7 +36,7 @@ export function ProvidersPanel() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [storeKey]);
 
   const selected = useMemo(
     () => snapshot?.profiles.find((profile) => profile.name === selectedProfile) ?? null,
@@ -78,7 +83,7 @@ export function ProvidersPanel() {
 
   async function validateProviders() {
     setMessage(null);
-    const nextSnapshot = await fetchProviderConfig();
+    const nextSnapshot = await fetchProviderConfig(storeKey);
     setSnapshot(nextSnapshot);
     setSelectedProfile((current) => current ?? nextSnapshot.profiles[0]?.name ?? null);
     setMessage("Provider validation refreshed");
@@ -89,7 +94,7 @@ export function ProvidersPanel() {
     setSaving(true);
     setMessage(null);
     try {
-      const saved = await saveProviderConfig(providerConfigPayload(snapshot));
+      const saved = await saveProviderConfig(providerConfigPayload(snapshot), storeKey);
       setSnapshot(saved);
       setSelectedProfile((current) => current ?? saved.profiles[0]?.name ?? null);
       setMessage("Provider configuration saved");

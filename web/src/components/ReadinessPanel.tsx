@@ -5,9 +5,10 @@ import type { ReadinessReport } from "../types";
 
 interface ReadinessPanelProps {
   projectId: string | null;
+  storeKey: string | null;
 }
 
-export function ReadinessPanel({ projectId }: ReadinessPanelProps) {
+export function ReadinessPanel({ projectId, storeKey }: ReadinessPanelProps) {
   const [report, setReport] = useState<ReadinessReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +22,7 @@ export function ReadinessPanel({ projectId }: ReadinessPanelProps) {
     }
     let active = true;
     setLoading(true);
-    fetchReadinessReport(projectId)
+    fetchReadinessReport(projectId, storeKey)
       .then((nextReport) => {
         if (!active) return;
         setReport(nextReport);
@@ -37,7 +38,7 @@ export function ReadinessPanel({ projectId }: ReadinessPanelProps) {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, storeKey]);
 
   if (!projectId) {
     return (

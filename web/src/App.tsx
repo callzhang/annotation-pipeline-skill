@@ -240,13 +240,13 @@ export default function App() {
       {viewMode === "kanban" ? (
         <KanbanBoard snapshot={snapshot} selectedTaskId={selectedTask?.task_id ?? null} onSelectTask={setSelectedTask} />
       ) : null}
-      {viewMode === "runtime" ? <RuntimePanel /> : null}
-      {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} /> : null}
-      {viewMode === "outbox" ? <OutboxPanel projectId={selectedProjectId} /> : null}
-      {viewMode === "providers" ? <ProvidersPanel /> : null}
-      {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} /> : null}
-      {viewMode === "config" ? <ConfigPanel /> : null}
-      {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} /> : null}
+      {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}
+      {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
+      {viewMode === "outbox" ? <OutboxPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
+      {viewMode === "providers" ? <ProvidersPanel storeKey={selectedStoreKey} /> : null}
+      {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
+      {viewMode === "config" ? <ConfigPanel storeKey={selectedStoreKey} /> : null}
+      {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "documents" ? <DocumentsPanel storeKey={selectedStoreKey} /> : null}
       <TaskDrawer
         task={selectedTask}

@@ -3,9 +3,10 @@ import { fetchEventLog } from "../api";
 
 interface EventLogPanelProps {
   projectId: string | null;
+  storeKey: string | null;
 }
 
-export function EventLogPanel({ projectId }: EventLogPanelProps) {
+export function EventLogPanel({ projectId, storeKey }: EventLogPanelProps) {
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +14,7 @@ export function EventLogPanel({ projectId }: EventLogPanelProps) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    fetchEventLog(projectId)
+    fetchEventLog(projectId, storeKey)
       .then((payload) => {
         if (!active) return;
         setEvents(payload.events);
@@ -29,7 +30,7 @@ export function EventLogPanel({ projectId }: EventLogPanelProps) {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, storeKey]);
 
   return (
     <section className="work-panel event-log" aria-label="Event log">

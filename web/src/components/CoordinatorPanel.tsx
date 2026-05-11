@@ -9,6 +9,7 @@ import type { CoordinatorReport } from "../types";
 
 interface CoordinatorPanelProps {
   projectId: string | null;
+  storeKey: string | null;
 }
 
 interface RuleUpdateFormState {
@@ -41,7 +42,7 @@ const emptyLongTailIssueForm: LongTailIssueFormState = {
   taskIds: "",
 };
 
-export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
+export function CoordinatorPanel({ projectId, storeKey }: CoordinatorPanelProps) {
   const [report, setReport] = useState<CoordinatorReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingRuleUpdate, setSavingRuleUpdate] = useState(false);
@@ -62,7 +63,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
 
     let active = true;
     setLoading(true);
-    fetchCoordinatorReport(projectId)
+    fetchCoordinatorReport(projectId, storeKey)
       .then((nextReport) => {
         if (!active) return;
         setReport(nextReport);
@@ -80,14 +81,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, storeKey]);
 
   const viewModel = useMemo(() => (report ? buildCoordinatorViewModel(report) : null), [report]);
   const formsDisabled = !projectId || savingRuleUpdate || savingIssue;
 
   async function refreshReport() {
     if (!projectId) return;
-    const nextReport = await fetchCoordinatorReport(projectId);
+    const nextReport = await fetchCoordinatorReport(projectId, storeKey);
     setReport(nextReport);
   }
 
@@ -109,7 +110,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         action: ruleUpdateForm.action.trim(),
         created_by: "coordinator-agent",
         task_ids: parseTaskIds(ruleUpdateForm.taskIds),
-      });
+      }, storeKey);
       setRuleUpdateForm(emptyRuleUpdateForm);
       await refreshReport();
       setMessage("Rule update recorded");
@@ -139,7 +140,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         severity: longTailIssueForm.severity,
         created_by: "coordinator-agent",
         task_ids: parseTaskIds(longTailIssueForm.taskIds),
-      });
+      }, storeKey);
       setLongTailIssueForm(emptyLongTailIssueForm);
       await refreshReport();
       setMessage("Long-tail issue recorded");

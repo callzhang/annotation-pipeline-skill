@@ -3,7 +3,11 @@ import { fetchRuntimeCycles, fetchRuntimeMonitor, fetchRuntimeSnapshot, runRunti
 import { formatRuntimeDate, monitorLabel, orderedQueueCounts, runtimeHealthLabel } from "../runtime";
 import type { RuntimeCycleStats, RuntimeMonitorReport, RuntimeSnapshot } from "../types";
 
-export function RuntimePanel() {
+interface RuntimePanelProps {
+  storeKey: string | null;
+}
+
+export function RuntimePanel({ storeKey }: RuntimePanelProps) {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
   const [cycles, setCycles] = useState<RuntimeCycleStats[]>([]);
   const [monitor, setMonitor] = useState<RuntimeMonitorReport | null>(null);
@@ -13,9 +17,9 @@ export function RuntimePanel() {
 
   async function loadRuntime() {
     const [nextSnapshot, nextCycles, nextMonitor] = await Promise.all([
-      fetchRuntimeSnapshot(),
-      fetchRuntimeCycles(),
-      fetchRuntimeMonitor(),
+      fetchRuntimeSnapshot(storeKey),
+      fetchRuntimeCycles(storeKey),
+      fetchRuntimeMonitor(storeKey),
     ]);
     setSnapshot(nextSnapshot);
     setCycles(nextCycles.cycles);
@@ -38,15 +42,15 @@ export function RuntimePanel() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [storeKey]);
 
   async function runOnce() {
     setRunning(true);
     setError(null);
     try {
-      const result = await runRuntimeOnce();
+      const result = await runRuntimeOnce(storeKey);
       setSnapshot(result.snapshot);
-      const [nextCycles, nextMonitor] = await Promise.all([fetchRuntimeCycles(), fetchRuntimeMonitor()]);
+      const [nextCycles, nextMonitor] = await Promise.all([fetchRuntimeCycles(storeKey), fetchRuntimeMonitor(storeKey)]);
       setCycles(nextCycles.cycles);
       setMonitor(nextMonitor);
     } catch (reason: unknown) {

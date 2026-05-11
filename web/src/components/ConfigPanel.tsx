@@ -11,7 +11,11 @@ const configHints: Record<string, string> = {
   "callbacks.yaml": "Callback endpoints for status and submit notifications.",
 };
 
-export function ConfigPanel() {
+interface ConfigPanelProps {
+  storeKey: string | null;
+}
+
+export function ConfigPanel({ storeKey }: ConfigPanelProps) {
   const [files, setFiles] = useState<ConfigFile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -21,7 +25,8 @@ export function ConfigPanel() {
 
   useEffect(() => {
     let active = true;
-    fetchConfigSnapshot()
+    setLoading(true);
+    fetchConfigSnapshot(storeKey)
       .then((snapshot) => {
         if (!active) return;
         setFiles(snapshot.files);
@@ -39,7 +44,7 @@ export function ConfigPanel() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [storeKey]);
 
   const selected = files.find((file) => file.id === selectedId) ?? null;
 
@@ -54,7 +59,7 @@ export function ConfigPanel() {
     setSaving(true);
     setMessage(null);
     try {
-      await saveConfigFile(selected.id, draft);
+      await saveConfigFile(selected.id, draft, storeKey);
       setFiles((current) => current.map((file) => (file.id === selected.id ? { ...file, content: draft, exists: true } : file)));
       setMessage(`Saved ${selected.id}`);
     } catch (reason: unknown) {
