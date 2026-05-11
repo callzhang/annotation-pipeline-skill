@@ -662,7 +662,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the local annotation dashboard API.")
     parser.add_argument("store_root", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=8509)
     args = parser.parse_args()
     serve_dashboard_api(SqliteStore.open(args.store_root), host=args.host, port=args.port)
 

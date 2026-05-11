@@ -471,7 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--workspace", type=Path, default=Path.cwd() / "projects")
     serve_parser.add_argument("--host", default="127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--port", type=int, default=8509)
     serve_parser.set_defaults(handler=handle_serve)
 
     _register_db_commands(subparsers)
