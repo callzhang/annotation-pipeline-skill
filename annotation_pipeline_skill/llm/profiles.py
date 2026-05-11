@@ -13,6 +13,31 @@ ProviderFlavor = Literal["deepseek", "glm", "minimax"]
 CliKind = Literal["codex", "claude"]
 
 
+LLM_PROFILES_FILENAME = "llm_profiles.yaml"
+
+
+def resolve_llm_profiles_path(
+    *,
+    workspace_root: Path | None = None,
+    project_config_root: Path | None = None,
+) -> Path | None:
+    """Return the first existing llm_profiles.yaml from the resolution order.
+
+    Order: workspace-global > project-local. Returns None if neither exists.
+    Workspace-global: <workspace_root>/llm_profiles.yaml
+    Project-local:    <project_config_root>/llm_profiles.yaml
+    """
+    if workspace_root is not None:
+        candidate = Path(workspace_root) / LLM_PROFILES_FILENAME
+        if candidate.exists():
+            return candidate
+    if project_config_root is not None:
+        candidate = Path(project_config_root) / LLM_PROFILES_FILENAME
+        if candidate.exists():
+            return candidate
+    return None
+
+
 class ProfileValidationError(ValueError):
     pass
 
