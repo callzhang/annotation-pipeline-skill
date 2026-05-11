@@ -24,6 +24,7 @@ PROFILE_FIELDS = (
     "cli_binary",
     "model",
     "api_key_env",
+    "api_key",
     "base_url",
     "reasoning_effort",
     "permission_mode",
@@ -73,6 +74,25 @@ def save_provider_config(
     if workspace_root is None:
         raise ValueError("workspace_root is required to save provider configuration")
     data = _payload_to_yaml_data(payload)
+    # Merge api_key secrets the UI couldn't see (it only ever receives
+    # api_key_set: bool, never the raw value). Source of merge:
+    #   1. <workspace>/llm_profiles.yaml if it exists, else
+    #   2. <project_config>/llm_profiles.yaml (first-save migration path).
+    # This avoids losing inline keys that lived in the project-local file
+    # before workspace-global was introduced.
+    existing_path = resolve_llm_profiles_path(
+        workspace_root=workspace_root,
+        project_config_root=config_root,
+    )
+    if existing_path is not None:
+        try:
+            existing_raw = yaml.safe_load(existing_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            existing_raw = {}
+        _merge_preserved_api_keys(data, existing_raw)
+
+    # Validate the fully-merged data (so inline-keyed profiles satisfy
+    # _validate_profile's api_key OR api_key_env requirement).
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".yaml") as handle:
         temp_path = Path(handle.name)
         yaml.safe_dump(data, handle, sort_keys=False)
@@ -86,6 +106,26 @@ def save_provider_config(
     target_path = workspace_path / LLM_PROFILES_FILENAME
     target_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return build_provider_config_snapshot(config_root, workspace_root=workspace_root)
+
+
+def _merge_preserved_api_keys(new_data: dict[str, Any], existing_raw: Mapping[str, Any]) -> None:
+    """Restore previously-stored api_key values for profiles whose payload
+    omitted (or sent empty for) api_key. The UI never receives the raw key,
+    so an empty/absent value means 'keep the existing one'."""
+    existing_profiles = existing_raw.get("profiles") if isinstance(existing_raw, Mapping) else None
+    if not isinstance(existing_profiles, Mapping):
+        return
+    profiles = new_data.get("profiles")
+    if not isinstance(profiles, dict):
+        return
+    for name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        if profile.get("api_key"):
+            continue  # user explicitly set a new value
+        prior = existing_profiles.get(name)
+        if isinstance(prior, Mapping) and prior.get("api_key"):
+            profile["api_key"] = prior["api_key"]
 
 
 def _payload_to_yaml_data(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -122,6 +162,9 @@ def _payload_to_yaml_data(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _profile_to_dict(profile: LLMProfile) -> dict[str, Any]:
+    # api_key_set is a read-only echo for the UI; the raw key is NEVER
+    # included in API responses. Saves preserve the stored key when the
+    # incoming payload's api_key is empty or missing.
     return {
         "name": profile.name,
         "provider": profile.provider,
@@ -130,6 +173,7 @@ def _profile_to_dict(profile: LLMProfile) -> dict[str, Any]:
         "cli_binary": profile.cli_binary,
         "model": profile.model,
         "api_key_env": profile.api_key_env,
+        "api_key_set": bool(profile.api_key),
         "base_url": profile.base_url,
         "reasoning_effort": profile.reasoning_effort,
         "permission_mode": profile.permission_mode,

@@ -166,3 +166,170 @@ def test_provider_config_api_save_creates_workspace_file_when_absent(tmp_path):
 
     assert status == 200
     assert (workspace_root / "llm_profiles.yaml").exists()
+
+
+def test_provider_config_api_persists_inline_api_key_to_yaml(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
+
+    status, _headers, _body = api.handle_put(
+        "/api/providers",
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "deepseek_inline",
+                        "provider": "openai_compatible",
+                        "provider_flavor": "deepseek",
+                        "model": "deepseek-chat",
+                        "api_key": "sk-secret-abc123",
+                        "base_url": "https://api.deepseek.com",
+                    }
+                ],
+                "targets": {"annotation": "deepseek_inline"},
+                "limits": {"local_cli_global_concurrency": None},
+            }
+        ).encode("utf-8"),
+    )
+    assert status == 200
+
+    saved = (workspace_root / "llm_profiles.yaml").read_text(encoding="utf-8")
+    assert "api_key: sk-secret-abc123" in saved
+
+
+def test_provider_config_api_get_masks_api_key_as_set_flag(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "llm_profiles.yaml").write_text(
+        """
+profiles:
+  deepseek_inline:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-chat
+    api_key: sk-secret-abc123
+    base_url: https://api.deepseek.com
+targets:
+  annotation: deepseek_inline
+""",
+        encoding="utf-8",
+    )
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
+
+    status, _headers, body = api.handle_get("/api/providers")
+    payload = json.loads(body.decode("utf-8"))
+
+    assert status == 200
+    profile = payload["profiles"][0]
+    assert profile["api_key_set"] is True
+    # Raw key MUST NOT appear in any GET response.
+    assert "api_key" not in profile
+    assert "sk-secret-abc123" not in body.decode("utf-8")
+
+
+def test_provider_config_api_save_preserves_existing_api_key_when_blank(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "llm_profiles.yaml").write_text(
+        """
+profiles:
+  deepseek_inline:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-chat
+    api_key: sk-existing-xyz
+    base_url: https://api.deepseek.com
+targets:
+  annotation: deepseek_inline
+""",
+        encoding="utf-8",
+    )
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
+
+    # PUT without api_key (UI default when user leaves field blank) and with
+    # an empty-string api_key both preserve the stored secret.
+    for api_key_value in (None, ""):
+        profile_payload = {
+            "name": "deepseek_inline",
+            "provider": "openai_compatible",
+            "provider_flavor": "deepseek",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com",
+        }
+        if api_key_value is not None:
+            profile_payload["api_key"] = api_key_value
+        status, _headers, _body = api.handle_put(
+            "/api/providers",
+            json.dumps(
+                {
+                    "profiles": [profile_payload],
+                    "targets": {"annotation": "deepseek_inline"},
+                    "limits": {"local_cli_global_concurrency": None},
+                }
+            ).encode("utf-8"),
+        )
+        assert status == 200, _body
+        saved = (workspace_root / "llm_profiles.yaml").read_text(encoding="utf-8")
+        assert "api_key: sk-existing-xyz" in saved
+
+
+def test_provider_config_api_save_overwrites_api_key_when_provided(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "llm_profiles.yaml").write_text(
+        """
+profiles:
+  deepseek_inline:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-chat
+    api_key: sk-old-key
+    base_url: https://api.deepseek.com
+targets:
+  annotation: deepseek_inline
+""",
+        encoding="utf-8",
+    )
+    api = DashboardApi(
+        SqliteStore.open(tmp_path / ".annotation-pipeline"),
+        workspace_root=workspace_root,
+    )
+
+    status, _headers, _body = api.handle_put(
+        "/api/providers",
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "deepseek_inline",
+                        "provider": "openai_compatible",
+                        "provider_flavor": "deepseek",
+                        "model": "deepseek-chat",
+                        "api_key": "sk-new-key",
+                        "base_url": "https://api.deepseek.com",
+                    }
+                ],
+                "targets": {"annotation": "deepseek_inline"},
+                "limits": {"local_cli_global_concurrency": None},
+            }
+        ).encode("utf-8"),
+    )
+    assert status == 200
+
+    saved = (workspace_root / "llm_profiles.yaml").read_text(encoding="utf-8")
+    assert "api_key: sk-new-key" in saved
+    assert "sk-old-key" not in saved

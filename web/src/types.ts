@@ -261,6 +261,11 @@ export interface ProviderProfileConfig {
   cli_binary: string | null;
   model: string;
   api_key_env: string | null;
+  // Write-only: when non-empty, the server stores it as inline api_key.
+  // The GET response never includes the raw value (api_key_set echoes it).
+  api_key?: string | null;
+  // Read-only echo: true when the stored profile has an inline api_key.
+  api_key_set?: boolean;
   base_url: string | null;
   reasoning_effort: string | null;
   permission_mode: string | null;

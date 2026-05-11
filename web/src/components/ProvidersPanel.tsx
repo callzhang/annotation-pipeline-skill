@@ -187,6 +187,13 @@ export function ProvidersPanel() {
                 ) : null}
                 {selected.provider !== "local_cli" ? (
                   <>
+                    <PasswordField
+                      label="API Key (inline)"
+                      value={selected.api_key ?? ""}
+                      placeholder={selected.api_key_set ? "set" : "not set"}
+                      hint={selected.api_key_set ? "Leave blank to keep current key" : undefined}
+                      onChange={(value) => updateSelected({ api_key: value })}
+                    />
                     <TextField label="API Key Env" value={selected.api_key_env ?? ""} onChange={(value) => updateSelected({ api_key_env: value })} />
                     <TextField label="Base URL" value={selected.base_url ?? ""} onChange={(value) => updateSelected({ base_url: value })} />
                   </>
@@ -273,6 +280,27 @@ function TextField(props: { label: string; value: string; onChange: (value: stri
     <label>
       <span>{props.label}</span>
       <input value={props.value} onChange={(event) => props.onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function PasswordField(props: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  hint?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label>
+      <span>{props.label}</span>
+      <input
+        type="password"
+        value={props.value}
+        placeholder={props.placeholder}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      {props.hint ? <small className="provider-field-hint">{props.hint}</small> : null}
     </label>
   );
 }
