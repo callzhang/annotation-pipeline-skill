@@ -83,7 +83,10 @@ class DashboardApi:
         if route == "/api/health":
             return self._json_response(200, {"ok": True})
         if route == "/api/stores":
-            return self._json_response(200, {"stores": self._stores_list()})
+            return self._json_response(200, {
+                "workspace_path": str(self.workspace_root),
+                "stores": self._stores_list(),
+            })
         if route == "/api/projects":
             return self._json_response(200, build_project_summaries(store))
         if route == "/api/kanban":

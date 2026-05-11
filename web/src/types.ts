@@ -55,6 +55,7 @@ export interface StoreInfo {
 }
 
 export interface StoresSnapshot {
+  workspace_path?: string;
   stores: StoreInfo[];
 }
 

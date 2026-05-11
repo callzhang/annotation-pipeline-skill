@@ -41,6 +41,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [stores, setStores] = useState<StoreInfo[]>([]);
+  const [workspacePath, setWorkspacePath] = useState<string | null>(null);
   const [urlState, { setView, setStore, setProject, setTask }] = useUrlState(urlDefaults);
   const selectedStoreKey = urlState.store;
   const selectedProjectId = urlState.project;
@@ -64,6 +65,7 @@ export default function App() {
     fetchStores()
       .then((snap) => {
         setStores(snap.stores);
+        setWorkspacePath(snap.workspace_path ?? null);
         if (snap.stores.length > 0) {
           const valid = snap.stores.some((s) => s.key === selectedStoreKey);
           if (!valid) {
@@ -195,11 +197,16 @@ export default function App() {
         <div>
           <h1>Annotation Pipeline</h1>
           <p>{countCards(snapshot)} tasks across operational stages</p>
+          {workspacePath ? (
+            <p className="workspace-path" title="serve --workspace argument">
+              Workspace: <code>{workspacePath}</code>
+            </p>
+          ) : null}
         </div>
         <div className="topbar-actions">
           {stores.length > 0 ? (
             <label className="project-selector">
-              <span>Workspace</span>
+              <span>Project</span>
               <select
                 value={selectedStoreKey ?? ""}
                 onChange={(event) => handleStoreChange(event.target.value)}
@@ -213,12 +220,12 @@ export default function App() {
             </label>
           ) : null}
           <label className="project-selector">
-            <span>Project</span>
+            <span>Pipeline</span>
             <select
               value={selectedProjectId ?? ""}
               onChange={(event) => handleProjectChange(event.target.value)}
             >
-              <option value="">All projects</option>
+              <option value="">All pipelines</option>
               {projects.map((project) => (
                 <option key={project.project_id} value={project.project_id}>
                   {project.project_id} ({project.task_count})
