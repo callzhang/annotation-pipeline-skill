@@ -382,3 +382,52 @@ either point `--dst` at `<X>/.annotation-pipeline` directly, or symlink:
 ln -s /tmp/migrated-db /tmp/wks/.annotation-pipeline
 annotation-pipeline serve --workspace /tmp/wks
 ```
+
+## When a task escalates to HUMAN_REVIEW
+
+After `runtime.max_qc_rounds` (default 3) failed QC reviews, the task is auto-escalated to HUMAN_REVIEW. It appears in the human-review column on the dashboard. Resolve it by submitting a corrected answer via either route:
+
+### CLI
+
+```
+echo '{"entities": [{"text": "Acme", "label": "ORG"}]}' > /tmp/answer.json
+annotation-pipeline human-review correct \
+    --root .annotation-pipeline \
+    --task <task_id> \
+    --answer-file /tmp/answer.json \
+    --actor your-name \
+    --note "manual correction"
+```
+
+The answer must validate against the task's `output_schema` (`source_ref.payload.annotation_guidance.output_schema`). On failure the command exits non-zero and prints the schema errors.
+
+### HTTP API
+
+```
+POST /api/tasks/<task_id>/human_review_correction
+Content-Type: application/json
+{
+  "actor": "your-name",
+  "answer": { ... },
+  "note": "..."
+}
+```
+
+Responses:
+- `200` on success, body is the updated task + new artifact.
+- `400` with `{"error": "schema_validation_failed", "details": [...]}` on schema failure.
+- `400` with `{"error": "actor_required" | "answer_must_be_object" | "invalid_json"}` on malformed body.
+- `409` with `{"error": "invalid_transition", ...}` if the task isn't in HUMAN_REVIEW.
+
+Both routes write a `human_review_answer` artifact and transition the task to ACCEPTED. The export service automatically picks the human answer over any prior annotator output, and exported rows are tagged `human_authored: true`.
+
+### Tuning the escalation threshold
+
+In `workflow.yaml`:
+
+```yaml
+runtime:
+  max_qc_rounds: 5   # default is 3
+```
+
+Lower values escalate faster (less wasted compute on stuck tasks); higher values give the annotator/QC loop more chances to converge before pulling a human in.

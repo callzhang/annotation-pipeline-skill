@@ -267,6 +267,7 @@ ArtifactRef:
 - `image_bbox_preview`：渲染后的 overlay 图片
 - `video_frame_annotation`：frame index、timestamp、box/mask/track
 - `point_cloud_annotation`：3D box、coordinate frame、instance id
+- `human_review_answer`：人工复核阶段写入的最终答案，schema 校验通过后由 export 服务优先于 `annotation_result` 选用
 
 ### 5.5 FeedbackRecord
 

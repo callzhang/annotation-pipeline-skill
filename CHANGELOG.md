@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-05-11
+
+- Auto-escalate tasks to HUMAN_REVIEW after `RuntimeConfig.max_qc_rounds` (default 3) QC rejections, replacing the silent infinite-loop hazard. Triggered by counting `FeedbackRecord(source_stage=QC)` per task; configurable via `runtime.max_qc_rounds` in `workflow.yaml`.
+- JSON Schema gate on all writes that produce annotation ground truth:
+  - Annotator subagent output is parsed and validated against `task.source_ref.payload.annotation_guidance.output_schema`. Failures record a BLOCKING `FeedbackRecord(category="schema_invalid", source_stage=VALIDATION)` and return the task to PENDING. Tasks without an `output_schema` are passed through unchanged.
+  - Human review correction (new endpoint `POST /api/tasks/<id>/human_review_correction` and CLI `apl human-review correct ...`) validates the submitted answer against the same schema. Failures return 400 with structured error list. Human-side writes require an `output_schema` and fail loudly with `missing_schema` if absent.
+- New `human_review_answer` artifact kind. Export service prefers it over `annotation_result` when both exist; exported training rows include `human_authored: bool`.
+- New dependency: `jsonschema>=4.0`.
+
 ## 2026-05-10
 
 - BREAKING: replaced JSON/JSONL `FileStore` with `SqliteStore` (single
