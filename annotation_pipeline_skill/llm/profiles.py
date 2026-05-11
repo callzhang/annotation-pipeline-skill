@@ -24,7 +24,7 @@ class LLMProfile:
     model: str
     provider_flavor: ProviderFlavor | None = None
     api_key: str | None = None
-    api_key_env: str | None = None
+    api_key_env: str | list[str] | None = None
     base_url: str | None = None
     reasoning_effort: str | None = None
     cli_kind: CliKind | None = None
@@ -39,8 +39,13 @@ class LLMProfile:
     def resolve_api_key(self, env: Mapping[str, str] = os.environ) -> str:
         if self.api_key:
             return self.api_key
-        if self.api_key_env:
-            return env.get(self.api_key_env, "")
+        if self.api_key_env is None:
+            return ""
+        candidates = [self.api_key_env] if isinstance(self.api_key_env, str) else list(self.api_key_env)
+        for name in candidates:
+            value = env.get(name, "")
+            if value:
+                return value
         return ""
 
 
@@ -108,7 +113,7 @@ def _parse_profile(name: str, raw: object) -> LLMProfile:
         model=model,
         provider_flavor=_optional_provider_flavor(raw.get("provider_flavor"), f"profile {name} provider_flavor"),
         api_key=_optional_string(raw.get("api_key"), f"profile {name} api_key"),
-        api_key_env=_optional_string(raw.get("api_key_env"), f"profile {name} api_key_env"),
+        api_key_env=_optional_api_key_env(raw.get("api_key_env"), f"profile {name} api_key_env"),
         base_url=_optional_string(raw.get("base_url"), f"profile {name} base_url"),
         reasoning_effort=_optional_string(raw.get("reasoning_effort"), f"profile {name} reasoning_effort"),
         cli_kind=_optional_cli_kind(raw.get("cli_kind"), f"profile {name} cli_kind"),
@@ -215,3 +220,20 @@ def _optional_non_negative_int(value: object, label: str) -> int | None:
     if parsed < 0:
         raise ProfileValidationError(f"invalid {label}")
     return parsed
+
+
+def _optional_api_key_env(value: object, label: str) -> str | list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            raise ProfileValidationError(f"invalid {label}")
+        return value
+    if isinstance(value, list):
+        if not value:
+            raise ProfileValidationError(f"invalid {label}: must not be empty")
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ProfileValidationError(f"invalid {label}: each entry must be a non-empty string")
+        return list(value)
+    raise ProfileValidationError(f"invalid {label}: must be a string or list of strings")
