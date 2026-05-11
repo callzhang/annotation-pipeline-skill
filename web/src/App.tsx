@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   fetchKanbanSnapshot,
   fetchProjects,
@@ -20,37 +20,59 @@ import { RuntimePanel } from "./components/RuntimePanel";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
 import type { KanbanSnapshot, ProjectSummary, StoreInfo, TaskCard, TaskDetail } from "./types";
+import { useUrlState, type UrlState } from "./url_state";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
 type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events" | "documents";
+
+const urlDefaults: UrlState = { view: "kanban", store: null, project: null, task: null };
+
+function findTaskInSnapshot(snapshot: KanbanSnapshot, taskId: string | null): TaskCard | null {
+  if (!taskId) return null;
+  for (const column of snapshot.columns) {
+    for (const card of column.cards) {
+      if (card.task_id === taskId) return card;
+    }
+  }
+  return null;
+}
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [stores, setStores] = useState<StoreInfo[]>([]);
-  const [selectedStoreKey, setSelectedStoreKey] = useState<string | null>(() => localStorage.getItem("storeKey"));
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedTask, setSelectedTask] = useState<TaskCard | null>(null);
+  const [urlState, { setView, setStore, setProject, setTask }] = useUrlState(urlDefaults);
+  const selectedStoreKey = urlState.store;
+  const selectedProjectId = urlState.project;
+  const selectedTaskId = urlState.task;
+  const viewMode = urlState.view as ViewMode;
+
   const [selectedDetail, setSelectedDetail] = useState<TaskDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailSaving, setDetailSaving] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("kanban");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Derive the full TaskCard from the kanban snapshot. URL only holds task_id.
+  const selectedTask = useMemo<TaskCard | null>(
+    () => findTaskInSnapshot(snapshot, selectedTaskId),
+    [snapshot, selectedTaskId],
+  );
 
   useEffect(() => {
     fetchStores()
       .then((snap) => {
         setStores(snap.stores);
         if (snap.stores.length > 0) {
-          setSelectedStoreKey((prev) => {
-            const valid = snap.stores.some((s) => s.key === prev);
-            return valid ? prev : snap.stores[0].key;
-          });
+          const valid = snap.stores.some((s) => s.key === selectedStoreKey);
+          if (!valid) {
+            setStore(snap.stores[0].key);
+          }
         }
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -78,7 +100,7 @@ export default function App() {
   }, [selectedProjectId, selectedStoreKey]);
 
   useEffect(() => {
-    if (!selectedTask) {
+    if (!selectedTaskId) {
       setSelectedDetail(null);
       setDetailError(null);
       setDetailLoading(false);
@@ -88,7 +110,7 @@ export default function App() {
     let active = true;
     setDetailLoading(true);
     setDetailError(null);
-    fetchTaskDetail(selectedTask.task_id, selectedStoreKey)
+    fetchTaskDetail(selectedTaskId, selectedStoreKey)
       .then((detail) => {
         if (!active) return;
         setSelectedDetail(detail);
@@ -105,20 +127,24 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedTask, selectedStoreKey]);
+  }, [selectedTaskId, selectedStoreKey]);
 
   function handleStoreChange(key: string) {
-    setSelectedStoreKey(key || null);
-    localStorage.setItem("storeKey", key);
-    setSelectedTask(null);
+    setStore(key || null);
+    setTask(null);
+  }
+
+  function handleProjectChange(value: string) {
+    setProject(value || null);
+    setTask(null);
   }
 
   async function submitFeedbackDiscussion(payload: Record<string, unknown>) {
-    if (!selectedTask) return;
+    if (!selectedTaskId) return;
     setDetailSaving(true);
     setDetailError(null);
     try {
-      const detail = await postFeedbackDiscussion(selectedTask.task_id, payload, selectedStoreKey);
+      const detail = await postFeedbackDiscussion(selectedTaskId, payload, selectedStoreKey);
       setSelectedDetail(detail);
       setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
     } catch (reason: unknown) {
@@ -129,11 +155,11 @@ export default function App() {
   }
 
   async function submitHumanReviewDecision(payload: Record<string, unknown>) {
-    if (!selectedTask) return;
+    if (!selectedTaskId) return;
     setDetailSaving(true);
     setDetailError(null);
     try {
-      const detail = await postHumanReviewDecision(selectedTask.task_id, payload, selectedStoreKey);
+      const detail = await postHumanReviewDecision(selectedTaskId, payload, selectedStoreKey);
       setSelectedDetail(detail);
       setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
     } catch (reason: unknown) {
@@ -144,11 +170,11 @@ export default function App() {
   }
 
   async function submitTaskQcPolicy(payload: Record<string, unknown>) {
-    if (!selectedTask) return;
+    if (!selectedTaskId) return;
     setDetailSaving(true);
     setDetailError(null);
     try {
-      const detail = await saveTaskQcPolicy(selectedTask.task_id, payload, selectedStoreKey);
+      const detail = await saveTaskQcPolicy(selectedTaskId, payload, selectedStoreKey);
       setSelectedDetail(detail);
       setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
     } catch (reason: unknown) {
@@ -185,10 +211,7 @@ export default function App() {
             <span>Project</span>
             <select
               value={selectedProjectId ?? ""}
-              onChange={(event) => {
-                setSelectedProjectId(event.target.value || null);
-                setSelectedTask(null);
-              }}
+              onChange={(event) => handleProjectChange(event.target.value)}
             >
               <option value="">All projects</option>
               {projects.map((project) => (
@@ -203,42 +226,46 @@ export default function App() {
       </header>
 
       <nav className="view-tabs" aria-label="Dashboard views">
-        <button className={viewMode === "kanban" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("kanban")}>
+        <button className={viewMode === "kanban" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("kanban")}>
           Kanban
         </button>
-        <button className={viewMode === "runtime" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("runtime")}>
+        <button className={viewMode === "runtime" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("runtime")}>
           Runtime
         </button>
-        <button className={viewMode === "readiness" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("readiness")}>
+        <button className={viewMode === "readiness" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("readiness")}>
           Readiness
         </button>
-        <button className={viewMode === "outbox" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("outbox")}>
+        <button className={viewMode === "outbox" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("outbox")}>
           Outbox
         </button>
-        <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("providers")}>
+        <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("providers")}>
           Providers
         </button>
         <button
           className={viewMode === "coordinator" ? "view-tab selected" : "view-tab"}
           type="button"
-          onClick={() => setViewMode("coordinator")}
+          onClick={() => setView("coordinator")}
         >
           Coordinator
         </button>
-        <button className={viewMode === "config" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("config")}>
+        <button className={viewMode === "config" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("config")}>
           Configuration
         </button>
-        <button className={viewMode === "events" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("events")}>
+        <button className={viewMode === "events" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("events")}>
           Event Log
         </button>
-        <button className={viewMode === "documents" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setViewMode("documents")}>
+        <button className={viewMode === "documents" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("documents")}>
           Documents
         </button>
       </nav>
 
       {error ? <div className="notice">{error}</div> : null}
       {viewMode === "kanban" ? (
-        <KanbanBoard snapshot={snapshot} selectedTaskId={selectedTask?.task_id ?? null} onSelectTask={setSelectedTask} />
+        <KanbanBoard
+          snapshot={snapshot}
+          selectedTaskId={selectedTaskId}
+          onSelectTask={(card) => setTask(card.task_id)}
+        />
       ) : null}
       {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
@@ -257,7 +284,7 @@ export default function App() {
         onSubmitFeedbackDiscussion={submitFeedbackDiscussion}
         onSubmitHumanReviewDecision={submitHumanReviewDecision}
         onSaveQcPolicy={submitTaskQcPolicy}
-        onClose={() => setSelectedTask(null)}
+        onClose={() => setTask(null)}
       />
     </main>
   );
