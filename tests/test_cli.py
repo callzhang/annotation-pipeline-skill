@@ -806,3 +806,188 @@ def test_default_llm_profiles_template_is_valid_yaml_and_registry():
             registry.resolve(target)
     finally:
         path.unlink(missing_ok=True)
+
+
+def _write_prelabeled_fixture(tmp_path, row_count):
+    source = tmp_path / "v3_tasks.jsonl"
+    lines = []
+    for i in range(row_count):
+        lines.append(
+            json.dumps(
+                {
+                    "task_id": f"row-{i:03d}",
+                    "source_id": f"src-{i}",
+                    "input": f"text body {i}",
+                    "output": {"labels": [{"text": f"e{i}", "type": "ENTITY"}]},
+                }
+            )
+        )
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return source
+
+
+def _write_minimal_schema_file(tmp_path):
+    """Write a small JSON Schema with $defs/output that contains a $ref to a spanList."""
+    schema = {
+        "$defs": {
+            "spanList": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["text", "type"],
+                    "properties": {
+                        "text": {"type": "string"},
+                        "type": {"type": "string"},
+                    },
+                },
+            },
+            "output": {
+                "type": "object",
+                "required": ["labels"],
+                "properties": {"labels": {"$ref": "#/$defs/spanList"}},
+            },
+        }
+    }
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text(json.dumps(schema), encoding="utf-8")
+    return schema_file
+
+
+def test_cli_import_jsonl_prelabeled_creates_tasks_with_prelabel_metadata(tmp_path, capsys):
+    from annotation_pipeline_skill.core.states import TaskStatus
+
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=15)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    exit_code = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3_initial_deployment",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+            "--output-schema-pointer",
+            "$defs/output",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload == {"imported": 2, "pipeline_id": "v3_initial_deployment", "skipped": 0}
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    task0 = store.load_task("v3_initial_deployment-000000")
+    task1 = store.load_task("v3_initial_deployment-000001")
+    assert task0.status is TaskStatus.PENDING
+    assert task1.status is TaskStatus.PENDING
+    assert task0.current_attempt == 0
+    assert task0.metadata["prelabeled"] is True
+    assert task0.metadata["batch_size"] == 10
+    assert task1.metadata["batch_size"] == 5
+    assert len(task0.metadata["row_ids"]) == 10
+    assert len(task1.metadata["row_ids"]) == 5
+
+    rows0 = task0.source_ref["payload"]["rows"]
+    assert len(rows0) == 10
+    assert rows0[0] == {
+        "row_index": 0,
+        "row_id": "row-000",
+        "source_id": "src-0",
+        "input": "text body 0",
+    }
+    guidance = task0.source_ref["payload"]["annotation_guidance"]
+    assert "output_schema" in guidance
+    batched = guidance["output_schema"]
+    assert batched["properties"]["rows"]["minItems"] == 10
+    assert batched["properties"]["rows"]["maxItems"] == 10
+    # $defs hoisted to root of batched schema so $refs in per-row output resolve.
+    assert "$defs" in batched
+    assert "spanList" in batched["$defs"]
+    item_output = batched["properties"]["rows"]["items"]["properties"]["output"]
+    assert "$defs" not in item_output  # do not duplicate at the nested level
+
+    # End-to-end: validating the actual annotation artifact against the batched schema must pass.
+    from jsonschema import Draft202012Validator
+    artifact = store.list_artifacts(task0.task_id)[0]
+    artifact_payload = json.loads((store.root / artifact.path).read_text(encoding="utf-8"))
+    inner = json.loads(artifact_payload["text"])
+    errors = list(Draft202012Validator(batched).iter_errors(inner))
+    assert errors == [], f"expected no validation errors, got {[e.message for e in errors]}"
+
+
+def test_cli_import_jsonl_prelabeled_writes_annotation_artifact(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=3)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    artifacts = store.list_artifacts("v3-000000")
+    assert len(artifacts) == 1
+    artifact = artifacts[0]
+    assert artifact.kind == "annotation_result"
+    artifact_payload = json.loads((store.root / artifact.path).read_text(encoding="utf-8"))
+    assert artifact_payload["raw_response"] == {"source": "v2_prelabel"}
+    inner = json.loads(artifact_payload["text"])
+    assert len(inner["rows"]) == 3
+    assert inner["rows"][0]["row_index"] == 0
+    assert inner["rows"][0]["row_id"] == "row-000"
+    assert inner["rows"][0]["output"] == {"labels": [{"text": "e0", "type": "ENTITY"}]}
+
+
+def test_cli_import_jsonl_prelabeled_appends_attempt_record(tmp_path):
+    from annotation_pipeline_skill.core.states import AttemptStatus
+
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=12)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    for task_id in ("v3-000000", "v3-000001"):
+        attempts = store.list_attempts(task_id)
+        assert len(attempts) == 1
+        attempt = attempts[0]
+        assert attempt.status is AttemptStatus.SUCCEEDED
+        assert attempt.provider_id == "prelabel"
+        assert attempt.stage == "annotation"
+        assert attempt.summary == "imported from v2 annotation"

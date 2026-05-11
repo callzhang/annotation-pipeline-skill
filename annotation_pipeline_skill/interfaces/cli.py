@@ -305,6 +305,23 @@ def build_parser() -> argparse.ArgumentParser:
     annotation_manager_v2.add_argument("--qc-sample-ratio", type=float)
     annotation_manager_v2.set_defaults(handler=handle_import_annotation_manager_v2)
 
+    jsonl_prelabeled = import_subparsers.add_parser("jsonl-prelabeled")
+    jsonl_prelabeled.add_argument("--project-root", type=Path, default=Path.cwd())
+    jsonl_prelabeled.add_argument("--source", type=Path, required=True)
+    jsonl_prelabeled.add_argument("--pipeline-id", required=True)
+    jsonl_prelabeled.add_argument("--batch-size", type=int, default=10)
+    jsonl_prelabeled.add_argument("--output-schema-file", type=Path, required=True)
+    jsonl_prelabeled.add_argument("--output-schema-pointer", default="$defs/output")
+    jsonl_prelabeled.add_argument(
+        "--annotation-type",
+        action="append",
+        dest="annotation_types",
+        help="annotation type to declare on each task (repeatable)",
+    )
+    jsonl_prelabeled.add_argument("--modality", default="text")
+    jsonl_prelabeled.add_argument("--limit", type=int, default=None)
+    jsonl_prelabeled.set_defaults(handler=handle_import_jsonl_prelabeled)
+
     cycle_parser = subparsers.add_parser("run-cycle")
     cycle_parser.add_argument("--project-root", type=Path, default=Path.cwd())
     cycle_parser.add_argument("--limit", type=int, default=None)
@@ -832,6 +849,216 @@ def _save_annotation_manager_v2_task(
             model=None,
             route_role="import",
             summary=f"Imported {len(annotated_rows)} annotation manager v2 rows for QC.",
+            artifacts=[artifact],
+        )
+    )
+
+
+def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
+    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
+    rows = read_jsonl(args.source)
+    if args.limit is not None:
+        rows = rows[: args.limit]
+    output_schema, schema_defs = _resolve_output_schema(args.output_schema_file, args.output_schema_pointer)
+    annotation_types = args.annotation_types or [
+        "entity_span",
+        "classification",
+        "json_structure",
+        "relation",
+    ]
+    imported = 0
+    skipped = 0
+    for batch_idx, batch in enumerate(chunked(rows, args.batch_size)):
+        usable = [row for row in batch if isinstance(row.get("input"), str) and isinstance(row.get("output"), dict)]
+        if not usable:
+            skipped += len(batch)
+            continue
+        task_id = f"{args.pipeline_id}-{batch_idx:06d}"
+        _save_jsonl_prelabeled_task(
+            store=store,
+            task_id=task_id,
+            pipeline_id=args.pipeline_id,
+            batch_idx=batch_idx,
+            batch=usable,
+            source_file=args.source,
+            output_schema=output_schema,
+            schema_defs=schema_defs,
+            annotation_types=annotation_types,
+            modality=args.modality,
+        )
+        imported += 1
+    print(
+        json.dumps(
+            {"imported": imported, "skipped": skipped, "pipeline_id": args.pipeline_id},
+            sort_keys=True,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _resolve_output_schema(schema_file: Path, pointer: str) -> tuple[dict, dict]:
+    """Return (per-row output schema, $defs block) so callers can hoist $defs to the root."""
+    loaded = json.loads(schema_file.read_text(encoding="utf-8"))
+    node: object = loaded
+    for part in pointer.lstrip("/").split("/"):
+        if not part:
+            continue
+        if not isinstance(node, dict) or part not in node:
+            raise ValueError(f"pointer segment {part!r} not found in {schema_file}")
+        node = node[part]
+    if not isinstance(node, dict):
+        raise ValueError(f"resolved pointer {pointer!r} did not yield a JSON object")
+    defs = loaded.get("$defs") if isinstance(loaded.get("$defs"), dict) else {}
+    return dict(node), dict(defs)
+
+
+def _batched_output_schema(per_row_output_schema: dict, defs: dict, batch_size: int) -> dict:
+    """Wrap a per-row output schema in the batched envelope.
+
+    $defs must live at the root of the validated schema so that `$ref: "#/$defs/..."`
+    references inside the per-row output resolve correctly.
+    """
+    schema: dict = {
+        "type": "object",
+        "required": ["rows"],
+        "additionalProperties": False,
+        "properties": {
+            "rows": {
+                "type": "array",
+                "minItems": batch_size,
+                "maxItems": batch_size,
+                "items": {
+                    "type": "object",
+                    "required": ["row_index", "row_id", "output"],
+                    "properties": {
+                        "row_index": {"type": "integer"},
+                        "row_id": {"type": "string"},
+                        "output": per_row_output_schema,
+                    },
+                },
+            }
+        },
+    }
+    if defs:
+        schema["$defs"] = defs
+    return schema
+
+
+def _save_jsonl_prelabeled_task(
+    *,
+    store: SqliteStore,
+    task_id: str,
+    pipeline_id: str,
+    batch_idx: int,
+    batch: list[dict],
+    source_file: Path,
+    output_schema: dict,
+    schema_defs: dict,
+    annotation_types: list[str],
+    modality: str,
+) -> None:
+    attempt_id = f"attempt-prelabel-{batch_idx:06d}"
+    row_ids = [str(row.get("task_id") or row.get("row_id") or f"row-{i}") for i, row in enumerate(batch)]
+    batched_schema = _batched_output_schema(output_schema, schema_defs, batch_size=len(batch))
+    rows_payload = [
+        {
+            "row_index": i,
+            "row_id": row_ids[i],
+            "source_id": row.get("source_id"),
+            "input": row.get("input"),
+        }
+        for i, row in enumerate(batch)
+    ]
+    annotation_payload = {
+        "rows": [
+            {"row_index": i, "row_id": row_ids[i], "output": batch[i]["output"]}
+            for i in range(len(batch))
+        ]
+    }
+    task = Task.new(
+        task_id=task_id,
+        pipeline_id=pipeline_id,
+        source_ref={
+            "kind": "jsonl_prelabeled",
+            "path": str(source_file),
+            "batch_index": batch_idx,
+            "row_count": len(batch),
+            "payload": {
+                "rows": rows_payload,
+                "annotation_guidance": {
+                    "output_schema": batched_schema,
+                    "rules_path": "annotation_rules.yaml",
+                },
+            },
+        },
+        modality=modality,
+        annotation_requirements={"annotation_types": annotation_types},
+        metadata={
+            "prelabeled": True,
+            "prelabel_source": str(source_file),
+            "qc_policy": {"mode": "sample_ratio", "sample_ratio": 1.0},
+            "batch_size": len(batch),
+            "row_ids": row_ids,
+        },
+    )
+    pending_event = transition_task(
+        task,
+        TaskStatus.PENDING,
+        actor="cli",
+        reason="imported prelabeled jsonl batch",
+        stage="prepare",
+        metadata={"batch_index": batch_idx, "row_count": len(batch)},
+    )
+    store.save_task(task)
+    store.append_event(pending_event)
+
+    relative_path = f"artifact_payloads/{task_id}/prelabeled-annotation.json"
+    payload_path = store.root / relative_path
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_text = json.dumps(annotation_payload, ensure_ascii=False, sort_keys=True)
+    payload_path.write_text(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "text": payload_text,
+                "raw_response": {"source": "v2_prelabel"},
+                "usage": {},
+                "diagnostics": {"source": "prelabel"},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    artifact = ArtifactRef.new(
+        task_id=task_id,
+        kind="annotation_result",
+        path=relative_path,
+        content_type="application/json",
+        metadata={
+            "runtime": "import",
+            "provider": "prelabel",
+            "model": "v2_baseline",
+            "diagnostics": {"source": "prelabel"},
+        },
+    )
+    store.append_artifact(artifact)
+    store.append_attempt(
+        Attempt(
+            attempt_id=attempt_id,
+            task_id=task_id,
+            index=0,
+            stage="annotation",
+            status=AttemptStatus.SUCCEEDED,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            provider_id="prelabel",
+            model="v2_baseline",
+            route_role="import",
+            summary="imported from v2 annotation",
             artifacts=[artifact],
         )
     )
