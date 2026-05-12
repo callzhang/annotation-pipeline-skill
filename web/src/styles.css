@@ -880,18 +880,16 @@ button {
   overflow-wrap: anywhere;
 }
 
-.consensus-box,
-.feedback-card {
-  border: 1px solid #d7e0e5;
-  border-radius: 6px;
-  margin-bottom: 10px;
-  padding: 10px;
-}
-
+/* ── Consensus summary ─────────────────────────────── */
 .consensus-box {
   background: #eef2f4;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
   display: grid;
+  font-size: 12px;
   gap: 4px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
 }
 
 .consensus-box.accepted {
@@ -899,28 +897,64 @@ button {
   border-color: #9bc8b7;
 }
 
-.consensus-box strong,
-.consensus-box span {
-  font-size: 12px;
+.consensus-box strong { font-size: 13px; }
+
+/* ── Feedback card ─────────────────────────────────── */
+.feedback-card {
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
 }
 
-.feedback-card-header {
-  align-items: flex-start;
+.feedback-issue {
+  background: #f5f8fa;
+  border-bottom: 1px solid #d7e0e5;
+  padding: 10px 12px;
+}
+
+.feedback-issue-meta {
+  align-items: center;
   display: flex;
-  gap: 10px;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
-.feedback-card-header strong {
-  font-size: 13px;
+.feedback-from {
+  color: #52616b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.feedback-severity {
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
   text-transform: capitalize;
 }
 
-.feedback-card-header p {
-  color: #52616b;
-  font-size: 12px;
-  line-height: 1.4;
-  margin: 4px 0 0;
+.severity-critical { background: #fde8e8; color: #7a1c1c; }
+.severity-warning  { background: #fdf3d8; color: #6b4600; }
+.severity-info     { background: #dff0fb; color: #0e4d6e; }
+
+.feedback-category {
+  background: #e7eef3;
+  border-radius: 4px;
+  color: #2b3a42;
+  font-size: 11px;
+  padding: 1px 6px;
+  text-transform: capitalize;
+}
+
+.feedback-message {
+  color: #172026;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .agreement-pill {
@@ -930,7 +964,8 @@ button {
   color: #5f4300;
   font-size: 11px;
   font-weight: 700;
-  padding: 3px 8px;
+  margin-left: auto;
+  padding: 2px 8px;
   white-space: nowrap;
 }
 
@@ -940,18 +975,113 @@ button {
   color: #1f5a43;
 }
 
-.discussion-stack {
-  margin-top: 10px;
+/* ── Discussion thread ─────────────────────────────── */
+.discussion-empty {
+  color: #8fa3af;
+  font-size: 12px;
+  margin: 0;
+  padding: 10px 12px;
 }
 
-.agreement-form {
-  border-top: 1px solid #e1e7eb;
+.discussion-thread {
+  display: grid;
+}
+
+.discussion-message {
+  border-bottom: 1px solid #eef2f4;
+  padding: 10px 12px;
+}
+
+.discussion-message:last-child { border-bottom: none; }
+
+.discussion-message-meta {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.discussion-role {
+  font-size: 12px;
+  font-weight: 700;
+  color: #172026;
+}
+
+.discussion-stance {
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
+.stance-agree    { background: #e5f3ed; color: #1f5a43; }
+.stance-partial  { background: #fdf3d8; color: #6b4600; }
+.stance-disagree { background: #fde8e8; color: #7a1c1c; }
+.stance-proposal { background: #eeeaf8; color: #3a2466; }
+
+.discussion-consensus-badge {
+  background: #e5f3ed;
+  border-radius: 4px;
+  color: #1f5a43;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+}
+
+.discussion-message-body {
+  color: #2b3a42;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── Reply form ────────────────────────────────────── */
+.discussion-reply-form {
+  background: #f9fbfc;
+  border-top: 1px solid #d7e0e5;
   display: grid;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 10px;
+  padding: 12px;
 }
 
+.reply-form-label {
+  color: #52616b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.reply-form-selectors {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.reply-form-selectors label,
+.discussion-reply-form label:not(.checkbox-row) {
+  display: grid;
+  font-size: 12px;
+  gap: 3px;
+}
+
+.reply-form-selectors select,
+.discussion-reply-form select,
+.discussion-reply-form textarea {
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  color: #172026;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.discussion-reply-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+/* ── Human review form ─────────────────────────────── */
 .human-review-form {
   display: grid;
   gap: 8px;
@@ -981,8 +1111,6 @@ button {
   color: #ffffff;
 }
 
-.agreement-form select,
-.agreement-form textarea,
 .human-review-form select,
 .human-review-form textarea {
   border: 1px solid #cfd9df;
@@ -992,7 +1120,6 @@ button {
   padding: 8px 9px;
 }
 
-.agreement-form textarea,
 .human-review-form textarea {
   min-height: 86px;
   resize: vertical;

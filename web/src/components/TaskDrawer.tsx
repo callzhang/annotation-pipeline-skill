@@ -386,15 +386,43 @@ function HumanReviewDecisionForm({
   );
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  annotator: "Annotator",
+  qc: "QC Reviewer",
+  coordinator: "Coordinator",
+};
+
+const STANCE_LABELS: Record<string, string> = {
+  agree: "Agree",
+  partial_agree: "Partially agree",
+  disagree: "Disagree",
+  proposal: "Proposal",
+};
+
+const STANCE_COLORS: Record<string, string> = {
+  agree: "stance-agree",
+  partial_agree: "stance-partial",
+  disagree: "stance-disagree",
+  proposal: "stance-proposal",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  qc: "QC Agent",
+  annotation: "Annotation Agent",
+  human_review: "Human Reviewer",
+};
+
 function ConsensusSummary({ detail }: { detail: TaskDetail }) {
-  const consensus = detail.feedback_consensus;
+  const c = detail.feedback_consensus;
   return (
-    <div className={consensus.can_accept_by_consensus ? "consensus-box accepted" : "consensus-box"}>
-      <strong>{consensus.consensus_feedback}/{consensus.total_feedback} feedback items agreed</strong>
+    <div className={c.can_accept_by_consensus ? "consensus-box accepted" : "consensus-box"}>
+      <strong>
+        {c.can_accept_by_consensus ? "All feedback resolved" : `${c.consensus_feedback} of ${c.total_feedback} items resolved`}
+      </strong>
       <span>
-        {consensus.can_accept_by_consensus
-          ? "Annotator and QC have reached agreement; QC can pass."
-          : "Open feedback still needs annotator/QC agreement."}
+        {c.can_accept_by_consensus
+          ? "Annotator and QC reached agreement on all items — task can pass QC."
+          : "Some feedback still needs a response from the annotator or QC reviewer."}
       </span>
     </div>
   );
@@ -417,71 +445,88 @@ function FeedbackAgreementCard({
   const [consensus, setConsensus] = useState(false);
   const consensusReached = useMemo(() => discussions.some((entry) => entry.consensus === true), [discussions]);
 
+  const sourceLabel = SOURCE_LABELS[String(feedback.source_stage ?? "")] ?? "QC Agent";
+  const severityClass = String(feedback.severity) === "critical" ? "severity-critical"
+    : String(feedback.severity) === "warning" ? "severity-warning" : "severity-info";
+
   async function submit() {
-    await onSubmit({
-      feedback_id: feedback.feedback_id,
-      role,
-      stance,
-      message,
-      consensus,
-      created_by: role,
-    });
+    await onSubmit({ feedback_id: feedback.feedback_id, role, stance, message, consensus, created_by: role });
     setMessage("");
     setConsensus(false);
   }
 
   return (
     <div className="feedback-card">
-      <div className="feedback-card-header">
-        <div>
-          <strong>{String(feedback.severity)} · {String(feedback.category)}</strong>
-          <p>{String(feedback.message)}</p>
+      {/* Feedback issued by QC/system */}
+      <div className="feedback-issue">
+        <div className="feedback-issue-meta">
+          <span className="feedback-from">{sourceLabel}</span>
+          <span className={`feedback-severity ${severityClass}`}>{String(feedback.severity)}</span>
+          <span className="feedback-category">{String(feedback.category)}</span>
+          <span className={consensusReached ? "agreement-pill accepted" : "agreement-pill"}>
+            {consensusReached ? "Resolved" : "Open"}
+          </span>
         </div>
-        <span className={consensusReached ? "agreement-pill accepted" : "agreement-pill"}>
-          {consensusReached ? "Agreed" : "Open"}
-        </span>
+        <p className="feedback-message">{String(feedback.message)}</p>
       </div>
 
-      {discussions.length > 0 ? (
-        <div className="discussion-stack">
+      {/* Discussion thread */}
+      {discussions.length === 0 ? (
+        <p className="discussion-empty">No responses yet — use the form below to reply.</p>
+      ) : (
+        <div className="discussion-thread">
           {discussions.map((entry) => (
-            <TimelineItem
-              key={String(entry.entry_id)}
-              title={`${String(entry.role)} · ${String(entry.stance)}${entry.consensus ? " · consensus" : ""}`}
-              meta={String(entry.message)}
-              value={entry}
-            />
+            <div key={String(entry.entry_id)} className="discussion-message">
+              <div className="discussion-message-meta">
+                <span className="discussion-role">{ROLE_LABELS[String(entry.role)] ?? String(entry.role)}</span>
+                <span className={`discussion-stance ${STANCE_COLORS[String(entry.stance)] ?? ""}`}>
+                  {STANCE_LABELS[String(entry.stance)] ?? String(entry.stance)}
+                </span>
+                {entry.consensus ? <span className="discussion-consensus-badge">✓ Consensus</span> : null}
+              </div>
+              <p className="discussion-message-body">{String(entry.message)}</p>
+            </div>
           ))}
         </div>
-      ) : (
-        <p className="empty-detail">No annotator/QC discussion yet.</p>
       )}
 
-      <div className="agreement-form">
-        <select value={role} onChange={(event) => setRole(event.target.value)}>
-          <option value="annotator">Annotator</option>
-          <option value="qc">QC</option>
-          <option value="coordinator">Coordinator</option>
-        </select>
-        <select value={stance} onChange={(event) => setStance(event.target.value)}>
-          <option value="agree">Agree</option>
-          <option value="partial_agree">Partially agree</option>
-          <option value="disagree">Disagree</option>
-          <option value="proposal">Proposal</option>
-        </select>
-        <textarea
-          placeholder="Record the annotator/QC opinion, agreed points, or final resolution."
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-        />
-        <label className="checkbox-row">
-          <input checked={consensus} type="checkbox" onChange={(event) => setConsensus(event.target.checked)} />
-          Mark as consensus between annotator and QC
-        </label>
-        <button className="primary-button" type="button" disabled={saving || !message.trim()} onClick={submit}>
-          {saving ? "Saving" : "Add Discussion"}
-        </button>
-      </div>
+      {/* Reply form */}
+      {!consensusReached ? (
+        <div className="discussion-reply-form">
+          <p className="reply-form-label">Post a reply</p>
+          <div className="reply-form-selectors">
+            <label>
+              <span>Replying as</span>
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="annotator">Annotator</option>
+                <option value="qc">QC Reviewer</option>
+                <option value="coordinator">Coordinator</option>
+              </select>
+            </label>
+            <label>
+              <span>Stance on this feedback</span>
+              <select value={stance} onChange={(e) => setStance(e.target.value)}>
+                <option value="agree">Agree — accept the feedback</option>
+                <option value="partial_agree">Partially agree</option>
+                <option value="disagree">Disagree — reject the feedback</option>
+                <option value="proposal">Proposal — suggest an alternative</option>
+              </select>
+            </label>
+          </div>
+          <textarea
+            placeholder="Write your response, correction, or justification here…"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <label className="checkbox-row">
+            <input checked={consensus} type="checkbox" onChange={(e) => setConsensus(e.target.checked)} />
+            Mark as final — annotator and QC reviewer have reached agreement on this item
+          </label>
+          <button className="primary-button" type="button" disabled={saving || !message.trim()} onClick={submit}>
+            {saving ? "Posting…" : "Post reply"}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
