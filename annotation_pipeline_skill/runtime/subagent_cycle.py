@@ -62,7 +62,12 @@ class SubagentRuntime:
         return SubagentRuntimeResult(started=len(pending_tasks), accepted=accepted, failed=failed)
 
     def run_task(self, task: Task, stage_target: str = "annotation") -> None:
-        self._run_task(task, stage_target)
+        """Synchronous entry point. Wraps the async core for tests and CLI use."""
+        asyncio.run(self.run_task_async(task, stage_target))
+
+    async def run_task_async(self, task: Task, stage_target: str = "annotation") -> None:
+        """Async entry point used by the scheduler to run tasks concurrently."""
+        await self._run_task(task, stage_target)
 
     def _load_guideline(self, task: Task) -> str | None:
         if not task.document_version_id:
@@ -73,9 +78,9 @@ class SubagentRuntime:
             return None
         return f"Annotation guideline ({ver.version}):\n{ver.content}"
 
-    def _run_task(self, task: Task, stage_target: str) -> None:
+    async def _run_task(self, task: Task, stage_target: str) -> None:
         if task.status is TaskStatus.QC and task.metadata.get("runtime_next_stage") == "qc":
-            self._run_qc_only(task)
+            await self._run_qc_only(task)
             return
 
         if (
@@ -115,7 +120,7 @@ class SubagentRuntime:
                     attempt_id=annotation_attempt_id,
                     metadata={"prelabeled": True},
                 )
-                self._run_validation_and_qc(
+                await self._run_validation_and_qc(
                     task,
                     annotation_artifact,
                     annotation_attempt_id,
@@ -134,7 +139,7 @@ class SubagentRuntime:
         )
 
         annotation_started_at = utc_now()
-        annotation_result = self._generate(
+        annotation_result = await self._generate_async(
             stage_target,
             LLMGenerateRequest(
                 instructions=_annotation_instructions(task, guideline=guideline),
@@ -178,7 +183,7 @@ class SubagentRuntime:
             attempt_id=annotation_attempt_id,
         )
         task.metadata["continuity_handle"] = annotation_result.continuity_handle
-        self._run_validation_and_qc(
+        await self._run_validation_and_qc(
             task,
             annotation_artifact,
             annotation_attempt_id,
@@ -197,7 +202,7 @@ class SubagentRuntime:
             if f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION
         )
 
-    def _run_validation_and_qc(
+    async def _run_validation_and_qc(
         self,
         task: Task,
         annotation_artifact: ArtifactRef,
@@ -245,19 +250,19 @@ class SubagentRuntime:
             stage="qc",
             attempt_id=annotation_attempt_id,
         )
-        self._run_qc_stage(task, annotation_artifact)
+        await self._run_qc_stage(task, annotation_artifact)
         self.store.save_task(task)
 
-    def _run_qc_only(self, task: Task) -> None:
+    async def _run_qc_only(self, task: Task) -> None:
         annotation_artifact = self._latest_annotation_artifact(task.task_id)
-        self._run_qc_stage(task, annotation_artifact)
+        await self._run_qc_stage(task, annotation_artifact)
         self.store.save_task(task)
 
-    def _run_qc_stage(self, task: Task, annotation_artifact: ArtifactRef) -> None:
+    async def _run_qc_stage(self, task: Task, annotation_artifact: ArtifactRef) -> None:
         guideline = self._load_guideline(task)
         qc_attempt_id = self._next_attempt_id(task)
         qc_started_at = utc_now()
-        qc_result = self._generate(
+        qc_result = await self._generate_async(
             "qc",
             LLMGenerateRequest(
                 instructions=_qc_instructions(task, guideline=guideline),
@@ -421,9 +426,10 @@ class SubagentRuntime:
         self.store.save_task(task)
 
     def _generate(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
-        return asyncio.run(self._generate_and_close(target, request))
+        """Sync wrapper retained for any external callers; the runtime uses _generate_async."""
+        return asyncio.run(self._generate_async(target, request))
 
-    async def _generate_and_close(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
+    async def _generate_async(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
         client = self.client_factory(target)
         try:
             return await client.generate(request)

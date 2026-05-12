@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from uuid import uuid4
@@ -11,6 +13,14 @@ from annotation_pipeline_skill.llm.client import LLMClient
 from annotation_pipeline_skill.runtime.snapshot import build_runtime_snapshot
 from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+
+@dataclass
+class _CycleOutcome:
+    started: int
+    accepted: int
+    failed: int
+    errors: list[dict]
 
 
 class LocalRuntimeScheduler:
@@ -76,39 +86,19 @@ class LocalRuntimeScheduler:
             client_factory=self.client_factory,
             max_qc_rounds=self.config.max_qc_rounds,
         )
-        started = 0
-        accepted = 0
-        failed = 0
-        errors = []
 
-        for task in selected_tasks:
-            lease = self._lease_for(task, cycle_started_at)
-            if not self.store.save_runtime_lease(lease):
-                continue
-            run = self._active_run_for(task, stage_target, cycle_started_at, lease.lease_id)
-            self.store.save_active_run(run)
-            started += 1
-            try:
-                runtime.run_task(task, stage_target=stage_target)
-                if self.store.load_task(task.task_id).status is TaskStatus.ACCEPTED:
-                    accepted += 1
-            except Exception as exc:
-                failed += 1
-                diagnostics = getattr(exc, "diagnostics", None)
-                error = {
-                    "task_id": task.task_id,
-                    "stage": run.stage,
-                    "provider_target": run.provider_target,
-                    "error_kind": self._error_kind(exc, diagnostics),
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                }
-                if isinstance(diagnostics, dict):
-                    error["diagnostics"] = diagnostics
-                errors.append(error)
-            finally:
-                self.store.delete_active_run(run.run_id)
-                self.store.delete_runtime_lease(lease.lease_id)
+        cycle_outcome = asyncio.run(
+            self._run_cycle_async(
+                selected_tasks=selected_tasks,
+                runtime=runtime,
+                stage_target=stage_target,
+                cycle_started_at=cycle_started_at,
+            )
+        )
+        started = cycle_outcome.started
+        accepted = cycle_outcome.accepted
+        failed = cycle_outcome.failed
+        errors = cycle_outcome.errors
 
         cycle_finished_at = datetime.now(timezone.utc)
         stats = RuntimeCycleStats(
@@ -126,6 +116,67 @@ class LocalRuntimeScheduler:
         snapshot = build_runtime_snapshot(self.store, self.config, now=cycle_finished_at)
         self.store.save_runtime_snapshot(snapshot)
         return snapshot
+
+    async def _run_cycle_async(
+        self,
+        *,
+        selected_tasks: list[Task],
+        runtime: SubagentRuntime,
+        stage_target: str,
+        cycle_started_at: datetime,
+    ) -> _CycleOutcome:
+        """Run all selected tasks concurrently via asyncio.gather.
+
+        Each task acquires its lease + active_run, dispatches the async
+        SubagentRuntime, and tears down its records on completion. LLM
+        calls overlap; SQLite writes are serialized by the connection
+        but are fast relative to the LLM round-trip.
+        """
+
+        async def run_one(task: Task) -> dict | None:
+            lease = self._lease_for(task, cycle_started_at)
+            if not self.store.save_runtime_lease(lease):
+                return None
+            run = self._active_run_for(task, stage_target, cycle_started_at, lease.lease_id)
+            self.store.save_active_run(run)
+            outcome: dict = {"started": True, "accepted": False, "error": None, "run": run}
+            try:
+                await runtime.run_task_async(task, stage_target=stage_target)
+                if self.store.load_task(task.task_id).status is TaskStatus.ACCEPTED:
+                    outcome["accepted"] = True
+            except Exception as exc:
+                diagnostics = getattr(exc, "diagnostics", None)
+                error: dict = {
+                    "task_id": task.task_id,
+                    "stage": run.stage,
+                    "provider_target": run.provider_target,
+                    "error_kind": self._error_kind(exc, diagnostics),
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if isinstance(diagnostics, dict):
+                    error["diagnostics"] = diagnostics
+                outcome["error"] = error
+            finally:
+                self.store.delete_active_run(run.run_id)
+                self.store.delete_runtime_lease(lease.lease_id)
+            return outcome
+
+        results = await asyncio.gather(*(run_one(task) for task in selected_tasks))
+        started = 0
+        accepted = 0
+        failed = 0
+        errors: list[dict] = []
+        for outcome in results:
+            if outcome is None:
+                continue
+            started += 1
+            if outcome["accepted"]:
+                accepted += 1
+            if outcome["error"] is not None:
+                failed += 1
+                errors.append(outcome["error"])
+        return _CycleOutcome(started=started, accepted=accepted, failed=failed, errors=errors)
 
     def _lease_for(self, task: Task, acquired_at: datetime) -> RuntimeLease:
         lease_id = f"lease-{uuid4().hex}"

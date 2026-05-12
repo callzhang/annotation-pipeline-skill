@@ -59,8 +59,8 @@ CONFIG_FILES: dict[str, str] = {
 human_review:
   required: false
 runtime:
-  max_concurrent_tasks: 4
-  max_starts_per_cycle: 2
+  max_concurrent_tasks: 8
+  max_starts_per_cycle: 8
   stale_after_seconds: 600
   retry_delay_seconds: 3600
   loop_interval_seconds: 5

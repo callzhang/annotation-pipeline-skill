@@ -93,7 +93,7 @@ def test_cli_init_writes_runtime_config(tmp_path):
     workflow = (tmp_path / ".annotation-pipeline" / "workflow.yaml").read_text(encoding="utf-8")
 
     assert "runtime:" in workflow
-    assert "max_concurrent_tasks: 4" in workflow
+    assert "max_concurrent_tasks: 8" in workflow
 
 
 def test_cli_doctor_succeeds_after_init(tmp_path):
@@ -143,7 +143,7 @@ def test_cli_runtime_status_returns_snapshot_after_init(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert "runtime_status" in payload
-    assert payload["capacity"]["max_concurrent_tasks"] == 4
+    assert payload["capacity"]["max_concurrent_tasks"] == 8
 
 
 def test_cli_runtime_status_does_not_load_llm_registry(tmp_path, capsys, monkeypatch):
@@ -158,7 +158,7 @@ def test_cli_runtime_status_does_not_load_llm_registry(tmp_path, capsys, monkeyp
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert payload["capacity"]["max_concurrent_tasks"] == 4
+    assert payload["capacity"]["max_concurrent_tasks"] == 8
 
 
 def test_cli_runtime_context_reuses_loaded_llm_registry(tmp_path, monkeypatch):

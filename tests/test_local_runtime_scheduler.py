@@ -216,6 +216,66 @@ def test_scheduler_clears_stale_active_runs_on_construction(tmp_path):
     assert store.list_runtime_leases() == []
 
 
+def test_scheduler_runs_tasks_in_parallel_within_a_cycle(tmp_path):
+    """Within a single cycle, tasks should run concurrently via asyncio.gather.
+
+    Each annotation+QC stage sleeps 0.5s. Serial execution of 4 tasks would
+    be ~4 * 1.0s = 4s. Parallel execution should be ~1.0s (one annotation
+    round-trip + one QC round-trip). Allow generous wall-time slack.
+    """
+    import asyncio as _asyncio
+    import time
+
+    sleep_seconds = 0.5
+
+    class SlowClient:
+        def __init__(self, final_text: str):
+            self.final_text = final_text
+
+        async def generate(self, request):
+            await _asyncio.sleep(sleep_seconds)
+            return LLMGenerateResult(
+                runtime="test_runtime",
+                provider="test_provider",
+                model="test-model",
+                continuity_handle=None,
+                final_text=self.final_text,
+                usage={"total_tokens": 1},
+                raw_response={"id": "test"},
+                diagnostics={},
+            )
+
+    def slow_factory(target):
+        if target == "qc":
+            return SlowClient('{"passed": true, "summary": "ok"}')
+        return SlowClient('{"labels":[]}')
+
+    store = SqliteStore.open(tmp_path)
+    for index in range(1, 5):
+        task = Task.new(
+            task_id=f"task-{index}",
+            pipeline_id="pipe",
+            source_ref={"kind": "jsonl"},
+        )
+        task.status = TaskStatus.PENDING
+        store.save_task(task)
+
+    scheduler = LocalRuntimeScheduler(
+        store=store,
+        client_factory=slow_factory,
+        config=RuntimeConfig(max_concurrent_tasks=8, max_starts_per_cycle=8),
+    )
+
+    t0 = time.monotonic()
+    snapshot = scheduler.run_once(stage_target="annotation")
+    wall_seconds = time.monotonic() - t0
+
+    assert snapshot.cycle_stats[-1].started == 4
+    assert snapshot.cycle_stats[-1].accepted == 4
+    # Serial would be 4 * (0.5 + 0.5) = 4.0s; parallel ~1.0s. Allow generous slack.
+    assert wall_seconds < 2.0, f"expected parallel speedup, wall={wall_seconds:.2f}s"
+
+
 def test_scheduler_does_not_clear_fresh_active_runs_on_construction(tmp_path):
     from datetime import datetime, timedelta, timezone
     from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeLease
