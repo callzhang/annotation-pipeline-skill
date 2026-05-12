@@ -121,6 +121,11 @@ def _task_card(index: dict, task: Task) -> dict:
     latest_attempt = attempts[-1] if attempts else None
     feedback_count = index["feedback_counts"].get(task.task_id, 0)
     annotation_types = task.annotation_requirements.get("annotation_types", [])
+    raw_row_count = task.source_ref.get("row_count") if isinstance(task.source_ref, dict) else None
+    try:
+        row_count = int(raw_row_count) if raw_row_count is not None else None
+    except (TypeError, ValueError):
+        row_count = None
     return {
         "task_id": task.task_id,
         "status": task.status.value,
@@ -135,6 +140,8 @@ def _task_card(index: dict, task: Task) -> dict:
         "retry_pending": task.next_retry_at is not None,
         "blocked": task.status is TaskStatus.BLOCKED,
         "external_sync_pending": task.task_id in index["pending_outbox_task_ids"],
+        "row_count": row_count,
+        "attempt_count": int(task.current_attempt or 0),
     }
 
 

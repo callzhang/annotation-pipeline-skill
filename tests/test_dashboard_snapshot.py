@@ -48,8 +48,9 @@ def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
 
 def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
     store = SqliteStore.open(tmp_path)
-    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl", "row_count": 42})
     task.status = TaskStatus.PENDING
+    task.current_attempt = 3
     store.save_task(task)
     store.append_attempt(
         Attempt(
@@ -92,6 +93,20 @@ def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
     assert card["pipeline_chain"] == "deepseek->glm"
     assert card["feedback_count"] == 1
     assert card["external_sync_pending"] is True
+    assert card["row_count"] == 42
+    assert card["attempt_count"] == 3
+
+
+def test_dashboard_snapshot_card_row_count_is_none_when_absent(tmp_path):
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="task-no-rows", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    card = build_kanban_snapshot(store)["columns"][0]["cards"][0]
+
+    assert card["row_count"] is None
+    assert card["attempt_count"] == 0
 
 
 def test_dashboard_snapshot_can_return_operator_stage_columns(tmp_path):

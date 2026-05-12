@@ -12,6 +12,8 @@ export interface TaskCard {
   retry_pending: boolean;
   blocked: boolean;
   external_sync_pending: boolean;
+  row_count: number | null;
+  attempt_count: number;
 }
 
 export interface KanbanColumn {

@@ -23,6 +23,8 @@ const snapshot: KanbanSnapshot = {
           retry_pending: false,
           blocked: false,
           external_sync_pending: false,
+          row_count: null,
+          attempt_count: 0,
         },
       ],
     },

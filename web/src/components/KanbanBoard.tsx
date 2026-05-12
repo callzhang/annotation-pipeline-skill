@@ -29,6 +29,10 @@ export function KanbanBoard({ snapshot, selectedTaskId, onSelectTask }: KanbanBo
                 <span className="task-meta">
                   {card.selected_annotator_id ?? "unassigned"} · {formatAge(card.status_age_seconds)}
                 </span>
+                <span className="task-meta">
+                  {card.row_count !== null ? `${card.row_count} rows · ` : ""}
+                  {card.attempt_count} {card.attempt_count === 1 ? "attempt" : "attempts"}
+                </span>
                 <span className="badges">
                   {card.feedback_count > 0 ? <span className="badge warn">{card.feedback_count} feedback</span> : null}
                   {card.retry_pending ? <span className="badge">retry</span> : null}
