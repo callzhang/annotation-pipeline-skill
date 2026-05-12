@@ -649,12 +649,25 @@ class SubagentRuntime:
             qc_conf = _clamp_confidence(qc_feedback.metadata.get("confidence"))
             if qc_conf is None:
                 continue
-            # Normalize both sides against each role's own recent range, so a
-            # uniformly-overconfident QC doesn't drown out a relatively-bolder
-            # annotator (and vice versa).
-            ann_norm = self._normalize_confidence("annotator", ann_conf)
-            qc_norm = self._normalize_confidence("qc", qc_conf)
-            if ann_norm >= qc_norm + 0.1:
+            # Semantics of confidence:
+            #   annotator: how sure I am QC is WRONG (0 = QC is right, 1 = QC is wrong)
+            #   qc:        how sure QC is the defect IS real
+            #
+            # We compare raw values, NOT normalized — semantic 0.2 means "I
+            # concede" regardless of how high other annotators have run lately.
+            # (The normalization helpers are kept for analytics but no longer
+            # drive decisions; they once flipped a low-confidence concession
+            # into an auto-consensus because QC's tight range collapsed to 0.)
+            if max(ann_conf, qc_conf) < 0.5:
+                # Both genuinely uncertain → punt to human.
+                self._mark_early_hr(task, fid, "low_confidence", ann_conf, qc_conf)
+            elif ann_conf < 0.5:
+                # Annotator is conceding (low certainty that QC is wrong). No
+                # auto-resolve; let the normal retry loop run — annotator has
+                # already updated the annotation accordingly.
+                continue
+            elif ann_conf >= qc_conf + 0.1:
+                # Annotator pushed back harder than QC was pushing → consensus.
                 self.store.append_feedback_discussion(
                     FeedbackDiscussionEntry.new(
                         task_id=task.task_id,
@@ -662,9 +675,8 @@ class SubagentRuntime:
                         role="qc",
                         stance="agree",
                         message=(
-                            f"Auto-consensus: annotator confidence {ann_conf:.2f} "
-                            f"(normalized {ann_norm:.2f}) > QC {qc_conf:.2f} "
-                            f"(normalized {qc_norm:.2f})."
+                            f"Auto-consensus: annotator confidence {ann_conf:.2f} > "
+                            f"QC original confidence {qc_conf:.2f}."
                         ),
                         consensus=True,
                         created_by="confidence-auto-resolver",
@@ -673,17 +685,11 @@ class SubagentRuntime:
                             "resolution_source": "confidence_auto",
                             "annotator_confidence": ann_conf,
                             "qc_confidence": qc_conf,
-                            "annotator_confidence_normalized": ann_norm,
-                            "qc_confidence_normalized": qc_norm,
                         },
                     )
                 )
-            elif max(ann_norm, qc_norm) < 0.5:
-                # Both sides are uncertain (on each role's own scale) — punt to human.
-                self._mark_early_hr(task, fid, "low_confidence", ann_conf, qc_conf)
-            elif min(ann_norm, qc_norm) >= 0.85:
-                # Both sides are at the high end of their own scale and disagree —
-                # genuine semantic stalemate, more retries won't resolve it.
+            elif min(ann_conf, qc_conf) >= 0.85:
+                # Both sides confidently disagree → genuine semantic stalemate.
                 self._mark_early_hr(task, fid, "high_confidence_stalemate", ann_conf, qc_conf)
         return written
 
