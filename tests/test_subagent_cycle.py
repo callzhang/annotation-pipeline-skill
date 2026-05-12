@@ -1075,3 +1075,101 @@ def test_annotator_discussion_reply_for_unknown_feedback_id_is_ignored(tmp_path)
 
     assert store.list_feedback_discussions("t-bogus") == []
     assert store.load_task("t-bogus").status is TaskStatus.ACCEPTED
+
+
+def test_high_annotator_confidence_auto_closes_feedback_by_consensus(tmp_path):
+    """Annotator confidence > QC confidence + 0.1 → auto consensus, no need to wait for next QC."""
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-conf-hi",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    # QC had only 0.4 confidence in the complaint.
+    fb = FeedbackRecord.new(
+        task_id="t-conf-hi",
+        attempt_id="t-conf-hi-attempt-prior",
+        source_stage=FeedbackSource.QC,
+        severity=FeedbackSeverity.WARNING,
+        category="missing_phrase",
+        message="Maybe missing constraint?",
+        target={},
+        suggested_action="annotator_rerun",
+        created_by="qc-agent",
+        metadata={"confidence": 0.4},
+    )
+    store.append_feedback(fb)
+
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": fb.feedback_id, "confidence": 0.9, "message": "Span isn't in the text."}
+        ],
+    }
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    discussions = store.list_feedback_discussions("t-conf-hi")
+    sources = [d.metadata.get("resolution_source") for d in discussions if d.role == "qc"]
+    assert "confidence_auto" in sources, f"expected confidence_auto consensus, got {discussions}"
+    consensus_entries = [d for d in discussions if d.consensus]
+    assert any(d.metadata.get("annotator_confidence") == 0.9 for d in consensus_entries)
+
+
+def test_both_low_confidence_escalates_to_human_review_early(tmp_path):
+    """When both QC and annotator confidence < 0.5 on a dispute, task goes
+    straight to HUMAN_REVIEW without burning more rounds."""
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-uncertain",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    fb = FeedbackRecord.new(
+        task_id="t-uncertain",
+        attempt_id="t-uncertain-attempt-prior",
+        source_stage=FeedbackSource.QC,
+        severity=FeedbackSeverity.WARNING,
+        category="missing_phrase",
+        message="Maybe missing something?",
+        target={},
+        suggested_action="annotator_rerun",
+        created_by="qc-agent",
+        metadata={"confidence": 0.35},
+    )
+    store.append_feedback(fb)
+
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": fb.feedback_id, "confidence": 0.4, "message": "Also unsure."}
+        ],
+    }
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("t-uncertain")
+    assert loaded.status is TaskStatus.HUMAN_REVIEW
+    assert fb.feedback_id in loaded.metadata.get("low_confidence_feedback_ids", [])

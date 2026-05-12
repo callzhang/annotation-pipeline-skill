@@ -186,6 +186,21 @@ class SubagentRuntime:
         )
         self._record_annotator_replies(task, annotation_attempt_id, annotation_result.final_text)
 
+        # Confidence-based early escalation: both sides uncertain on at least
+        # one open feedback → bounce to human reviewer instead of burning more
+        # rounds. _record_annotator_replies sets the flag.
+        if task.metadata.pop("needs_early_hr_low_confidence", False):
+            low_ids = task.metadata.get("low_confidence_feedback_ids", [])
+            self._transition(
+                task,
+                TaskStatus.HUMAN_REVIEW,
+                reason="escalated: QC and annotator both have low confidence on disputed feedback",
+                stage="annotation",
+                attempt_id=annotation_attempt_id,
+                metadata={"low_confidence_feedback_ids": low_ids},
+            )
+            return
+
         self._transition(
             task,
             TaskStatus.VALIDATING,
@@ -567,17 +582,21 @@ class SubagentRuntime:
         replies = payload.get("discussion_replies")
         if not isinstance(replies, list) or not replies:
             return 0
-        known_feedback_ids = {f.feedback_id for f in self.store.list_feedback(task.task_id)}
+        feedback_index = {f.feedback_id: f for f in self.store.list_feedback(task.task_id)}
         written = 0
         for reply in replies:
             if not isinstance(reply, dict):
                 continue
             fid = reply.get("feedback_id")
-            if not isinstance(fid, str) or fid not in known_feedback_ids:
+            if not isinstance(fid, str) or fid not in feedback_index:
                 continue
             message = str(reply.get("message") or "").strip()
             if not message:
                 continue
+            ann_conf = _clamp_confidence(reply.get("confidence"))
+            metadata: dict[str, Any] = {"attempt_id": attempt_id}
+            if ann_conf is not None:
+                metadata["confidence"] = ann_conf
             self.store.append_feedback_discussion(
                 FeedbackDiscussionEntry.new(
                     task_id=task.task_id,
@@ -594,10 +613,47 @@ class SubagentRuntime:
                     ),
                     consensus=False,
                     created_by="annotator-agent",
-                    metadata={"attempt_id": attempt_id},
+                    metadata=metadata,
                 )
             )
             written += 1
+            # Confidence-based auto-resolution: if the annotator is meaningfully
+            # more confident than QC was when filing the complaint, close the
+            # feedback by consensus. This avoids burning another QC round on a
+            # dispute the data already settles.
+            if ann_conf is None:
+                continue
+            qc_feedback = feedback_index[fid]
+            qc_conf = _clamp_confidence(qc_feedback.metadata.get("confidence"))
+            if qc_conf is None:
+                continue
+            if ann_conf >= qc_conf + 0.1:
+                self.store.append_feedback_discussion(
+                    FeedbackDiscussionEntry.new(
+                        task_id=task.task_id,
+                        feedback_id=fid,
+                        role="qc",
+                        stance="agree",
+                        message=(
+                            f"Auto-consensus: annotator confidence {ann_conf:.2f} > "
+                            f"QC original confidence {qc_conf:.2f}."
+                        ),
+                        consensus=True,
+                        created_by="confidence-auto-resolver",
+                        metadata={
+                            "attempt_id": attempt_id,
+                            "resolution_source": "confidence_auto",
+                            "annotator_confidence": ann_conf,
+                            "qc_confidence": qc_conf,
+                        },
+                    )
+                )
+            elif max(ann_conf, qc_conf) < 0.5:
+                # Both sides are uncertain — this is the human-review case.
+                task.metadata["needs_early_hr_low_confidence"] = True
+                task.metadata["low_confidence_feedback_ids"] = (
+                    task.metadata.get("low_confidence_feedback_ids", []) + [fid]
+                )
         return written
 
     def _resolved_qc_policy(self, task: Task) -> dict[str, Any]:
@@ -744,22 +800,24 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "statements are almost always constraints. Empty json_structures = {} is only acceptable when the input genuinely "
         "contains no instance of any type. "
         "\n\n"
-        "HANDLING QC FEEDBACK: when feedback_bundle has prior QC complaints, choose per-item: "
-        "(a) if the complaint is correct and grounded — silently fix the annotation; "
-        "(b) if the complaint is WRONG, BORDERLINE, or based on a stretched reading — push back via "
-        "discussion_replies with stance='disagree' (or 'partial_agree' if you accept part of it). Do NOT "
-        "force a phrase into json_structures just to satisfy QC if the span is not clearly grounded; that "
-        "lowers data quality. Common cases where you SHOULD disagree: QC's complaint uses hedged language "
-        "('could be argued', 'might be considered', 'arguably', 'possibly'); QC asks for a phrase that "
-        "requires inference rather than verbatim extraction; QC's claimed span doesn't exist in the input "
-        "text. State your reasoning in message, list disputed_points, and KEEP your annotation as you "
-        "believe is correct — don't add the disputed phrase. "
+        "HANDLING QC FEEDBACK: for each item in feedback_bundle, choose either to fix or to rebut, "
+        "and ALWAYS attach a confidence score: "
+        "(a) if you accept the complaint — silently fix the annotation; you don't need a discussion_reply, "
+        "or you may add one with confidence < 0.3 to record agreement. "
+        "(b) if you believe the complaint is wrong, borderline, or based on inference rather than verbatim "
+        "evidence — add a discussion_reply with HIGH confidence (>= 0.7) and KEEP your annotation as you "
+        "believe is correct. Do NOT force phrases in just to satisfy QC. "
         "\n\n"
-        "discussion_replies schema: array of objects with feedback_id (must match feedback_bundle.items), "
-        "stance ('agree' | 'partial_agree' | 'disagree' | 'proposal'), message (your reasoning, required), "
-        "and optional agreed_points / disputed_points (string arrays) / proposed_resolution (string). "
-        "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself — "
-        "QC decides that. "
+        "discussion_replies schema (each entry):\n"
+        "  feedback_id: str (must match feedback_bundle.items)\n"
+        "  confidence:  float 0.0-1.0, REQUIRED — your certainty that QC is WRONG on this item. "
+        "1.0 = absolutely sure QC is wrong; 0.0 = QC is correct, I agree. Use the middle range (0.4-0.6) "
+        "honestly when you're genuinely uncertain.\n"
+        "  message:     str, REQUIRED, your reasoning\n"
+        "  disputed_points: list[str], optional\n"
+        "  proposed_resolution: str, optional\n"
+        "  stance:      str, optional — only for human readability. Confidence is the decision signal.\n"
+        "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself."
         f"\n\nModality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
     if guideline:
@@ -812,17 +870,22 @@ def _build_qc_instructions(
         "\n\n"
         "json_structures recall: for each row, scan the input text for all 10 phrase types "
         "(status, risk, goal, strategy, constraint, decision, task, preference, reason, technology) defined "
-        "in annotation_guidance. ONLY fail with category='missing_phrase' when the missing instance is "
-        "OBVIOUS, VERBATIM-EXTRACTABLE, and UNAMBIGUOUS. Do not use the words 'could be argued', "
-        "'might be considered', 'arguably', 'possibly', 'one could see'. If you find yourself writing those "
-        "words, the phrase is too borderline to fail on — pass instead. Building codes / must / shall / "
-        "should statements are clear constraints. Always duplicate technology entities into "
-        "json_structures.technology. "
+        "in annotation_guidance. Building codes / must / shall / should statements are clear constraints. "
+        "Always duplicate technology entities into json_structures.technology. "
         "\n\n"
-        "ANNOTATOR REBUTTALS: if the feedback_bundle has an annotator discussion_reply with stance='disagree' "
-        "or 'partial_agree' that defends a specific complaint, weigh it. If the annotator's defense is "
-        "reasonable (input is ambiguous on that point), record consensus by including consensus_acknowledgements "
-        "(list of feedback_ids) in your response — those feedbacks will be marked resolved by consensus. "
+        "CONFIDENCE: every entry in failures MUST include a numeric confidence field (0.0-1.0) — your "
+        "certainty that this is a real defect that the annotator must fix. Use 0.9+ only when the input text "
+        "verbatim and obviously contains the missing/wrong content. Use 0.5-0.7 when it's plausible but "
+        "borderline. Use < 0.5 when you're genuinely unsure (don't manufacture failures you can't defend). "
+        "\n\n"
+        "ANNOTATOR REBUTTALS: if feedback_bundle items carry annotator discussion_replies, each reply has "
+        "a confidence value (annotator's certainty that you were wrong). For every such item, compare "
+        "annotator.confidence against your original failure's confidence: "
+        "(1) annotator.confidence > your_original_confidence + 0.1 → the annotator is more sure; emit this "
+        "    feedback_id in consensus_acknowledgements (closes the dispute by consensus). "
+        "(2) annotator.confidence is roughly equal to yours (delta <= 0.1) → re-evaluate; if still defective "
+        "    keep the failure with the SAME confidence value; if you've changed your mind, ack it. "
+        "(3) annotator.confidence is clearly lower → keep the failure. "
         "\n\n"
         f"qc_policy (informational): {json.dumps(resolved_policy, sort_keys=True)}. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
@@ -889,9 +952,24 @@ def _strip_markdown_json_fence(text: str) -> str:
     return "\n".join(lines[1:-1]).strip()
 
 
+def _clamp_confidence(value: Any) -> float | None:
+    """Coerce a model-provided confidence value to a clamped float in [0, 1]."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f:  # NaN
+        return None
+    return max(0.0, min(1.0, f))
+
+
 def _feedback_from_qc_decision(task: Task, attempt_id: str, decision: dict[str, Any]) -> FeedbackRecord:
     failures = decision.get("failures") if isinstance(decision.get("failures"), list) else []
     first_failure = failures[0] if failures and isinstance(failures[0], dict) else {}
+    confidence = _clamp_confidence(first_failure.get("confidence") if isinstance(first_failure, dict) else None)
+    metadata: dict[str, Any] = {"qc_decision": decision}
+    if confidence is not None:
+        metadata["confidence"] = confidence
     return FeedbackRecord.new(
         task_id=task.task_id,
         attempt_id=attempt_id,
@@ -902,7 +980,7 @@ def _feedback_from_qc_decision(task: Task, attempt_id: str, decision: dict[str, 
         target=first_failure.get("target") if isinstance(first_failure.get("target"), dict) else decision.get("target") if isinstance(decision.get("target"), dict) else {},
         suggested_action=str(first_failure.get("suggested_action") or decision.get("suggested_action") or "annotator_rerun"),
         created_by="qc",
-        metadata={"qc_decision": decision},
+        metadata=metadata,
     )
 
 
