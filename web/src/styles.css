@@ -483,6 +483,22 @@ button {
   overflow: hidden;
 }
 
+.artifact-collapsed > .artifact-title {
+  cursor: pointer;
+  user-select: none;
+}
+
+.artifact-collapsed > .artifact-title::before {
+  content: "▶";
+  font-size: 10px;
+  margin-right: 6px;
+  opacity: 0.5;
+}
+
+.artifact-collapsed[open] > .artifact-title::before {
+  content: "▼";
+}
+
 .artifact-title {
   align-items: center;
   background: #eef2f4;

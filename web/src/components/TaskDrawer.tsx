@@ -34,6 +34,7 @@ export function TaskDrawer({
   onClose,
 }: TaskDrawerProps) {
   const [width, setWidth] = useState<number>(DRAWER_DEFAULT_WIDTH);
+  const [drawerTab, setDrawerTab] = useState<"raw" | "annotation" | "discussions" | "logs">("annotation");
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
@@ -143,100 +144,137 @@ export function TaskDrawer({
       {error ? <div className="drawer-error">{error}</div> : null}
 
       {detail ? (
-        <div className="detail-sections">
-          <PerRowView sourceRef={detail.task.source_ref} artifacts={detail.artifacts} />
-
-          <DetailSection title="Raw Source">
-            <JsonViewer value={detail.task.source_ref} />
-          </DetailSection>
-
-          {detail.task.metadata.qc_policy ? (
-            <DetailSection title="QC Policy (legacy task override)">
-              <JsonViewer value={detail.task.metadata.qc_policy} />
-              <p className="empty-detail">
-                This task carries a per-task QC policy override. Going forward, QC policy is
-                project-level &mdash; see the Configuration tab &rarr; workflow.yaml
-                (<code>runtime.qc_sample_mode</code> / <code>runtime.qc_sample_ratio</code> /
-                <code>runtime.qc_sample_count</code>).
-              </p>
-            </DetailSection>
-          ) : null}
-
-          <DetailSection title="Annotation Content">
-            {annotationArtifacts.length === 0 ? (
-              <p className="empty-detail">No annotation artifacts recorded.</p>
-            ) : (
-              annotationArtifacts.map((artifact) => (
-                <div className="artifact-panel" key={artifact.artifact_id}>
-                  <div className="artifact-title">
-                    <span>{artifact.kind}</span>
-                    <span>{artifact.metadata.provider ? String(artifact.metadata.provider) : artifact.content_type}</span>
-                  </div>
-                  <JsonViewer value={artifact.payload} />
-                </div>
-              ))
-            )}
-          </DetailSection>
-
-          {previewEvidence.length > 0 ? (
-            <DetailSection title="Preview Evidence">
-              <div className="preview-stack">
-                {previewEvidence.map((artifact) => (
-                  <PreviewArtifact key={artifact.artifact_id} artifact={artifact} />
-                ))}
-              </div>
-            </DetailSection>
-          ) : null}
-
-          <DetailSection title={`Attempts (${detail.attempts.length})`}>
-            {detail.attempts.map((attempt) => (
-              <TimelineItem
-                key={String(attempt.attempt_id)}
-                title={`#${String(attempt.index)} ${String(attempt.stage)} · ${String(attempt.status)}`}
-                meta={`${String(attempt.provider_id ?? "provider unknown")} · ${String(attempt.model ?? "model unknown")}`}
-                value={attempt}
-              />
+        <>
+          <div className="drawer-tabs" role="tablist">
+            {(["annotation", "raw", "discussions", "logs"] as const).map((tab) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={drawerTab === tab}
+                className={drawerTab === tab ? "drawer-tab selected" : "drawer-tab"}
+                type="button"
+                onClick={() => setDrawerTab(tab)}
+              >
+                {tab === "raw" ? "Raw Data" : tab === "annotation" ? "Annotation" : tab === "discussions" ? "Discussions" : "Logs"}
+              </button>
             ))}
-          </DetailSection>
+          </div>
 
-          <DetailSection title={`Round Changes (${detail.events.length})`}>
-            {detail.events.map((event) => (
-              <TimelineItem
-                key={String(event.event_id)}
-                title={`${String(event.previous_status)} → ${String(event.next_status)}`}
-                meta={`${String(event.stage)} · ${String(event.reason)}`}
-                value={event}
-              />
-            ))}
-          </DetailSection>
-
-          <DetailSection title={`Feedback Agreement (${detail.feedback.length})`}>
-            {detail.feedback.length === 0 ? (
-              <p className="empty-detail">No QC or Human Review feedback recorded.</p>
-            ) : (
+          <div className="detail-sections">
+            {drawerTab === "raw" ? (
               <>
-                <ConsensusSummary detail={detail} />
-                {detail.feedback.map((item) => (
-                  <FeedbackAgreementCard
-                    key={String(item.feedback_id)}
-                    feedback={item}
-                    discussions={detail.feedback_discussions.filter(
-                      (entry) => entry.feedback_id === item.feedback_id,
-                    )}
-                    saving={saving}
-                    onSubmit={onSubmitFeedbackDiscussion}
-                  />
-                ))}
+                <PerRowView sourceRef={detail.task.source_ref} artifacts={detail.artifacts} />
+                <DetailSection title="Raw Source">
+                  <JsonViewer value={detail.task.source_ref} />
+                </DetailSection>
               </>
-            )}
-          </DetailSection>
+            ) : null}
 
-          {detail.task.status === "human_review" ? (
-            <DetailSection title="Human Review Decision">
-              <HumanReviewDecisionForm saving={saving} onSubmit={onSubmitHumanReviewDecision} />
-            </DetailSection>
-          ) : null}
-        </div>
+            {drawerTab === "annotation" ? (
+              <>
+                {annotationArtifacts.length === 0 ? (
+                  <p className="empty-detail">No annotation artifacts recorded.</p>
+                ) : (
+                  annotationArtifacts.map((artifact, index) => {
+                    const isLatest = index === annotationArtifacts.length - 1;
+                    const label = artifact.metadata.provider
+                      ? String(artifact.metadata.provider)
+                      : artifact.content_type;
+                    return isLatest ? (
+                      <div className="artifact-panel" key={artifact.artifact_id}>
+                        <div className="artifact-title">
+                          <span>Latest</span>
+                          <span>{label}</span>
+                        </div>
+                        <JsonViewer value={artifact.payload} />
+                      </div>
+                    ) : (
+                      <details className="artifact-panel artifact-collapsed" key={artifact.artifact_id}>
+                        <summary className="artifact-title">
+                          <span>#{index + 1}</span>
+                          <span>{label}</span>
+                        </summary>
+                        <JsonViewer value={artifact.payload} />
+                      </details>
+                    );
+                  })
+                )}
+                {previewEvidence.length > 0 ? (
+                  <DetailSection title="Preview Evidence">
+                    <div className="preview-stack">
+                      {previewEvidence.map((artifact) => (
+                        <PreviewArtifact key={artifact.artifact_id} artifact={artifact} />
+                      ))}
+                    </div>
+                  </DetailSection>
+                ) : null}
+              </>
+            ) : null}
+
+            {drawerTab === "discussions" ? (
+              <>
+                <DetailSection title={`Feedback (${detail.feedback.length})`}>
+                  {detail.feedback.length === 0 ? (
+                    <p className="empty-detail">No QC or Human Review feedback recorded.</p>
+                  ) : (
+                    <>
+                      <ConsensusSummary detail={detail} />
+                      {detail.feedback.map((item) => (
+                        <FeedbackAgreementCard
+                          key={String(item.feedback_id)}
+                          feedback={item}
+                          discussions={detail.feedback_discussions.filter(
+                            (entry) => entry.feedback_id === item.feedback_id,
+                          )}
+                          saving={saving}
+                          onSubmit={onSubmitFeedbackDiscussion}
+                        />
+                      ))}
+                    </>
+                  )}
+                </DetailSection>
+                {detail.task.status === "human_review" ? (
+                  <DetailSection title="Human Review Decision">
+                    <HumanReviewDecisionForm saving={saving} onSubmit={onSubmitHumanReviewDecision} />
+                  </DetailSection>
+                ) : null}
+              </>
+            ) : null}
+
+            {drawerTab === "logs" ? (
+              <>
+                <DetailSection title={`Attempts (${detail.attempts.length})`}>
+                  {detail.attempts.length === 0 ? (
+                    <p className="empty-detail">No attempts recorded.</p>
+                  ) : (
+                    detail.attempts.map((attempt) => (
+                      <TimelineItem
+                        key={String(attempt.attempt_id)}
+                        title={`#${String(attempt.index)} ${String(attempt.stage)} · ${String(attempt.status)}`}
+                        meta={`${String(attempt.provider_id ?? "provider unknown")} · ${String(attempt.model ?? "model unknown")}`}
+                        value={attempt}
+                      />
+                    ))
+                  )}
+                </DetailSection>
+                <DetailSection title={`Round Changes (${detail.events.length})`}>
+                  {detail.events.length === 0 ? (
+                    <p className="empty-detail">No round changes recorded.</p>
+                  ) : (
+                    detail.events.map((event) => (
+                      <TimelineItem
+                        key={String(event.event_id)}
+                        title={`${String(event.previous_status)} → ${String(event.next_status)}`}
+                        meta={`${String(event.stage)} · ${String(event.reason)}`}
+                        value={event}
+                      />
+                    ))
+                  )}
+                </DetailSection>
+              </>
+            ) : null}
+          </div>
+        </>
       ) : null}
       </aside>
     </>
