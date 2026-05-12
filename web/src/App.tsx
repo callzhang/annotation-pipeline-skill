@@ -6,11 +6,11 @@ import {
   fetchTaskDetail,
   postFeedbackDiscussion,
   postHumanReviewDecision,
-  saveTaskQcPolicy,
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { CoordinatorPanel } from "./components/CoordinatorPanel";
 import { DocumentsPanel } from "./components/DocumentsPanel";
+import { SchemaPanel } from "./components/SchemaPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { OutboxPanel } from "./components/OutboxPanel";
@@ -23,7 +23,7 @@ import type { KanbanSnapshot, ProjectSummary, StoreInfo, TaskCard, TaskDetail } 
 import { useUrlState, type UrlState } from "./url_state";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events" | "documents";
+type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events" | "documents" | "schema";
 
 const urlDefaults: UrlState = { view: "kanban", store: null, project: null, task: null };
 
@@ -176,21 +176,6 @@ export default function App() {
     }
   }
 
-  async function submitTaskQcPolicy(payload: Record<string, unknown>) {
-    if (!selectedTaskId) return;
-    setDetailSaving(true);
-    setDetailError(null);
-    try {
-      const detail = await saveTaskQcPolicy(selectedTaskId, payload, selectedStoreKey);
-      setSelectedDetail(detail);
-      setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
-    } catch (reason: unknown) {
-      setDetailError(reason instanceof Error ? reason.message : "Unable to save QC policy");
-    } finally {
-      setDetailSaving(false);
-    }
-  }
-
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -269,6 +254,9 @@ export default function App() {
         <button className={viewMode === "documents" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("documents")}>
           Documents
         </button>
+        <button className={viewMode === "schema" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("schema")}>
+          Schema
+        </button>
       </nav>
 
       {error ? <div className="notice">{error}</div> : null}
@@ -287,6 +275,7 @@ export default function App() {
       {viewMode === "config" ? <ConfigPanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "documents" ? <DocumentsPanel storeKey={selectedStoreKey} /> : null}
+      {viewMode === "schema" ? <SchemaPanel storeKey={selectedStoreKey} /> : null}
       <TaskDrawer
         task={selectedTask}
         detail={selectedDetail}
@@ -295,7 +284,6 @@ export default function App() {
         error={detailError}
         onSubmitFeedbackDiscussion={submitFeedbackDiscussion}
         onSubmitHumanReviewDecision={submitHumanReviewDecision}
-        onSaveQcPolicy={submitTaskQcPolicy}
         onClose={() => setTask(null)}
       />
     </main>
