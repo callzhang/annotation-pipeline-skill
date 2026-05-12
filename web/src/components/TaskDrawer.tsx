@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cardSubtitle } from "../kanban";
 import { previewArtifacts, previewBoxes, previewImageSource, previewTitle } from "../preview";
+import {
+  DRAWER_DEFAULT_WIDTH,
+  clampDrawerWidth,
+  loadDrawerWidth,
+  saveDrawerWidth,
+} from "../drawer_state";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
 import type { ReactNode } from "react";
 
@@ -27,13 +33,69 @@ export function TaskDrawer({
   onSaveQcPolicy,
   onClose,
 }: TaskDrawerProps) {
+  const [width, setWidth] = useState<number>(DRAWER_DEFAULT_WIDTH);
+  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setWidth(loadDrawerWidth(window.localStorage ?? null, window.innerWidth));
+  }, []);
+
+  useEffect(() => {
+    if (!task) return;
+    if (typeof window === "undefined") return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [task, onClose]);
+
+  const onResizeMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      if (typeof window === "undefined") return;
+      dragStateRef.current = { startX: event.clientX, startWidth: width };
+      function onMouseMove(ev: MouseEvent) {
+        const state = dragStateRef.current;
+        if (!state) return;
+        const delta = state.startX - ev.clientX;
+        const next = clampDrawerWidth(state.startWidth + delta, window.innerWidth);
+        setWidth(next);
+      }
+      function onMouseUp() {
+        dragStateRef.current = null;
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+      }
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    },
+    [width],
+  );
+
+  // Persist width whenever it changes (covers drag-end and programmatic updates).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    saveDrawerWidth(window.localStorage ?? null, width);
+  }, [width]);
+
   if (!task) return null;
 
   const annotationArtifacts = detail?.artifacts.filter((artifact) => artifact.kind === "annotation_result") ?? [];
   const previewEvidence = detail ? previewArtifacts(detail.artifacts) : [];
 
   return (
-    <aside className="task-drawer" aria-label="Task detail">
+    <>
+      <div className="task-drawer-backdrop" onClick={onClose} aria-hidden="true" />
+      <aside className="task-drawer" aria-label="Task detail" style={{ width }}>
+        <div
+          className="task-drawer-resize-handle"
+          onMouseDown={onResizeMouseDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize task drawer"
+        />
       <div className="drawer-header">
         <div>
           <h2>{task.task_id}</h2>
@@ -168,7 +230,8 @@ export function TaskDrawer({
           ) : null}
         </div>
       ) : null}
-    </aside>
+      </aside>
+    </>
   );
 }
 
