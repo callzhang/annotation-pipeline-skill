@@ -536,3 +536,91 @@ def test_delete_pipeline_returns_zero_counts_when_pipeline_missing(tmp_path):
     assert report["tasks"] == 0
     assert report["artifact_files"] == 0
     store.close()
+
+
+def test_store_delete_task_removes_all_children_and_files(tmp_path):
+    store = SqliteStore.open(tmp_path)
+
+    # Two tasks: one we'll delete, one we'll keep, both in the same pipeline.
+    target = _make_task("target", pipeline_id="pipe-x")
+    keep = _make_task("keep", pipeline_id="pipe-x")
+    store.save_task(target)
+    store.save_task(keep)
+
+    for tid in ("target", "keep"):
+        store.append_event(
+            AuditEvent.new(tid, TaskStatus.DRAFT, TaskStatus.PENDING, actor="x", reason="r", stage="ingest")
+        )
+        store.append_attempt(
+            Attempt(attempt_id=f"{tid}-att-1", task_id=tid, index=1, stage="annotate", status=AttemptStatus.SUCCEEDED)
+        )
+        store.append_feedback(
+            FeedbackRecord.new(
+                task_id=tid, attempt_id=f"{tid}-att-1",
+                source_stage=FeedbackSource.QC, severity=FeedbackSeverity.ERROR,
+                category="cat", message="m", target={"x": "y"},
+                suggested_action="rerun", created_by="qc",
+            )
+        )
+        store.append_feedback_discussion(
+            FeedbackDiscussionEntry.new(
+                task_id=tid, feedback_id="fb-1",
+                role="annotator", stance="agree", message="ok", created_by="annotator-1",
+            )
+        )
+        store.append_artifact(
+            ArtifactRef.new(
+                task_id=tid, kind="annotation_result",
+                path=f"artifact_payloads/{tid}/annotation_result.json",
+                content_type="application/json",
+            )
+        )
+        store.save_outbox(OutboxRecord.new(tid, OutboxKind.STATUS, {"v": 1}))
+
+    artifact_root = store.root / "artifact_payloads"
+    for tid in ("target", "keep"):
+        d = artifact_root / tid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "annotation_result.json").write_text("{}", encoding="utf-8")
+
+    report = store.delete_task("target")
+
+    assert report["tasks"] == 1
+    assert report["audit_events"] == 1
+    assert report["attempts"] == 1
+    assert report["feedback_records"] == 1
+    assert report["feedback_discussions"] == 1
+    assert report["artifact_refs"] == 1
+    assert report["outbox_records"] == 1
+    assert report["artifact_files"] == 1
+
+    # Target is gone, including all children.
+    import pytest as _pytest
+    with _pytest.raises(KeyError):
+        store.load_task("target")
+    assert store.list_events("target") == []
+    assert store.list_attempts("target") == []
+    assert store.list_feedback("target") == []
+    assert store.list_feedback_discussions("target") == []
+    assert store.list_artifacts("target") == []
+    assert not (artifact_root / "target").exists()
+
+    # Sibling task in same pipeline is untouched.
+    assert store.load_task("keep") is not None
+    assert len(store.list_events("keep")) == 1
+    assert len(store.list_attempts("keep")) == 1
+    assert len(store.list_feedback("keep")) == 1
+    assert len(store.list_feedback_discussions("keep")) == 1
+    assert len(store.list_artifacts("keep")) == 1
+    assert (artifact_root / "keep" / "annotation_result.json").exists()
+
+    # Outbox: only "keep" remains.
+    outbox_task_ids = {r.task_id for r in store.list_outbox()}
+    assert outbox_task_ids == {"keep"}
+
+    # Deleting a non-existent task is a no-op with zero counts.
+    empty_report = store.delete_task("does-not-exist")
+    assert empty_report["tasks"] == 0
+    assert empty_report["artifact_files"] == 0
+
+    store.close()

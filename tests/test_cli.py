@@ -1263,6 +1263,179 @@ def test_cli_import_jsonl_prelabeled_two_pipelines_no_attempt_id_collision(tmp_p
     assert a_attempts[0].attempt_id != b_attempts[0].attempt_id
 
 
+def test_cli_import_refuses_on_collision_without_force_rewrite(tmp_path, capsys):
+    """Re-importing the same pipeline_id without --force-rewrite must refuse
+    cleanly (exit 1, task_id_collision JSON) rather than silently UPSERT-ing
+    the task and corrupting its children records."""
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=10)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    first_rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "dup_pipeline",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    capsys.readouterr()  # drain first import's output
+    assert first_rc == 0
+
+    second_rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "dup_pipeline",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    assert second_rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "task_id_collision"
+    assert payload["pipeline_id"] == "dup_pipeline"
+    assert "dup_pipeline-000000" in payload["collisions"]
+    assert "--force-rewrite" in payload["hint"]
+
+
+def test_cli_import_force_rewrite_cascade_deletes_then_imports(tmp_path, capsys):
+    """With --force-rewrite, colliding tasks (plus children + on-disk payload
+    files) must be cascade-deleted before the import re-creates them."""
+    from annotation_pipeline_skill.core.models import (
+        ArtifactRef,
+        Attempt,
+        AuditEvent,
+        FeedbackRecord,
+    )
+    from annotation_pipeline_skill.core.states import (
+        AttemptStatus,
+        FeedbackSeverity,
+        FeedbackSource,
+        TaskStatus,
+    )
+
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=10)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    # First import populates a single task with batch_idx=0.
+    rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "fr_pipeline",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    capsys.readouterr()
+    assert rc == 0
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    task_id = "fr_pipeline-000000"
+
+    # Simulate runtime activity on the task: a second attempt + feedback +
+    # extra audit event + extra artifact. Without cascade-delete these would
+    # survive a re-import and collide with the new run.
+    store.append_event(
+        AuditEvent.new(task_id, TaskStatus.ANNOTATING, TaskStatus.PENDING,
+                       actor="qc", reason="rejected", stage="qc")
+    )
+    store.append_attempt(
+        Attempt(attempt_id=f"{task_id}-attempt-1", task_id=task_id, index=1,
+                stage="annotation", status=AttemptStatus.SUCCEEDED)
+    )
+    store.append_feedback(
+        FeedbackRecord.new(
+            task_id=task_id, attempt_id=f"{task_id}-attempt-1",
+            source_stage=FeedbackSource.QC, severity=FeedbackSeverity.ERROR,
+            category="cat", message="bad", target={"x": "y"},
+            suggested_action="rerun", created_by="qc",
+        )
+    )
+    store.append_artifact(
+        ArtifactRef.new(
+            task_id=task_id, kind="qc_report",
+            path=f"artifact_payloads/{task_id}/qc_report.json",
+            content_type="application/json",
+        )
+    )
+    # Place a stray file inside the on-disk payload dir.
+    stray = store.root / "artifact_payloads" / task_id / "stray.json"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("{}", encoding="utf-8")
+
+    # Sanity: pre-rewrite state has multiple attempts/events/feedback/artifacts.
+    assert len(store.list_attempts(task_id)) >= 2
+    assert len(store.list_feedback(task_id)) >= 1
+    assert stray.exists()
+
+    # Re-import with --force-rewrite: cascade-delete then re-create.
+    rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "fr_pipeline",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+            "--force-rewrite",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload == {"imported": 1, "pipeline_id": "fr_pipeline", "skipped": 0}
+
+    # Re-open the store so we observe the post-rewrite state.
+    store2 = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    fresh = store2.load_task(task_id)
+    assert fresh.status is TaskStatus.PENDING
+    assert fresh.current_attempt == 0
+
+    # Old children are gone; only the fresh prelabel attempt + artifact remain.
+    attempts = store2.list_attempts(task_id)
+    assert len(attempts) == 1
+    assert attempts[0].attempt_id == f"{task_id}-attempt-0-prelabel"
+    assert store2.list_feedback(task_id) == []
+    # Audit events: only the freshly-emitted PENDING event from import.
+    assert len(store2.list_events(task_id)) == 1
+    # Stray file from the prior run is gone; only the fresh prelabeled
+    # annotation payload is present.
+    assert not stray.exists()
+    artifacts = store2.list_artifacts(task_id)
+    assert len(artifacts) == 1
+    assert artifacts[0].kind == "annotation_result"
+
+
 def test_cli_pipeline_delete_preview_then_force(tmp_path, capsys):
     main(["init", "--project-root", str(tmp_path)])
     source = _write_prelabeled_fixture(tmp_path, row_count=3)

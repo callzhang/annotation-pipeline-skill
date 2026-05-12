@@ -330,6 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     jsonl_prelabeled.add_argument("--modality", default="text")
     jsonl_prelabeled.add_argument("--limit", type=int, default=None)
+    jsonl_prelabeled.add_argument(
+        "--force-rewrite",
+        action="store_true",
+        default=False,
+        help="cascade-delete existing tasks with the same task_id before re-importing",
+    )
     jsonl_prelabeled.set_defaults(handler=handle_import_jsonl_prelabeled)
 
     cycle_parser = subparsers.add_parser("run-cycle")
@@ -882,11 +888,49 @@ def _save_annotation_manager_v2_task(
     )
 
 
+def _expected_prelabel_task_id(pipeline_id: str, batch_idx: int) -> str:
+    """Format used by `import jsonl-prelabeled` to derive task_ids from a
+    pipeline_id and 0-based batch index. Centralized so collision-detection and
+    the actual save loop never drift out of sync."""
+    return f"{pipeline_id}-{batch_idx:06d}"
+
+
 def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
     store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     rows = read_jsonl(args.source)
     if args.limit is not None:
         rows = rows[: args.limit]
+
+    # Determine which task_ids this run plans to write, then guard against
+    # silent overwrites of existing tasks (see Bug 1 in 50-task testing).
+    batches = list(chunked(rows, args.batch_size))
+    planned_task_ids: list[str] = [
+        _expected_prelabel_task_id(args.pipeline_id, batch_idx)
+        for batch_idx, _ in enumerate(batches)
+    ]
+    existing_task_ids = {t.task_id for t in store.list_tasks()}
+    collisions = [tid for tid in planned_task_ids if tid in existing_task_ids]
+    if collisions:
+        if not getattr(args, "force_rewrite", False):
+            print(
+                json.dumps(
+                    {
+                        "error": "task_id_collision",
+                        "pipeline_id": args.pipeline_id,
+                        "collisions": collisions,
+                        "hint": (
+                            "Pass --force-rewrite to cascade-delete and re-import, "
+                            "or choose a different --pipeline-id."
+                        ),
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
+            return 1
+        for tid in collisions:
+            store.delete_task(tid)
+
     output_schema, schema_defs = _resolve_output_schema(args.output_schema_file, args.output_schema_pointer)
     batched_schema = _batched_output_schema(
         output_schema, schema_defs, batch_size=args.batch_size, min_items=1
@@ -907,12 +951,12 @@ def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
     ]
     imported = 0
     skipped = 0
-    for batch_idx, batch in enumerate(chunked(rows, args.batch_size)):
+    for batch_idx, batch in enumerate(batches):
         usable = [row for row in batch if isinstance(row.get("input"), str) and isinstance(row.get("output"), dict)]
         if not usable:
             skipped += len(batch)
             continue
-        task_id = f"{args.pipeline_id}-{batch_idx:06d}"
+        task_id = _expected_prelabel_task_id(args.pipeline_id, batch_idx)
         _save_jsonl_prelabeled_task(
             store=store,
             task_id=task_id,

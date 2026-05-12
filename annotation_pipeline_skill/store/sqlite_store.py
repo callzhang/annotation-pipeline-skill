@@ -162,6 +162,72 @@ class SqliteStore:
         ).fetchall()
         return [_row_to_task(r) for r in rows]
 
+    def delete_task(self, task_id: str) -> dict[str, int]:
+        """Cascade-delete a single task and all of its children, plus the on-disk
+        artifact_payloads/<task_id>/ directory.
+
+        Returns a dict of {table_name: rows_deleted} including an
+        "artifact_files" entry counting on-disk files removed. The "tasks" entry
+        is 1 if the task existed and 0 otherwise.
+        """
+        empty_report = {
+            "tasks": 0,
+            "audit_events": 0,
+            "attempts": 0,
+            "feedback_records": 0,
+            "feedback_discussions": 0,
+            "artifact_refs": 0,
+            "outbox_records": 0,
+            "active_runs": 0,
+            "runtime_leases": 0,
+            "artifact_files": 0,
+        }
+        row = self._conn.execute(
+            "SELECT task_id FROM tasks WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            return empty_report
+
+        child_tables = (
+            "audit_events",
+            "attempts",
+            "feedback_records",
+            "feedback_discussions",
+            "artifact_refs",
+            "outbox_records",
+            "active_runs",
+            "runtime_leases",
+        )
+
+        report = dict(empty_report)
+        report["tasks"] = 1
+        for table in child_tables:
+            count_row = self._conn.execute(
+                f"SELECT COUNT(*) AS c FROM {table} WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            report[table] = count_row["c"]
+
+        with self._conn:
+            for table in child_tables:
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE task_id = ?",
+                    (task_id,),
+                )
+            self._conn.execute(
+                "DELETE FROM tasks WHERE task_id = ?",
+                (task_id,),
+            )
+
+        files_removed = 0
+        task_dir = self.root / "artifact_payloads" / task_id
+        if task_dir.exists():
+            files_removed = sum(1 for p in task_dir.rglob("*") if p.is_file())
+            shutil.rmtree(task_dir, ignore_errors=False)
+        report["artifact_files"] = files_removed
+        return report
+
     def delete_pipeline(self, pipeline_id: str) -> dict[str, int]:
         """Cascade-delete every task with the given pipeline_id and all of its
         children, plus the on-disk artifact_payloads directory for each task.
