@@ -56,7 +56,6 @@ def build_runtime_snapshot(
     queue_counts = _build_queue_counts(tasks)
     capacity = CapacitySnapshot(
         max_concurrent_tasks=config.max_concurrent_tasks,
-        max_starts_per_cycle=config.max_starts_per_cycle,
         active_count=active_count,
         available_slots=max(config.max_concurrent_tasks - active_count, 0),
     )

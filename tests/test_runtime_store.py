@@ -53,7 +53,7 @@ def test_file_store_saves_heartbeat_cycle_stats_and_snapshot(tmp_path):
         runtime_status=RuntimeStatus(healthy=True, heartbeat_at=now, heartbeat_age_seconds=0, active=True),
         queue_counts=QueueCounts(pending=0, annotating=0, validating=0, qc=0, human_review=0, accepted=1, rejected=0),
         active_runs=[],
-        capacity=CapacitySnapshot(max_concurrent_tasks=4, max_starts_per_cycle=2, active_count=0, available_slots=4),
+        capacity=CapacitySnapshot(max_concurrent_tasks=4, active_count=0, available_slots=4),
         stale_tasks=[],
         due_retries=[],
         project_summaries=[],

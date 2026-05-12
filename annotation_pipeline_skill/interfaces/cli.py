@@ -60,7 +60,7 @@ human_review:
   required: false
 runtime:
   max_concurrent_tasks: 8
-  max_starts_per_cycle: 8
+  cycle_max_seconds: 120
   stale_after_seconds: 600
   retry_delay_seconds: 3600
   loop_interval_seconds: 5
@@ -346,7 +346,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     cycle_parser = subparsers.add_parser("run-cycle")
     cycle_parser.add_argument("--project-root", type=Path, default=Path.cwd())
-    cycle_parser.add_argument("--limit", type=int, default=None)
     cycle_parser.add_argument("--runtime", choices=("subagent",), default="subagent")
     cycle_parser.add_argument("--stage-target", default="annotation")
     cycle_parser.set_defaults(handler=handle_run_cycle)
@@ -1299,13 +1298,7 @@ def batch_metadata(
 
 def handle_run_cycle(args: argparse.Namespace) -> int:
     context = _runtime_context(args.project_root)
-    runtime_config = context.config.runtime
-    if args.limit is not None:
-        runtime_config = replace(
-            runtime_config,
-            max_starts_per_cycle=min(runtime_config.max_starts_per_cycle, args.limit),
-        )
-    snapshot = _build_runtime_scheduler(context, runtime_config).run_once(stage_target=args.stage_target)
+    snapshot = _build_runtime_scheduler(context).run_once(stage_target=args.stage_target)
     print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
     return 0
 

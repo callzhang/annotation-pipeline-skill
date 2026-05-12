@@ -116,10 +116,6 @@ export function RuntimePanel({ storeKey }: RuntimePanelProps) {
               <dt>Max concurrent</dt>
               <dd>{snapshot.capacity.max_concurrent_tasks}</dd>
             </div>
-            <div>
-              <dt>Max starts</dt>
-              <dd>{snapshot.capacity.max_starts_per_cycle}</dd>
-            </div>
           </dl>
         </div>
 

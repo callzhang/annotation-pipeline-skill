@@ -126,7 +126,7 @@ def test_local_scheduler_records_qc_parse_error_without_annotator_feedback_and_r
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=client_factory,
-        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
+        config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
     first = scheduler.run_once(stage_target="annotation")

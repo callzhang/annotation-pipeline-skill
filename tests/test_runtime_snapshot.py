@@ -36,7 +36,7 @@ def test_runtime_snapshot_counts_queues_capacity_projects_and_due_retries(tmp_pa
 
     snapshot = build_runtime_snapshot(
         store,
-        RuntimeConfig(max_concurrent_tasks=4, max_starts_per_cycle=2),
+        RuntimeConfig(max_concurrent_tasks=4),
         now=now,
     )
 

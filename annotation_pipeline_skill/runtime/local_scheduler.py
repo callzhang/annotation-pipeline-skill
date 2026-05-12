@@ -73,14 +73,13 @@ class LocalRuntimeScheduler:
 
         existing_active_count = max(len(self.store.list_runtime_leases()), len(self.store.list_active_runs()))
         capacity_available = max(self.config.max_concurrent_tasks - existing_active_count, 0)
-        start_limit = min(capacity_available, self.config.max_starts_per_cycle)
         runnable_tasks = [
             task
             for task in self.store.list_tasks()
             if task.status is TaskStatus.PENDING
             or (task.status is TaskStatus.QC and task.metadata.get("runtime_next_stage") == "qc")
         ]
-        selected_tasks = runnable_tasks[:start_limit]
+        selected_tasks = runnable_tasks[:capacity_available]
 
         runtime = SubagentRuntime(
             store=self.store,
@@ -191,10 +190,7 @@ class LocalRuntimeScheduler:
             in_flight.add(asyncio.create_task(run_one(task)))
 
         def refill() -> int:
-            remaining_starts = max(self.config.max_starts_per_cycle - len(seen_task_ids), 0)
-            if remaining_starts == 0:
-                return 0
-            slots = min(self.config.max_concurrent_tasks - len(in_flight), remaining_starts)
+            slots = self.config.max_concurrent_tasks - len(in_flight)
             if slots <= 0:
                 return 0
             runnable = [

@@ -169,7 +169,6 @@ export interface ActiveRun {
 
 export interface CapacitySnapshot {
   max_concurrent_tasks: number;
-  max_starts_per_cycle: number;
   active_count: number;
   available_slots: number;
 }

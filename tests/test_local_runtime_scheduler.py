@@ -45,7 +45,9 @@ class FailingDiagnosticLLMClient:
         raise DiagnosticProviderError()
 
 
-def test_local_runtime_scheduler_respects_max_starts_per_cycle(tmp_path):
+def test_local_runtime_scheduler_drains_pending_within_capacity(tmp_path):
+    """With continuous-fill, one cycle keeps recruiting from PENDING as workers
+    finish — bounded only by ``max_concurrent_tasks`` and ``cycle_max_seconds``."""
     store = SqliteStore.open(tmp_path)
     for index in range(1, 4):
         task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -54,15 +56,15 @@ def test_local_runtime_scheduler_respects_max_starts_per_cycle(tmp_path):
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=passing_client_factory,
-        config=RuntimeConfig(max_concurrent_tasks=4, max_starts_per_cycle=2),
+        config=RuntimeConfig(max_concurrent_tasks=4),
     )
 
     snapshot = scheduler.run_once(stage_target="annotation")
 
-    assert snapshot.queue_counts.accepted == 2
-    assert snapshot.queue_counts.pending == 1
-    assert snapshot.cycle_stats[-1].started == 2
-    assert snapshot.cycle_stats[-1].accepted == 2
+    assert snapshot.queue_counts.accepted == 3
+    assert snapshot.queue_counts.pending == 0
+    assert snapshot.cycle_stats[-1].started == 3
+    assert snapshot.cycle_stats[-1].accepted == 3
 
 
 def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
@@ -88,7 +90,7 @@ def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=passing_client_factory,
-        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=2),
+        config=RuntimeConfig(max_concurrent_tasks=1),
         now_fn=lambda: now,
     )
 
@@ -107,7 +109,7 @@ def test_local_runtime_scheduler_cleans_active_run_after_success(tmp_path):
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=passing_client_factory,
-        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
+        config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
     scheduler.run_once(stage_target="annotation")
@@ -124,7 +126,7 @@ def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=lambda target: FailingLLMClient(),
-        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
+        config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
     snapshot = scheduler.run_once(stage_target="annotation")
@@ -155,7 +157,7 @@ def test_local_runtime_scheduler_preserves_provider_failure_diagnostics(tmp_path
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=lambda target: FailingDiagnosticLLMClient(),
-        config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=1),
+        config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
     snapshot = scheduler.run_once(stage_target="annotation")
@@ -263,7 +265,7 @@ def test_scheduler_runs_tasks_in_parallel_within_a_cycle(tmp_path):
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=slow_factory,
-        config=RuntimeConfig(max_concurrent_tasks=8, max_starts_per_cycle=8),
+        config=RuntimeConfig(max_concurrent_tasks=8),
     )
 
     t0 = time.monotonic()
@@ -319,9 +321,9 @@ def test_scheduler_does_not_clear_fresh_active_runs_on_construction(tmp_path):
 
 
 def test_continuous_fill_refills_finished_slots_within_budget(tmp_path):
-    """Continuous-fill: with max_concurrent < max_starts_per_cycle, the cycle
-    keeps recruiting from PENDING as workers finish, instead of waiting for the
-    initial wave to drain (the old gather-barrier behavior)."""
+    """Continuous-fill: even when max_concurrent_tasks < total PENDING, one
+    cycle keeps recruiting as workers finish — old gather-barrier behavior
+    would have left only the initial wave processed."""
     store = SqliteStore.open(tmp_path)
     for index in range(1, 11):
         task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -332,41 +334,13 @@ def test_continuous_fill_refills_finished_slots_within_budget(tmp_path):
         client_factory=passing_client_factory,
         config=RuntimeConfig(
             max_concurrent_tasks=2,
-            max_starts_per_cycle=10,
             cycle_max_seconds=30,
         ),
     )
 
     snapshot = scheduler.run_once(stage_target="annotation")
 
-    # All 10 PENDING tasks should have run within the single cycle because
-    # the scheduler refills slots as soon as workers finish.
     assert snapshot.queue_counts.accepted == 10
     assert snapshot.queue_counts.pending == 0
     assert snapshot.cycle_stats[-1].started == 10
     assert snapshot.cycle_stats[-1].accepted == 10
-
-
-def test_max_starts_per_cycle_is_a_hard_ceiling_under_continuous_fill(tmp_path):
-    """Even with refill enabled, max_starts_per_cycle caps how many tasks one
-    cycle initiates — extra PENDING tasks wait for the next cycle."""
-    store = SqliteStore.open(tmp_path)
-    for index in range(1, 8):  # 7 PENDING
-        task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-        task.status = TaskStatus.PENDING
-        store.save_task(task)
-    scheduler = LocalRuntimeScheduler(
-        store=store,
-        client_factory=passing_client_factory,
-        config=RuntimeConfig(
-            max_concurrent_tasks=2,
-            max_starts_per_cycle=4,
-            cycle_max_seconds=30,
-        ),
-    )
-
-    snapshot = scheduler.run_once(stage_target="annotation")
-
-    assert snapshot.cycle_stats[-1].started == 4
-    assert snapshot.queue_counts.accepted == 4
-    assert snapshot.queue_counts.pending == 3

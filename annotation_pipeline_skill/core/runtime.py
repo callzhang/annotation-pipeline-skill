@@ -9,14 +9,14 @@ from annotation_pipeline_skill.core.models import _dt_from_str, _dt_to_str, utc_
 @dataclass(frozen=True)
 class RuntimeConfig:
     max_concurrent_tasks: int = 4
-    max_starts_per_cycle: int = 2
     stale_after_seconds: int = 600
     retry_delay_seconds: int = 3600
     loop_interval_seconds: int = 5
-    # Wall-clock budget for one cycle. Inside this window the scheduler
-    # continuously refills its parallelism slots from PENDING as workers
-    # finish (no barrier). When the deadline passes, it stops starting new
-    # tasks but drains in-flight before reporting stats.
+    # Wall-clock budget for one cycle. Inside this window the scheduler runs
+    # a continuous worker pool (size ``max_concurrent_tasks``) that pulls the
+    # next PENDING task each time a worker finishes. When the deadline
+    # passes, it stops starting new tasks but drains in-flight before
+    # reporting stats and starting the next cycle.
     cycle_max_seconds: int = 60
     max_qc_rounds: int = 3
     # Project-level QC sampling policy. Applies to all tasks in this project
@@ -29,7 +29,6 @@ class RuntimeConfig:
     def to_dict(self) -> dict:
         return {
             "max_concurrent_tasks": self.max_concurrent_tasks,
-            "max_starts_per_cycle": self.max_starts_per_cycle,
             "stale_after_seconds": self.stale_after_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
             "loop_interval_seconds": self.loop_interval_seconds,
@@ -44,7 +43,6 @@ class RuntimeConfig:
     def from_dict(cls, data: dict) -> RuntimeConfig:
         return cls(
             max_concurrent_tasks=data.get("max_concurrent_tasks", 4),
-            max_starts_per_cycle=data.get("max_starts_per_cycle", 2),
             stale_after_seconds=data.get("stale_after_seconds", 600),
             retry_delay_seconds=data.get("retry_delay_seconds", 3600),
             loop_interval_seconds=data.get("loop_interval_seconds", 5),
@@ -241,14 +239,12 @@ class QueueCounts:
 @dataclass(frozen=True)
 class CapacitySnapshot:
     max_concurrent_tasks: int
-    max_starts_per_cycle: int
     active_count: int
     available_slots: int
 
     def to_dict(self) -> dict:
         return {
             "max_concurrent_tasks": self.max_concurrent_tasks,
-            "max_starts_per_cycle": self.max_starts_per_cycle,
             "active_count": self.active_count,
             "available_slots": self.available_slots,
         }
@@ -257,7 +253,6 @@ class CapacitySnapshot:
     def from_dict(cls, data: dict) -> CapacitySnapshot:
         return cls(
             max_concurrent_tasks=data["max_concurrent_tasks"],
-            max_starts_per_cycle=data["max_starts_per_cycle"],
             active_count=data["active_count"],
             available_slots=data["available_slots"],
         )

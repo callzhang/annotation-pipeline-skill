@@ -16,7 +16,7 @@ def test_runtime_config_uses_safe_defaults():
     config = RuntimeConfig()
 
     assert config.max_concurrent_tasks == 4
-    assert config.max_starts_per_cycle == 2
+    assert config.cycle_max_seconds == 60
     assert config.stale_after_seconds == 600
     assert config.retry_delay_seconds == 3600
     assert config.loop_interval_seconds == 5
@@ -63,7 +63,7 @@ def test_runtime_snapshot_round_trips_through_dict():
                 heartbeat_at=generated_at,
             )
         ],
-        capacity=CapacitySnapshot(max_concurrent_tasks=4, max_starts_per_cycle=2, active_count=1, available_slots=3),
+        capacity=CapacitySnapshot(max_concurrent_tasks=4, active_count=1, available_slots=3),
         stale_tasks=[],
         due_retries=["task-2"],
         project_summaries=[{"project_id": "demo", "task_count": 6}],
@@ -204,7 +204,6 @@ def test_runtime_snapshot_loads_with_omitted_empty_list_fields():
             ).to_dict(),
             "capacity": CapacitySnapshot(
                 max_concurrent_tasks=4,
-                max_starts_per_cycle=2,
                 active_count=0,
                 available_slots=4,
             ).to_dict(),

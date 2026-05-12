@@ -44,7 +44,6 @@ def runtime_snapshot(
         active_runs=[],
         capacity=CapacitySnapshot(
             max_concurrent_tasks=max_concurrent_tasks,
-            max_starts_per_cycle=2,
             active_count=active_count,
             available_slots=available_slots,
         ),

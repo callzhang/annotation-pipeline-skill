@@ -360,7 +360,7 @@ def test_runtime_snapshot_save_and_load(tmp_path):
             pending=0, annotating=0, validating=0, qc=0, human_review=0, accepted=0, rejected=0,
         ),
         active_runs=[], capacity=CapacitySnapshot(
-            max_concurrent_tasks=4, max_starts_per_cycle=2, active_count=0, available_slots=4,
+            max_concurrent_tasks=4, active_count=0, available_slots=4,
         ),
         stale_tasks=[], due_retries=[], project_summaries=[], cycle_stats=[],
     )

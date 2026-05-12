@@ -26,7 +26,6 @@ const snapshot: RuntimeSnapshot = {
   active_runs: [],
   capacity: {
     max_concurrent_tasks: 4,
-    max_starts_per_cycle: 2,
     active_count: 0,
     available_slots: 4,
   },
