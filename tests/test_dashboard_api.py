@@ -194,33 +194,6 @@ def test_dashboard_api_returns_coordinator_report_and_records_long_tail_issue(tm
     assert report["long_tail_issues"][0]["summary"] == "Rare entity needs user guidance."
 
 
-def test_dashboard_api_returns_runtime_cycles(tmp_path):
-    from datetime import datetime, timezone
-    from annotation_pipeline_skill.core.runtime import RuntimeCycleStats
-
-    store = SqliteStore.open(tmp_path)
-    now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
-    store.append_runtime_cycle_stats(
-        RuntimeCycleStats(
-            cycle_id="cycle-1",
-            started_at=now,
-            finished_at=now,
-            started=0,
-            accepted=0,
-            failed=0,
-            capacity_available=4,
-            errors=[],
-        )
-    )
-    api = DashboardApi(store)
-
-    status, _headers, body = api.handle_get("/api/runtime/cycles")
-    payload = json.loads(body.decode("utf-8"))
-
-    assert status == 200
-    assert payload["cycles"][0]["cycle_id"] == "cycle-1"
-
-
 def test_dashboard_api_returns_readiness_report_for_project(tmp_path):
     store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})

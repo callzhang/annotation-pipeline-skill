@@ -22,7 +22,6 @@ from annotation_pipeline_skill.core.models import (
 )
 from annotation_pipeline_skill.core.runtime import (
     ActiveRun,
-    RuntimeCycleStats,
     RuntimeLease,
     RuntimeSnapshot,
 )
@@ -648,10 +647,6 @@ class SqliteStore:
         return self._runtime_dir / "heartbeat.json"
 
     @property
-    def _runtime_cycle_path(self) -> Path:
-        return self._runtime_dir / "cycle_stats.jsonl"
-
-    @property
     def _runtime_snapshot_path(self) -> Path:
         return self._runtime_dir / "runtime_snapshot.json"
 
@@ -667,19 +662,6 @@ class SqliteStore:
             return None
         payload = json.loads(self._runtime_heartbeat_path.read_text(encoding="utf-8"))
         return datetime.fromisoformat(payload["heartbeat_at"])
-
-    def append_runtime_cycle_stats(self, stats) -> None:
-        with self._runtime_cycle_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(stats.to_dict(), sort_keys=True) + "\n")
-
-    def list_runtime_cycle_stats(self):
-        if not self._runtime_cycle_path.exists():
-            return []
-        return [
-            RuntimeCycleStats.from_dict(json.loads(line))
-            for line in self._runtime_cycle_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
 
     def save_runtime_snapshot(self, snap) -> None:
         self._runtime_snapshot_path.write_text(

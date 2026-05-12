@@ -129,12 +129,12 @@ def test_local_scheduler_records_qc_parse_error_without_annotator_feedback_and_r
         config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
-    first = scheduler.run_once(stage_target="annotation")
-    second = scheduler.run_once(stage_target="annotation")
+    # First pass: QC parser fails so the qc attempt is marked failed and the
+    # task bounces back to QC for another try. Second pass: second QC client
+    # returns valid JSON, task accepts.
+    scheduler.run_until_idle(stage_target="annotation")
 
     attempts = store.list_attempts("task-1")
-    assert first.cycle_stats[-1].failed == 1
-    assert second.cycle_stats[-1].accepted == 1
     assert store.load_task("task-1").status is TaskStatus.ACCEPTED
     assert store.list_feedback("task-1") == []
     assert [attempt.stage for attempt in attempts] == ["annotation", "qc", "qc"]

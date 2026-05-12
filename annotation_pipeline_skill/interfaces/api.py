@@ -100,8 +100,13 @@ class DashboardApi:
             return self._json_response(200, {"files": self._config_files(store)})
         if route == "/api/providers":
             return self._provider_config_response(store)
+        if route == "/api/annotators":
+            return self._annotators_response(store)
         if route == "/api/coordinator":
-            return self._json_response(200, CoordinatorService(store).build_report(project_id=project_id))
+            return self._json_response(
+                200,
+                CoordinatorService(store, workspace_root=self.workspace_root).build_report(project_id=project_id),
+            )
         if route == "/api/events":
             return self._json_response(200, {"events": self._event_log(store, project_id=project_id)})
         if route == "/api/readiness":
@@ -114,11 +119,6 @@ class DashboardApi:
             return self._json_response(200, self._runtime_snapshot(store).to_dict())
         if route == "/api/runtime/monitor":
             return self._json_response(200, validate_runtime_snapshot(self._runtime_snapshot(store)))
-        if route == "/api/runtime/cycles":
-            return self._json_response(
-                200,
-                {"cycles": [stats.to_dict() for stats in store.list_runtime_cycle_stats()]},
-            )
         if route == "/api/documents":
             return self._json_response(200, {"documents": [doc.to_dict() for doc in store.list_documents()]})
         if route.startswith("/api/documents/"):
@@ -154,6 +154,8 @@ class DashboardApi:
             return self._update_config_response(store, config_id, body)
         if route == "/api/providers":
             return self._update_provider_config_response(store, body)
+        if route == "/api/annotators":
+            return self._update_annotators_response(store, body)
         return self._json_response(404, {"error": "not_found"})
 
     def handle_post(self, path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
@@ -163,10 +165,6 @@ class DashboardApi:
         store = self._resolve_store(query)
         if route == "/api/runtime/run-once":
             return self._runtime_run_once_response()
-        if route == "/api/coordinator/rule-updates":
-            return self._post_coordinator_rule_update_response(store, body)
-        if route == "/api/coordinator/long-tail-issues":
-            return self._post_coordinator_long_tail_issue_response(store, body)
         if route == "/api/documents":
             return self._post_document_response(store, body)
         if route.startswith("/api/documents/") and route.endswith("/versions"):
@@ -486,51 +484,6 @@ class DashboardApi:
             return len(payload["rows"])
         return 1
 
-    def _post_coordinator_rule_update_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
-        if not isinstance(payload, dict):
-            return self._json_response(400, {"error": "invalid_payload"})
-        try:
-            record = CoordinatorService(store).record_rule_update(
-                project_id=str(payload.get("project_id") or ""),
-                source=str(payload.get("source") or ""),
-                summary=str(payload.get("summary") or ""),
-                action=str(payload.get("action") or ""),
-                created_by=str(payload.get("created_by") or "coordinator-agent"),
-                task_ids=[str(task_id) for task_id in payload.get("task_ids") or []],
-                status=str(payload.get("status") or "open"),
-                metadata=dict(payload.get("metadata") or {}),
-            )
-        except ValueError as exc:
-            return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
-        return self._json_response(200, record)
-
-    def _post_coordinator_long_tail_issue_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
-        if not isinstance(payload, dict):
-            return self._json_response(400, {"error": "invalid_payload"})
-        try:
-            record = CoordinatorService(store).record_long_tail_issue(
-                project_id=str(payload.get("project_id") or ""),
-                category=str(payload.get("category") or ""),
-                summary=str(payload.get("summary") or ""),
-                recommended_action=str(payload.get("recommended_action") or ""),
-                severity=str(payload.get("severity") or "medium"),
-                created_by=str(payload.get("created_by") or "coordinator-agent"),
-                task_ids=[str(task_id) for task_id in payload.get("task_ids") or []],
-                status=str(payload.get("status") or "open"),
-                metadata=dict(payload.get("metadata") or {}),
-            )
-        except ValueError as exc:
-            return self._json_response(400, {"error": "invalid_coordinator_record", "detail": str(exc)})
-        return self._json_response(200, record)
-
     def _read_artifact_payload(self, store: SqliteStore, relative_path: str) -> Any:
         path = store.root / relative_path
         if not path.exists():
@@ -540,6 +493,93 @@ class DashboardApi:
             return json.loads(text)
         except json.JSONDecodeError:
             return text
+
+    def _annotators_response(self, store: SqliteStore) -> tuple[int, dict[str, str], bytes]:
+        path = store.root / "annotators.yaml"
+        data: dict[str, Any] = {}
+        if path.exists():
+            try:
+                loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                if isinstance(loaded, dict):
+                    data = loaded
+            except yaml.YAMLError:
+                data = {}
+        annotators_dict = data.get("annotators", {}) if isinstance(data.get("annotators"), dict) else {}
+        annotators: list[dict[str, Any]] = []
+        for annotator_id, body in annotators_dict.items():
+            if not isinstance(body, dict):
+                continue
+            annotators.append({
+                "id": str(annotator_id),
+                "display_name": body.get("display_name", ""),
+                "provider_target": body.get("provider_target", ""),
+                "llm_profile": body.get("llm_profile", ""),
+                "enabled": bool(body.get("enabled", True)),
+                "modalities": list(body.get("modalities", []) or []),
+                "annotation_types": list(body.get("annotation_types", []) or []),
+                "input_artifact_kinds": list(body.get("input_artifact_kinds", []) or []),
+                "output_artifact_kinds": list(body.get("output_artifact_kinds", []) or []),
+                "preview_renderer_id": body.get("preview_renderer_id"),
+            })
+        sampling = data.get("sampling", {}) if isinstance(data.get("sampling"), dict) else {}
+        available_profiles: list[str] = []
+        try:
+            snap = build_provider_config_snapshot(
+                store.root,
+                workspace_root=self.workspace_root,
+            )
+            available_profiles = [str(p.get("name")) for p in snap.get("profiles", []) if p.get("name")]
+        except (FileNotFoundError, ProfileValidationError):
+            available_profiles = []
+        return self._json_response(200, {
+            "annotators": annotators,
+            "sampling": sampling,
+            "available_profiles": available_profiles,
+        })
+
+    def _update_annotators_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        annotators_input = payload.get("annotators", [])
+        if not isinstance(annotators_input, list):
+            return self._json_response(400, {"error": "invalid_annotators"})
+        annotators_dict: dict[str, Any] = {}
+        for item in annotators_input:
+            if not isinstance(item, dict):
+                continue
+            annotator_id = str(item.get("id", "")).strip()
+            if not annotator_id:
+                continue
+            entry: dict[str, Any] = {
+                "display_name": item.get("display_name", ""),
+                "modalities": list(item.get("modalities", []) or []),
+                "annotation_types": list(item.get("annotation_types", []) or []),
+                "input_artifact_kinds": list(item.get("input_artifact_kinds", []) or []),
+                "output_artifact_kinds": list(item.get("output_artifact_kinds", []) or []),
+                "provider_target": item.get("provider_target", ""),
+                "enabled": bool(item.get("enabled", True)),
+            }
+            llm_profile = item.get("llm_profile")
+            if llm_profile:
+                entry["llm_profile"] = llm_profile
+            preview_renderer_id = item.get("preview_renderer_id")
+            if preview_renderer_id:
+                entry["preview_renderer_id"] = preview_renderer_id
+            annotators_dict[annotator_id] = entry
+        sampling = payload.get("sampling", {})
+        if not isinstance(sampling, dict):
+            sampling = {}
+        out: dict[str, Any] = {"annotators": annotators_dict}
+        if sampling:
+            out["sampling"] = sampling
+        text = yaml.safe_dump(out, sort_keys=False, default_flow_style=False, allow_unicode=True)
+        path = store.root / "annotators.yaml"
+        path.write_text(text, encoding="utf-8")
+        return self._json_response(200, {"ok": True})
 
     def _guidelines_response(self, store: SqliteStore | None) -> dict[str, Any]:
         if store is None:

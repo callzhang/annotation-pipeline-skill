@@ -32,7 +32,6 @@ const snapshot: RuntimeSnapshot = {
   stale_tasks: [],
   due_retries: [],
   project_summaries: [],
-  cycle_stats: [],
 };
 
 describe("runtime helpers", () => {

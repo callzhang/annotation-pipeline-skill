@@ -60,10 +60,9 @@ human_review:
   required: false
 runtime:
   max_concurrent_tasks: 8
-  cycle_max_seconds: 120
+  snapshot_interval_seconds: 30
   stale_after_seconds: 600
   retry_delay_seconds: 3600
-  loop_interval_seconds: 5
   # QC behavior (project-level -- applies to all tasks unless a legacy task
   # carries its own metadata.qc_policy override).
   max_qc_rounds: 3
@@ -361,7 +360,12 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_run = runtime_subparsers.add_parser("run")
     runtime_run.add_argument("--project-root", type=Path, default=Path.cwd())
     runtime_run.add_argument("--stage-target", default="annotation")
-    runtime_run.add_argument("--max-cycles", type=int, default=None)
+    runtime_run.add_argument(
+        "--max-tasks",
+        type=int,
+        default=None,
+        help="stop after this many task completions (default: run until signal)",
+    )
     runtime_run.set_defaults(handler=handle_runtime_run)
 
     runtime_status = runtime_subparsers.add_parser("status")
@@ -447,27 +451,6 @@ def build_parser() -> argparse.ArgumentParser:
     coordinator_report.add_argument("--project-root", type=Path, default=Path.cwd())
     coordinator_report.add_argument("--project-id")
     coordinator_report.set_defaults(handler=handle_coordinator_report)
-
-    coordinator_rule = coordinator_subparsers.add_parser("rule-update")
-    coordinator_rule.add_argument("--project-root", type=Path, default=Path.cwd())
-    coordinator_rule.add_argument("--project-id", required=True)
-    coordinator_rule.add_argument("--source", required=True)
-    coordinator_rule.add_argument("--summary", required=True)
-    coordinator_rule.add_argument("--action", required=True)
-    coordinator_rule.add_argument("--created-by", default="coordinator-agent")
-    coordinator_rule.add_argument("--task-id", action="append", default=[])
-    coordinator_rule.set_defaults(handler=handle_coordinator_rule_update)
-
-    coordinator_issue = coordinator_subparsers.add_parser("long-tail-issue")
-    coordinator_issue.add_argument("--project-root", type=Path, default=Path.cwd())
-    coordinator_issue.add_argument("--project-id", required=True)
-    coordinator_issue.add_argument("--category", required=True)
-    coordinator_issue.add_argument("--summary", required=True)
-    coordinator_issue.add_argument("--recommended-action", required=True)
-    coordinator_issue.add_argument("--severity", default="medium")
-    coordinator_issue.add_argument("--created-by", default="coordinator-agent")
-    coordinator_issue.add_argument("--task-id", action="append", default=[])
-    coordinator_issue.set_defaults(handler=handle_coordinator_long_tail_issue)
 
     task_parser = subparsers.add_parser("task")
     task_subparsers = task_parser.add_subparsers(required=True)
@@ -1298,14 +1281,14 @@ def batch_metadata(
 
 def handle_run_cycle(args: argparse.Namespace) -> int:
     context = _runtime_context(args.project_root)
-    snapshot = _build_runtime_scheduler(context).run_once(stage_target=args.stage_target)
+    snapshot = _build_runtime_scheduler(context).run_until_idle(stage_target=args.stage_target)
     print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
     return 0
 
 
 def handle_runtime_once(args: argparse.Namespace) -> int:
     context = _runtime_context(args.project_root)
-    snapshot = _build_runtime_scheduler(context).run_once(stage_target=args.stage_target)
+    snapshot = _build_runtime_scheduler(context).run_until_idle(stage_target=args.stage_target)
     print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
     return 0
 
@@ -1330,16 +1313,29 @@ def handle_runtime_status(args: argparse.Namespace) -> int:
 
 
 def handle_runtime_run(args: argparse.Namespace) -> int:
+    import asyncio
+    import signal
+
     context = _runtime_context(args.project_root)
     scheduler = _build_runtime_scheduler(context)
-    cycles = 0
-    while args.max_cycles is None or cycles < args.max_cycles:
-        snapshot = scheduler.run_once(stage_target=args.stage_target)
-        print(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2))
-        cycles += 1
-        if args.max_cycles is None or cycles < args.max_cycles:
-            time.sleep(context.config.runtime.loop_interval_seconds)
-    return 0
+
+    async def main() -> int:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for signame in ("SIGINT", "SIGTERM"):
+            try:
+                loop.add_signal_handler(getattr(signal, signame), stop.set)
+            except (NotImplementedError, RuntimeError):
+                pass
+        completed = await scheduler.run_forever(
+            stage_target=args.stage_target,
+            stop_event=stop,
+            max_tasks=args.max_tasks,
+        )
+        print(json.dumps({"completed": completed}, sort_keys=True, indent=2))
+        return 0
+
+    return asyncio.run(main())
 
 
 def _resolve_project_profiles_path(project_root: Path) -> Path | None:
@@ -1470,35 +1466,6 @@ def handle_coordinator_report(args: argparse.Namespace) -> int:
     return 0
 
 
-def handle_coordinator_rule_update(args: argparse.Namespace) -> int:
-    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
-    record = CoordinatorService(store).record_rule_update(
-        project_id=args.project_id,
-        source=args.source,
-        summary=args.summary,
-        action=args.action,
-        created_by=args.created_by,
-        task_ids=args.task_id,
-    )
-    print(json.dumps(record, sort_keys=True, indent=2))
-    return 0
-
-
-def handle_coordinator_long_tail_issue(args: argparse.Namespace) -> int:
-    store = SqliteStore.open(args.project_root / ".annotation-pipeline")
-    record = CoordinatorService(store).record_long_tail_issue(
-        project_id=args.project_id,
-        category=args.category,
-        summary=args.summary,
-        recommended_action=args.recommended_action,
-        severity=args.severity,
-        created_by=args.created_by,
-        task_ids=args.task_id,
-    )
-    print(json.dumps(record, sort_keys=True, indent=2))
-    return 0
-
-
 def handle_task_unblock(args: argparse.Namespace) -> int:
     store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     task = store.load_task(args.task_id)
@@ -1615,7 +1582,7 @@ def handle_serve(args: argparse.Namespace) -> int:
             registry=registry,
         )
         scheduler = _build_runtime_scheduler(context)
-        runtime_once = scheduler.run_once
+        runtime_once = scheduler.run_until_idle
         runtime_config = config.runtime
     except Exception:
         pass

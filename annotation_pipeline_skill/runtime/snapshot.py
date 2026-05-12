@@ -25,7 +25,6 @@ def build_runtime_snapshot(
     active_runs = store.list_active_runs()
     leases = store.list_runtime_leases()
     heartbeat_at = store.load_runtime_heartbeat()
-    cycle_stats = store.list_runtime_cycle_stats()
 
     errors: list[str] = []
     heartbeat_age_seconds: int | None = None
@@ -33,7 +32,7 @@ def build_runtime_snapshot(
         errors.append("heartbeat_missing")
     else:
         heartbeat_age_seconds = int((generated_at - heartbeat_at).total_seconds())
-        stale_heartbeat_after = max(config.loop_interval_seconds * 2, 120)
+        stale_heartbeat_after = max(config.snapshot_interval_seconds * 2, 120)
         if heartbeat_age_seconds > stale_heartbeat_after:
             errors.append("heartbeat_stale")
 
@@ -82,7 +81,6 @@ def build_runtime_snapshot(
         stale_leases=stale_leases,
         due_retries=due_retries,
         project_summaries=build_project_summaries(store)["projects"],
-        cycle_stats=cycle_stats,
     )
 
 

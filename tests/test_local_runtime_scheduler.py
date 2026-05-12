@@ -46,8 +46,8 @@ class FailingDiagnosticLLMClient:
 
 
 def test_local_runtime_scheduler_drains_pending_within_capacity(tmp_path):
-    """With continuous-fill, one cycle keeps recruiting from PENDING as workers
-    finish — bounded only by ``max_concurrent_tasks`` and ``cycle_max_seconds``."""
+    """run_until_idle keeps recruiting PENDING tasks until the queue empties,
+    bounded only by max_concurrent_tasks worker coroutines."""
     store = SqliteStore.open(tmp_path)
     for index in range(1, 4):
         task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -59,46 +59,10 @@ def test_local_runtime_scheduler_drains_pending_within_capacity(tmp_path):
         config=RuntimeConfig(max_concurrent_tasks=4),
     )
 
-    snapshot = scheduler.run_once(stage_target="annotation")
+    snapshot = scheduler.run_until_idle(stage_target="annotation")
 
     assert snapshot.queue_counts.accepted == 3
     assert snapshot.queue_counts.pending == 0
-    assert snapshot.cycle_stats[-1].started == 3
-    assert snapshot.cycle_stats[-1].accepted == 3
-
-
-def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
-    from datetime import datetime, timezone
-    from annotation_pipeline_skill.core.runtime import ActiveRun
-
-    store = SqliteStore.open(tmp_path)
-    now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
-    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-    task.status = TaskStatus.PENDING
-    store.save_task(task)
-    store.save_active_run(
-        ActiveRun(
-            run_id="run-existing",
-            task_id="existing-task",
-            stage="annotation",
-            attempt_id="attempt-1",
-            provider_target="annotation",
-            started_at=now,
-            heartbeat_at=now,
-        )
-    )
-    scheduler = LocalRuntimeScheduler(
-        store=store,
-        client_factory=passing_client_factory,
-        config=RuntimeConfig(max_concurrent_tasks=1),
-        now_fn=lambda: now,
-    )
-
-    snapshot = scheduler.run_once(stage_target="annotation", now=now)
-
-    assert snapshot.queue_counts.pending == 1
-    assert snapshot.cycle_stats[-1].started == 0
-    assert snapshot.cycle_stats[-1].capacity_available == 0
 
 
 def test_local_runtime_scheduler_cleans_active_run_after_success(tmp_path):
@@ -112,13 +76,16 @@ def test_local_runtime_scheduler_cleans_active_run_after_success(tmp_path):
         config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
-    scheduler.run_once(stage_target="annotation")
+    scheduler.run_until_idle(stage_target="annotation")
 
     assert store.list_active_runs() == []
     assert store.load_task("task-1").status is TaskStatus.ACCEPTED
 
 
-def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
+def test_local_runtime_scheduler_cleans_records_after_failure(tmp_path):
+    """A worker that crashes during the pipeline still releases its lease /
+    active_run, so the worker pool stays healthy and the failed task remains
+    on the queue for the next attempt."""
     store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     task.status = TaskStatus.PENDING
@@ -129,50 +96,12 @@ def test_local_runtime_scheduler_records_failure_and_returns_snapshot(tmp_path):
         config=RuntimeConfig(max_concurrent_tasks=1),
     )
 
-    snapshot = scheduler.run_once(stage_target="annotation")
+    snapshot = scheduler.run_until_idle(stage_target="annotation", max_tasks=1)
 
     assert store.list_active_runs() == []
+    assert store.list_runtime_leases() == []
     assert snapshot is not None
     assert store.load_runtime_snapshot() == snapshot
-    assert snapshot.cycle_stats[-1].started == 1
-    assert snapshot.cycle_stats[-1].failed == 1
-    assert snapshot.cycle_stats[-1].accepted == 0
-    assert snapshot.cycle_stats[-1].errors == [
-        {
-            "task_id": "task-1",
-            "stage": "annotation",
-            "provider_target": "annotation",
-            "error_kind": "provider_unavailable",
-            "error_type": "RuntimeError",
-            "message": "provider unavailable",
-        }
-    ]
-
-
-def test_local_runtime_scheduler_preserves_provider_failure_diagnostics(tmp_path):
-    store = SqliteStore.open(tmp_path)
-    task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-    task.status = TaskStatus.PENDING
-    store.save_task(task)
-    scheduler = LocalRuntimeScheduler(
-        store=store,
-        client_factory=lambda target: FailingDiagnosticLLMClient(),
-        config=RuntimeConfig(max_concurrent_tasks=1),
-    )
-
-    snapshot = scheduler.run_once(stage_target="annotation")
-
-    assert snapshot.cycle_stats[-1].errors == [
-        {
-            "task_id": "task-1",
-            "stage": "annotation",
-            "provider_target": "annotation",
-            "error_kind": "provider_unavailable",
-            "error_type": "DiagnosticProviderError",
-            "message": "local CLI provider failed",
-            "diagnostics": {"stderr": "resume thread not found", "returncode": 1},
-        }
-    ]
 
 
 def test_scheduler_clears_stale_active_runs_on_construction(tmp_path):
@@ -218,13 +147,10 @@ def test_scheduler_clears_stale_active_runs_on_construction(tmp_path):
     assert store.list_runtime_leases() == []
 
 
-def test_scheduler_runs_tasks_in_parallel_within_a_cycle(tmp_path):
-    """Within a single cycle, tasks should run concurrently via asyncio.gather.
-
-    Each annotation+QC stage sleeps 0.5s. Serial execution of 4 tasks would
-    be ~4 * 1.0s = 4s. Parallel execution should be ~1.0s (one annotation
-    round-trip + one QC round-trip). Allow generous wall-time slack.
-    """
+def test_workers_run_in_parallel(tmp_path):
+    """Worker pool runs tasks concurrently. Each LLM call sleeps 0.5s — serial
+    execution of 4 tasks would be ~4 * 1.0s = 4s; the pool should finish in
+    ~1s (one annotation + one QC round-trip overlapping across workers)."""
     import asyncio as _asyncio
     import time
 
@@ -269,11 +195,10 @@ def test_scheduler_runs_tasks_in_parallel_within_a_cycle(tmp_path):
     )
 
     t0 = time.monotonic()
-    snapshot = scheduler.run_once(stage_target="annotation")
+    snapshot = scheduler.run_until_idle(stage_target="annotation")
     wall_seconds = time.monotonic() - t0
 
-    assert snapshot.cycle_stats[-1].started == 4
-    assert snapshot.cycle_stats[-1].accepted == 4
+    assert snapshot.queue_counts.accepted == 4
     # Serial would be 4 * (0.5 + 0.5) = 4.0s; parallel ~1.0s. Allow generous slack.
     assert wall_seconds < 2.0, f"expected parallel speedup, wall={wall_seconds:.2f}s"
 
@@ -320,10 +245,9 @@ def test_scheduler_does_not_clear_fresh_active_runs_on_construction(tmp_path):
     assert len(store.list_runtime_leases()) == 1
 
 
-def test_continuous_fill_refills_finished_slots_within_budget(tmp_path):
-    """Continuous-fill: even when max_concurrent_tasks < total PENDING, one
-    cycle keeps recruiting as workers finish — old gather-barrier behavior
-    would have left only the initial wave processed."""
+def test_workers_drain_many_tasks_with_small_pool(tmp_path):
+    """A pool of just 2 workers still drains 10 PENDING tasks — each worker
+    claims the next task as soon as it's free. There's no batch boundary."""
     store = SqliteStore.open(tmp_path)
     for index in range(1, 11):
         task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
@@ -332,15 +256,10 @@ def test_continuous_fill_refills_finished_slots_within_budget(tmp_path):
     scheduler = LocalRuntimeScheduler(
         store=store,
         client_factory=passing_client_factory,
-        config=RuntimeConfig(
-            max_concurrent_tasks=2,
-            cycle_max_seconds=30,
-        ),
+        config=RuntimeConfig(max_concurrent_tasks=2),
     )
 
-    snapshot = scheduler.run_once(stage_target="annotation")
+    snapshot = scheduler.run_until_idle(stage_target="annotation")
 
     assert snapshot.queue_counts.accepted == 10
     assert snapshot.queue_counts.pending == 0
-    assert snapshot.cycle_stats[-1].started == 10
-    assert snapshot.cycle_stats[-1].accepted == 10

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { fetchRuntimeCycles, fetchRuntimeMonitor, fetchRuntimeSnapshot, runRuntimeOnce } from "../api";
+import { fetchRuntimeMonitor, fetchRuntimeSnapshot, runRuntimeOnce } from "../api";
 import { formatRuntimeDate, monitorLabel, orderedQueueCounts, runtimeHealthLabel } from "../runtime";
-import type { RuntimeCycleStats, RuntimeMonitorReport, RuntimeSnapshot } from "../types";
+import type { RuntimeMonitorReport, RuntimeSnapshot } from "../types";
 
 interface RuntimePanelProps {
   storeKey: string | null;
@@ -9,20 +9,17 @@ interface RuntimePanelProps {
 
 export function RuntimePanel({ storeKey }: RuntimePanelProps) {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
-  const [cycles, setCycles] = useState<RuntimeCycleStats[]>([]);
   const [monitor, setMonitor] = useState<RuntimeMonitorReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function loadRuntime() {
-    const [nextSnapshot, nextCycles, nextMonitor] = await Promise.all([
+    const [nextSnapshot, nextMonitor] = await Promise.all([
       fetchRuntimeSnapshot(storeKey),
-      fetchRuntimeCycles(storeKey),
       fetchRuntimeMonitor(storeKey),
     ]);
     setSnapshot(nextSnapshot);
-    setCycles(nextCycles.cycles);
     setMonitor(nextMonitor);
   }
 
@@ -50,11 +47,10 @@ export function RuntimePanel({ storeKey }: RuntimePanelProps) {
     try {
       const result = await runRuntimeOnce(storeKey);
       setSnapshot(result.snapshot);
-      const [nextCycles, nextMonitor] = await Promise.all([fetchRuntimeCycles(storeKey), fetchRuntimeMonitor(storeKey)]);
-      setCycles(nextCycles.cycles);
+      const nextMonitor = await fetchRuntimeMonitor(storeKey);
       setMonitor(nextMonitor);
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "Unable to run runtime cycle");
+      setError(reason instanceof Error ? reason.message : "Unable to drain runtime queue");
     } finally {
       setRunning(false);
     }
@@ -74,7 +70,7 @@ export function RuntimePanel({ storeKey }: RuntimePanelProps) {
           </p>
         </div>
         <button className="primary-button" type="button" disabled={running} onClick={runOnce}>
-          {running ? "Running..." : "Run once"}
+          {running ? "Running..." : "Drain queue"}
         </button>
       </div>
 
@@ -151,37 +147,6 @@ export function RuntimePanel({ storeKey }: RuntimePanelProps) {
         <RuntimeList title="Active Runs" values={snapshot.active_runs.map((run) => `${run.task_id} · ${run.provider_target}`)} empty="No active runs" />
         <RuntimeList title="Stale Tasks" values={snapshot.stale_tasks} empty="No stale tasks" />
         <RuntimeList title="Due Retries" values={snapshot.due_retries} empty="No due retries" />
-      </div>
-
-      <div className="runtime-card">
-        <h3>Recent Cycles</h3>
-        <table className="runtime-table">
-          <thead>
-            <tr>
-              <th>Cycle</th>
-              <th>Started</th>
-              <th>Accepted</th>
-              <th>Failed</th>
-              <th>Capacity</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cycles.slice(-8).reverse().map((cycle) => (
-              <tr key={cycle.cycle_id}>
-                <td>{cycle.cycle_id}</td>
-                <td>{cycle.started}</td>
-                <td>{cycle.accepted}</td>
-                <td>{cycle.failed}</td>
-                <td>{cycle.capacity_available}</td>
-              </tr>
-            ))}
-            {cycles.length === 0 ? (
-              <tr>
-                <td colSpan={5}>No cycles recorded</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
       </div>
     </section>
   );

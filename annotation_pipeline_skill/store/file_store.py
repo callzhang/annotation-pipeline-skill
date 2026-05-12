@@ -24,7 +24,7 @@ from annotation_pipeline_skill.core.models import (
     OutboxRecord,
     Task,
 )
-from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeCycleStats, RuntimeSnapshot
+from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeSnapshot
 from annotation_pipeline_skill.core.runtime import RuntimeLease
 
 T = TypeVar("T")
@@ -45,7 +45,6 @@ class FileStore:
         self.runtime_dir = self.root / "runtime"
         self.active_runs_dir = self.runtime_dir / "active_runs"
         self.leases_dir = self.runtime_dir / "leases"
-        self.runtime_cycles_path = self.runtime_dir / "cycle_stats.jsonl"
         self.runtime_heartbeat_path = self.runtime_dir / "heartbeat.json"
         self.runtime_snapshot_path = self.runtime_dir / "runtime_snapshot.json"
         self.documents_dir = self.root / "documents"
@@ -180,12 +179,6 @@ class FileStore:
             return None
         payload = self._read_json(self.runtime_heartbeat_path)
         return datetime.fromisoformat(payload["heartbeat_at"])
-
-    def append_runtime_cycle_stats(self, stats: RuntimeCycleStats) -> None:
-        self._append_jsonl(self.runtime_cycles_path, stats.to_dict())
-
-    def list_runtime_cycle_stats(self) -> list[RuntimeCycleStats]:
-        return self._read_jsonl(self.runtime_cycles_path, RuntimeCycleStats.from_dict)
 
     def save_runtime_snapshot(self, snapshot: RuntimeSnapshot) -> None:
         self._write_json(self.runtime_snapshot_path, snapshot.to_dict())

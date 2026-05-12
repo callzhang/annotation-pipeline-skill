@@ -50,7 +50,6 @@ def runtime_snapshot(
         stale_tasks=stale_tasks or [],
         due_retries=due_retries or [],
         project_summaries=[],
-        cycle_stats=[],
     )
 
 

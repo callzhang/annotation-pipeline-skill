@@ -6,7 +6,6 @@ from annotation_pipeline_skill.core.runtime import (
     ActiveRun,
     CapacitySnapshot,
     QueueCounts,
-    RuntimeCycleStats,
     RuntimeSnapshot,
     RuntimeStatus,
 )
@@ -35,19 +34,9 @@ def test_file_store_saves_loads_and_deletes_active_runs(tmp_path):
     assert store.list_active_runs() == []
 
 
-def test_file_store_saves_heartbeat_cycle_stats_and_snapshot(tmp_path):
+def test_file_store_saves_heartbeat_and_snapshot(tmp_path):
     store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
-    stats = RuntimeCycleStats(
-        cycle_id="cycle-1",
-        started_at=now,
-        finished_at=now,
-        started=1,
-        accepted=1,
-        failed=0,
-        capacity_available=4,
-        errors=[],
-    )
     snapshot = RuntimeSnapshot(
         generated_at=now,
         runtime_status=RuntimeStatus(healthy=True, heartbeat_at=now, heartbeat_age_seconds=0, active=True),
@@ -57,15 +46,12 @@ def test_file_store_saves_heartbeat_cycle_stats_and_snapshot(tmp_path):
         stale_tasks=[],
         due_retries=[],
         project_summaries=[],
-        cycle_stats=[stats],
     )
 
     store.save_runtime_heartbeat(now)
-    store.append_runtime_cycle_stats(stats)
     store.save_runtime_snapshot(snapshot)
 
     assert store.load_runtime_heartbeat() == now
-    assert store.list_runtime_cycle_stats() == [stats]
     assert store.load_runtime_snapshot() == snapshot
 
 

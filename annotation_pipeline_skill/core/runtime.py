@@ -8,16 +8,16 @@ from annotation_pipeline_skill.core.models import _dt_from_str, _dt_to_str, utc_
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    # Number of concurrent worker coroutines. Each worker runs its own
+    # annotation→validation→QC pipeline per task. There is no batch/cycle
+    # boundary — when a worker finishes it immediately claims the next
+    # PENDING task.
     max_concurrent_tasks: int = 4
     stale_after_seconds: int = 600
     retry_delay_seconds: int = 3600
-    loop_interval_seconds: int = 5
-    # Wall-clock budget for one cycle. Inside this window the scheduler runs
-    # a continuous worker pool (size ``max_concurrent_tasks``) that pulls the
-    # next PENDING task each time a worker finishes. When the deadline
-    # passes, it stops starting new tasks but drains in-flight before
-    # reporting stats and starting the next cycle.
-    cycle_max_seconds: int = 60
+    # How often the runtime observer writes a fresh RuntimeSnapshot + heartbeat
+    # while the worker pool is running.
+    snapshot_interval_seconds: int = 30
     max_qc_rounds: int = 3
     # Project-level QC sampling policy. Applies to all tasks in this project
     # unless an individual task carries a legacy ``metadata.qc_policy`` override
@@ -31,8 +31,7 @@ class RuntimeConfig:
             "max_concurrent_tasks": self.max_concurrent_tasks,
             "stale_after_seconds": self.stale_after_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
-            "loop_interval_seconds": self.loop_interval_seconds,
-            "cycle_max_seconds": self.cycle_max_seconds,
+            "snapshot_interval_seconds": self.snapshot_interval_seconds,
             "max_qc_rounds": self.max_qc_rounds,
             "qc_sample_mode": self.qc_sample_mode,
             "qc_sample_ratio": self.qc_sample_ratio,
@@ -45,8 +44,7 @@ class RuntimeConfig:
             max_concurrent_tasks=data.get("max_concurrent_tasks", 4),
             stale_after_seconds=data.get("stale_after_seconds", 600),
             retry_delay_seconds=data.get("retry_delay_seconds", 3600),
-            loop_interval_seconds=data.get("loop_interval_seconds", 5),
-            cycle_max_seconds=int(data.get("cycle_max_seconds", 60)),
+            snapshot_interval_seconds=int(data.get("snapshot_interval_seconds", 30)),
             max_qc_rounds=data.get("max_qc_rounds", 3),
             qc_sample_mode=data.get("qc_sample_mode", "sample_ratio"),
             qc_sample_ratio=float(data.get("qc_sample_ratio", 1.0)),
@@ -125,43 +123,6 @@ class RuntimeLease:
             expires_at=_dt_from_str(data["expires_at"]),
             owner=data["owner"],
             metadata=data.get("metadata", {}),
-        )
-
-
-@dataclass(frozen=True)
-class RuntimeCycleStats:
-    cycle_id: str
-    started_at: datetime
-    finished_at: datetime
-    started: int
-    accepted: int
-    failed: int
-    capacity_available: int
-    errors: list[dict] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "cycle_id": self.cycle_id,
-            "started_at": _dt_to_str(self.started_at),
-            "finished_at": _dt_to_str(self.finished_at),
-            "started": self.started,
-            "accepted": self.accepted,
-            "failed": self.failed,
-            "capacity_available": self.capacity_available,
-            "errors": self.errors,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> RuntimeCycleStats:
-        return cls(
-            cycle_id=data["cycle_id"],
-            started_at=_dt_from_str(data["started_at"]),
-            finished_at=_dt_from_str(data["finished_at"]),
-            started=data["started"],
-            accepted=data["accepted"],
-            failed=data["failed"],
-            capacity_available=data["capacity_available"],
-            errors=data.get("errors", []),
         )
 
 
@@ -268,7 +229,6 @@ class RuntimeSnapshot:
     stale_tasks: list[str]
     due_retries: list[str]
     project_summaries: list[dict]
-    cycle_stats: list[RuntimeCycleStats]
     leases: list[RuntimeLease] = field(default_factory=list)
     stale_leases: list[str] = field(default_factory=list)
 
@@ -284,7 +244,6 @@ class RuntimeSnapshot:
             "stale_leases": self.stale_leases,
             "due_retries": self.due_retries,
             "project_summaries": self.project_summaries,
-            "cycle_stats": [stats.to_dict() for stats in self.cycle_stats],
         }
 
     @classmethod
@@ -300,5 +259,4 @@ class RuntimeSnapshot:
             stale_leases=list(data.get("stale_leases", [])),
             due_retries=list(data.get("due_retries", [])),
             project_summaries=list(data.get("project_summaries", [])),
-            cycle_stats=[RuntimeCycleStats.from_dict(item) for item in data.get("cycle_stats", [])],
         )

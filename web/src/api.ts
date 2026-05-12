@@ -2,18 +2,13 @@ import type {
   AnnotationDocument,
   AnnotationDocumentVersion,
   ConfigSnapshot,
-  CoordinatorLongTailIssue,
-  CoordinatorLongTailIssuePayload,
   CoordinatorReport,
-  CoordinatorRuleUpdate,
-  CoordinatorRuleUpdatePayload,
   DocumentDetail,
   DocumentsSnapshot,
   EventLog,
   KanbanSnapshot,
   ProjectSnapshot,
   ProviderConfigSnapshot,
-  RuntimeCyclesResponse,
   RuntimeMonitorReport,
   RuntimeRunOnceResponse,
   RuntimeSnapshot,
@@ -160,14 +155,6 @@ export async function fetchRuntimeSnapshot(storeKey: string | null = null): Prom
   return response.json() as Promise<RuntimeSnapshot>;
 }
 
-export async function fetchRuntimeCycles(storeKey: string | null = null): Promise<RuntimeCyclesResponse> {
-  const response = await fetch(withStore("/api/runtime/cycles", storeKey));
-  if (!response.ok) {
-    throw new Error(`Runtime cycles API returned ${response.status}`);
-  }
-  return response.json() as Promise<RuntimeCyclesResponse>;
-}
-
 export async function fetchRuntimeMonitor(storeKey: string | null = null): Promise<RuntimeMonitorReport> {
   const response = await fetch(withStore("/api/runtime/monitor", storeKey));
   if (!response.ok) {
@@ -238,42 +225,6 @@ export async function fetchCoordinatorReport(projectId: string | null = null, st
   return response.json() as Promise<CoordinatorReport>;
 }
 
-export async function postCoordinatorRuleUpdate(
-  payload: CoordinatorRuleUpdatePayload,
-  storeKey: string | null = null,
-): Promise<CoordinatorRuleUpdate> {
-  const response = await fetch(withStore("/api/coordinator/rule-updates", storeKey), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
-    throw new Error(
-      errorPayload?.detail ?? errorPayload?.error ?? `Coordinator rule update returned ${response.status}`,
-    );
-  }
-  return response.json() as Promise<CoordinatorRuleUpdate>;
-}
-
-export async function postCoordinatorLongTailIssue(
-  payload: CoordinatorLongTailIssuePayload,
-  storeKey: string | null = null,
-): Promise<CoordinatorLongTailIssue> {
-  const response = await fetch(withStore("/api/coordinator/long-tail-issues", storeKey), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
-    throw new Error(
-      errorPayload?.detail ?? errorPayload?.error ?? `Coordinator long-tail issue returned ${response.status}`,
-    );
-  }
-  return response.json() as Promise<CoordinatorLongTailIssue>;
-}
-
 export async function fetchDocuments(storeKey: string | null = null): Promise<DocumentsSnapshot> {
   const response = await fetch(withStore("/api/documents", storeKey));
   if (!response.ok) {
@@ -341,4 +292,44 @@ export async function fetchGuidelines(storeKey: string | null = null): Promise<{
   const response = await fetch(withStore("/api/guidelines", storeKey));
   if (!response.ok) throw new Error(`Guidelines fetch returned ${response.status}`);
   return response.json() as Promise<{ guidelines: Guideline[] }>;
+}
+
+export interface AnnotatorConfig {
+  id: string;
+  display_name: string;
+  provider_target: string;
+  llm_profile: string;
+  enabled: boolean;
+  modalities: string[];
+  annotation_types: string[];
+  input_artifact_kinds: string[];
+  output_artifact_kinds: string[];
+  preview_renderer_id: string | null;
+}
+
+export interface AnnotatorsSnapshot {
+  annotators: AnnotatorConfig[];
+  sampling: Record<string, Record<string, unknown>>;
+  available_profiles: string[];
+}
+
+export async function fetchAnnotatorsConfig(storeKey: string | null = null): Promise<AnnotatorsSnapshot> {
+  const response = await fetch(withStore("/api/annotators", storeKey));
+  if (!response.ok) throw new Error(`Annotators fetch returned ${response.status}`);
+  return response.json() as Promise<AnnotatorsSnapshot>;
+}
+
+export async function saveAnnotatorsConfig(
+  payload: { annotators: AnnotatorConfig[]; sampling: Record<string, Record<string, unknown>> },
+  storeKey: string | null = null,
+): Promise<void> {
+  const response = await fetch(withStore("/api/annotators", storeKey), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Annotators save returned ${response.status}`);
+  }
 }

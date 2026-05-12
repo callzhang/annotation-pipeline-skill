@@ -173,17 +173,6 @@ export interface CapacitySnapshot {
   available_slots: number;
 }
 
-export interface RuntimeCycleStats {
-  cycle_id: string;
-  started_at: string;
-  finished_at: string;
-  started: number;
-  accepted: number;
-  failed: number;
-  capacity_available: number;
-  errors: Array<Record<string, unknown>>;
-}
-
 export interface RuntimeSnapshot {
   generated_at: string;
   runtime_status: RuntimeStatus;
@@ -193,11 +182,6 @@ export interface RuntimeSnapshot {
   stale_tasks: string[];
   due_retries: string[];
   project_summaries: ProjectSummary[];
-  cycle_stats: RuntimeCycleStats[];
-}
-
-export interface RuntimeCyclesResponse {
-  cycles: RuntimeCycleStats[];
 }
 
 export interface RuntimeMonitorReport {
@@ -308,33 +292,6 @@ export interface CoordinatorProviderDiagnostics {
   diagnostics: Record<string, ProviderDiagnostic>;
 }
 
-export interface CoordinatorRuleUpdate {
-  record_id: string;
-  project_id: string;
-  source: string;
-  summary: string;
-  action: string;
-  status: string;
-  task_ids: string[];
-  created_at: string;
-  created_by: string;
-  metadata: Record<string, unknown>;
-}
-
-export interface CoordinatorLongTailIssue {
-  issue_id: string;
-  project_id: string;
-  category: string;
-  summary: string;
-  recommended_action: string;
-  severity: string;
-  status: string;
-  task_ids: string[];
-  created_at: string;
-  created_by: string;
-  metadata: Record<string, unknown>;
-}
-
 export interface CoordinatorReport {
   project_id: string | null;
   generated_at: string;
@@ -353,26 +310,5 @@ export interface CoordinatorReport {
   };
   readiness: ReadinessReport | null;
   provider_diagnostics: CoordinatorProviderDiagnostics;
-  rule_updates: CoordinatorRuleUpdate[];
-  long_tail_issues: CoordinatorLongTailIssue[];
   recommended_actions: string[];
-}
-
-export interface CoordinatorRuleUpdatePayload {
-  project_id: string;
-  source: string;
-  summary: string;
-  action: string;
-  created_by: string;
-  task_ids: string[];
-}
-
-export interface CoordinatorLongTailIssuePayload {
-  project_id: string;
-  category: string;
-  summary: string;
-  recommended_action: string;
-  severity: string;
-  created_by: string;
-  task_ids: string[];
 }
