@@ -447,6 +447,112 @@ def test_subagent_runtime_defaults_max_qc_rounds_to_3(tmp_path):
     assert runtime.max_qc_rounds == 3
 
 
+def test_validation_failures_count_toward_escalation_threshold(tmp_path):
+    """3 schema_invalid failures (no QC failures) should still escalate to HUMAN_REVIEW."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-stuck",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {"type": "object", "required": ["entities"]}
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    # Annotator always produces JSON that fails schema (missing "entities").
+    class _StubClient:
+        async def generate(self, request):
+            return LLMGenerateResult(
+                final_text='{"wrong_field": []}',
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient(), max_qc_rounds=3)
+    # 3 rounds, each ends in validation failure -> 3rd should escalate
+    for _ in range(3):
+        runtime.run_once()
+
+    task_after = store.load_task("t-stuck")
+    assert task_after.status is TaskStatus.HUMAN_REVIEW
+
+
+def test_mixed_qc_and_validation_failures_escalate_together(tmp_path):
+    """1 QC failure + 2 validation failures = 3 rounds -> escalate."""
+    from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.llm.client import LLMGenerateResult
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-mixed",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "x",
+                "annotation_guidance": {
+                    "output_schema": {"type": "object", "required": ["entities"]}
+                },
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    state = {"annotation_round": 0}
+
+    class _StubClient:
+        async def generate(self, request):
+            instructions = request.instructions.lower()
+            is_qc = "qc subagent" in instructions
+            if is_qc:
+                # QC rejects whenever it runs
+                final = '{"passed": false, "message": "bad", "failures": [{"category": "x", "message": "bad"}]}'
+            else:
+                state["annotation_round"] += 1
+                if state["annotation_round"] == 1:
+                    # First annotation: schema-valid, will reach QC which rejects.
+                    final = '{"entities": []}'
+                else:
+                    # Subsequent annotations: schema-invalid (missing "entities").
+                    final = '{"wrong_field": []}'
+            return LLMGenerateResult(
+                final_text=final, raw_response={}, usage={}, diagnostics={},
+                runtime="stub", provider="stub", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient(), max_qc_rounds=3)
+    # Run enough cycles to exhaust the 3-round budget
+    for _ in range(5):
+        runtime.run_once()
+        if store.load_task("t-mixed").status is TaskStatus.HUMAN_REVIEW:
+            break
+
+    task_after = store.load_task("t-mixed")
+    assert task_after.status is TaskStatus.HUMAN_REVIEW
+    # The metadata on the final transition event should record round_count
+    events = store.list_events("t-mixed")
+    escalation = [e for e in events if "auto-escalated" in (e.reason or "")]
+    assert escalation, "expected an auto-escalation event"
+    assert escalation[-1].metadata.get("round_count", 0) >= 3
+
+
 def _seed_prelabeled_task(store, *, task_id, annotation_text, output_schema=None):
     """Create a PENDING task with a prelabeled annotation_result artifact already on disk."""
     from annotation_pipeline_skill.core.models import ArtifactRef, Attempt

@@ -185,6 +185,18 @@ class SubagentRuntime:
             annotation_result.final_text,
         )
 
+    def _retry_round_count(self, task_id: str) -> int:
+        """Count how many full retry rounds have happened for this task.
+
+        A round is any feedback record from QC or VALIDATION stages that
+        bounced the task back to PENDING. We count both because either kind
+        of failure indicates the annotator must redo the work.
+        """
+        return sum(
+            1 for f in self.store.list_feedback(task_id)
+            if f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION
+        )
+
     def _run_validation_and_qc(
         self,
         task: Task,
@@ -201,13 +213,28 @@ class SubagentRuntime:
                 message=validation_failure["message"],
                 target=validation_failure.get("target", {}),
             )
-            self._transition(
-                task,
-                TaskStatus.PENDING,
-                reason=validation_failure["reason"],
-                stage="validation",
-                attempt_id=annotation_attempt_id,
-            )
+            round_count = self._retry_round_count(task.task_id)
+            if round_count >= self.max_qc_rounds:
+                self._transition(
+                    task,
+                    TaskStatus.HUMAN_REVIEW,
+                    reason="auto-escalated after repeated annotation/QC failures",
+                    stage="validation",
+                    attempt_id=annotation_attempt_id,
+                    metadata={
+                        "auto_escalated": True,
+                        "round_count": round_count,
+                        "max_qc_rounds": self.max_qc_rounds,
+                    },
+                )
+            else:
+                self._transition(
+                    task,
+                    TaskStatus.PENDING,
+                    reason=validation_failure["reason"],
+                    stage="validation",
+                    attempt_id=annotation_attempt_id,
+                )
             self.store.save_task(task)
             return
 
@@ -286,20 +313,17 @@ class SubagentRuntime:
         else:
             feedback = _feedback_from_qc_decision(task, qc_attempt_id, qc_decision)
             self.store.append_feedback(feedback)
-            qc_failure_count = sum(
-                1 for f in self.store.list_feedback(task.task_id)
-                if f.source_stage is FeedbackSource.QC
-            )
-            if qc_failure_count >= self.max_qc_rounds:
+            round_count = self._retry_round_count(task.task_id)
+            if round_count >= self.max_qc_rounds:
                 self._transition(
                     task,
                     TaskStatus.HUMAN_REVIEW,
-                    reason="auto-escalated after repeated QC rejections",
+                    reason="auto-escalated after repeated annotation/QC failures",
                     stage="qc",
                     attempt_id=qc_attempt_id,
                     metadata={
                         "auto_escalated": True,
-                        "qc_failure_count": qc_failure_count,
+                        "round_count": round_count,
                         "max_qc_rounds": self.max_qc_rounds,
                         "feedback_id": feedback.feedback_id,
                         "qc_artifact_id": qc_artifact.artifact_id,

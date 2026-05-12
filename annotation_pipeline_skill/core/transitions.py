@@ -14,6 +14,7 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.PENDING,
         TaskStatus.QC,
         TaskStatus.ANNOTATING,
+        TaskStatus.HUMAN_REVIEW,
         TaskStatus.REJECTED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
