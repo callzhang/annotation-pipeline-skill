@@ -161,19 +161,21 @@ class LocalRuntimeScheduler:
         same asyncio event loop with a synchronous SQLite store, so this
         method does not need a lock — only one worker runs at a time
         between awaits.
+
+        Queries only PENDING / QC tasks (covered by ``idx_tasks_status_created``)
+        so the worker pool stays cheap to poll even at 41k+ task volumes.
         """
-        for candidate in self.store.list_tasks():
-            if candidate.status is TaskStatus.PENDING or (
-                candidate.status is TaskStatus.QC
-                and candidate.metadata.get("runtime_next_stage") == "qc"
-            ):
-                acquired_at = self._now_fn()
-                lease = self._lease_for(candidate, acquired_at)
-                if not self.store.save_runtime_lease(lease):
-                    continue
-                run = self._active_run_for(candidate, stage_target, acquired_at, lease.lease_id)
-                self.store.save_active_run(run)
-                return candidate, lease, run
+        candidates = self.store.list_tasks_by_status({TaskStatus.PENDING, TaskStatus.QC})
+        for candidate in candidates:
+            if candidate.status is TaskStatus.QC and candidate.metadata.get("runtime_next_stage") != "qc":
+                continue
+            acquired_at = self._now_fn()
+            lease = self._lease_for(candidate, acquired_at)
+            if not self.store.save_runtime_lease(lease):
+                continue
+            run = self._active_run_for(candidate, stage_target, acquired_at, lease.lease_id)
+            self.store.save_active_run(run)
+            return candidate, lease, run
         return None
 
     def _write_snapshot(self) -> RuntimeSnapshot:
