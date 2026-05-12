@@ -7,6 +7,7 @@ import {
   loadDrawerWidth,
   saveDrawerWidth,
 } from "../drawer_state";
+import { JsonViewer } from "./JsonViewer";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
 import type { ReactNode } from "react";
 
@@ -145,7 +146,7 @@ export function TaskDrawer({
       {detail ? (
         <div className="detail-sections">
           <DetailSection title="Raw Source">
-            <JsonBlock value={detail.task.source_ref} />
+            <JsonViewer value={detail.task.source_ref} />
           </DetailSection>
 
           {detail.task.metadata.qc_policy ? (
@@ -164,7 +165,7 @@ export function TaskDrawer({
                     <span>{artifact.kind}</span>
                     <span>{artifact.metadata.provider ? String(artifact.metadata.provider) : artifact.content_type}</span>
                   </div>
-                  <JsonBlock value={artifact.payload} />
+                  <JsonViewer value={artifact.payload} />
                 </div>
               ))
             )}
@@ -314,7 +315,7 @@ function QcPolicyEditor({
         </label>
       ) : null}
 
-      <JsonBlock value={policy} />
+      <JsonViewer value={policy} />
       <button
         className="primary-button"
         type="button"
@@ -365,7 +366,7 @@ function PreviewArtifact({ artifact }: { artifact: TaskDetailArtifact }) {
           ))}
         </div>
       ) : null}
-      <JsonBlock value={artifact.payload} />
+      <JsonViewer value={artifact.payload} />
     </div>
   );
 }
@@ -548,11 +549,8 @@ function TimelineItem({ title, meta, value }: { title: string; meta: string; val
         <span>{title}</span>
         <small>{meta}</small>
       </summary>
-      <JsonBlock value={value} />
+      <JsonViewer value={value} />
     </details>
   );
 }
 
-function JsonBlock({ value }: { value: unknown }) {
-  return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>;
-}
