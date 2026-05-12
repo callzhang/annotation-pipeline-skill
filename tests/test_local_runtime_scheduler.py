@@ -89,6 +89,7 @@ def test_local_runtime_scheduler_respects_existing_active_capacity(tmp_path):
         store=store,
         client_factory=passing_client_factory,
         config=RuntimeConfig(max_concurrent_tasks=1, max_starts_per_cycle=2),
+        now_fn=lambda: now,
     )
 
     snapshot = scheduler.run_once(stage_target="annotation", now=now)
@@ -170,3 +171,88 @@ def test_local_runtime_scheduler_preserves_provider_failure_diagnostics(tmp_path
             "diagnostics": {"stderr": "resume thread not found", "returncode": 1},
         }
     ]
+
+
+def test_scheduler_clears_stale_active_runs_on_construction(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeLease
+
+    store = SqliteStore.open(tmp_path)
+    fixed_now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    stale_after = 600  # seconds (default)
+    # Stale heartbeat: now - (stale_after + 60s).
+    stale_heartbeat = fixed_now - timedelta(seconds=stale_after + 60)
+    store.save_active_run(
+        ActiveRun(
+            run_id="run-stale",
+            task_id="ghost-task",
+            stage="annotation",
+            attempt_id="attempt-stale",
+            provider_target="annotation",
+            started_at=stale_heartbeat,
+            heartbeat_at=stale_heartbeat,
+        )
+    )
+    store.save_runtime_lease(
+        RuntimeLease(
+            lease_id="lease-stale",
+            task_id="ghost-task",
+            stage="annotation",
+            acquired_at=stale_heartbeat,
+            heartbeat_at=stale_heartbeat,
+            expires_at=stale_heartbeat + timedelta(seconds=stale_after),
+            owner="dead-scheduler",
+        )
+    )
+
+    LocalRuntimeScheduler(
+        store=store,
+        client_factory=passing_client_factory,
+        config=RuntimeConfig(stale_after_seconds=stale_after),
+        now_fn=lambda: fixed_now,
+    )
+
+    assert store.list_active_runs() == []
+    assert store.list_runtime_leases() == []
+
+
+def test_scheduler_does_not_clear_fresh_active_runs_on_construction(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from annotation_pipeline_skill.core.runtime import ActiveRun, RuntimeLease
+
+    store = SqliteStore.open(tmp_path)
+    fixed_now = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    stale_after = 600
+    fresh_heartbeat = fixed_now - timedelta(seconds=30)  # well within threshold
+    store.save_active_run(
+        ActiveRun(
+            run_id="run-fresh",
+            task_id="live-task",
+            stage="annotation",
+            attempt_id="attempt-fresh",
+            provider_target="annotation",
+            started_at=fresh_heartbeat,
+            heartbeat_at=fresh_heartbeat,
+        )
+    )
+    store.save_runtime_lease(
+        RuntimeLease(
+            lease_id="lease-fresh",
+            task_id="live-task",
+            stage="annotation",
+            acquired_at=fresh_heartbeat,
+            heartbeat_at=fresh_heartbeat,
+            expires_at=fresh_heartbeat + timedelta(seconds=stale_after),
+            owner="live-scheduler",
+        )
+    )
+
+    LocalRuntimeScheduler(
+        store=store,
+        client_factory=passing_client_factory,
+        config=RuntimeConfig(stale_after_seconds=stale_after),
+        now_fn=lambda: fixed_now,
+    )
+
+    assert len(store.list_active_runs()) == 1
+    assert len(store.list_runtime_leases()) == 1

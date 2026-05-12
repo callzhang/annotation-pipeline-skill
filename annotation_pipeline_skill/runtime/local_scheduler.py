@@ -19,10 +19,42 @@ class LocalRuntimeScheduler:
         store: SqliteStore,
         client_factory: Callable[[str], LLMClient],
         config: RuntimeConfig,
+        *,
+        now_fn: Callable[[], datetime] | None = None,
     ):
         self.store = store
         self.client_factory = client_factory
         self.config = config
+        self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self._clear_stale_records()
+
+    def _clear_stale_records(self) -> None:
+        """Remove leases and active_runs whose heartbeat exceeds stale_after_seconds.
+
+        Called once at construction so a freshly-restarted scheduler doesn't
+        count leftover rows from a previously-killed instance toward
+        existing_active_count. Only rows older than ``stale_after_seconds``
+        are removed; fresh in-flight rows from another live scheduler are
+        preserved.
+        """
+        threshold = self._now_fn() - timedelta(seconds=self.config.stale_after_seconds)
+        cleared_leases = 0
+        cleared_runs = 0
+        for lease in self.store.list_runtime_leases():
+            if lease.heartbeat_at < threshold:
+                self.store.delete_runtime_lease(lease.lease_id)
+                cleared_leases += 1
+        for run in self.store.list_active_runs():
+            if run.heartbeat_at < threshold:
+                self.store.delete_active_run(run.run_id)
+                cleared_runs += 1
+        if cleared_leases or cleared_runs:
+            import sys
+            print(
+                f"[scheduler] cleared {cleared_leases} stale leases, "
+                f"{cleared_runs} stale active_runs",
+                file=sys.stderr,
+            )
 
     def run_once(self, stage_target: str = "annotation", now: datetime | None = None) -> RuntimeSnapshot:
         cycle_started_at = now or datetime.now(timezone.utc)
