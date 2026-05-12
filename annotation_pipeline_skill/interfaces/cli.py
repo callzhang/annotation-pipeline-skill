@@ -888,6 +888,17 @@ def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
     if args.limit is not None:
         rows = rows[: args.limit]
     output_schema, schema_defs = _resolve_output_schema(args.output_schema_file, args.output_schema_pointer)
+    batched_schema = _batched_output_schema(
+        output_schema, schema_defs, batch_size=args.batch_size, min_items=1
+    )
+    # Project-level schema: written once. Per-task source_ref no longer carries
+    # the schema; resolution falls back to this file. See resolve_output_schema.
+    project_schema_path = store.root / "output_schema.json"
+    project_schema_path.parent.mkdir(parents=True, exist_ok=True)
+    project_schema_path.write_text(
+        json.dumps(batched_schema, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
     annotation_types = args.annotation_types or [
         "entity_span",
         "classification",
@@ -909,8 +920,6 @@ def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
             batch_idx=batch_idx,
             batch=usable,
             source_file=args.source,
-            output_schema=output_schema,
-            schema_defs=schema_defs,
             annotation_types=annotation_types,
             modality=args.modality,
         )
@@ -941,11 +950,22 @@ def _resolve_output_schema(schema_file: Path, pointer: str) -> tuple[dict, dict]
     return dict(node), dict(defs)
 
 
-def _batched_output_schema(per_row_output_schema: dict, defs: dict, batch_size: int) -> dict:
+def _batched_output_schema(
+    per_row_output_schema: dict,
+    defs: dict,
+    batch_size: int,
+    *,
+    min_items: int | None = None,
+) -> dict:
     """Wrap a per-row output schema in the batched envelope.
 
     $defs must live at the root of the validated schema so that `$ref: "#/$defs/..."`
     references inside the per-row output resolve correctly.
+
+    ``min_items`` defaults to ``batch_size`` (exact-size batches). Pass a smaller
+    value (e.g. ``1``) when the wrapper must accept partial-final batches — for
+    instance the project-level schema covers all batches in a pipeline, the last
+    of which may have fewer than ``batch_size`` rows.
     """
     schema: dict = {
         "type": "object",
@@ -954,7 +974,7 @@ def _batched_output_schema(per_row_output_schema: dict, defs: dict, batch_size: 
         "properties": {
             "rows": {
                 "type": "array",
-                "minItems": batch_size,
+                "minItems": batch_size if min_items is None else min_items,
                 "maxItems": batch_size,
                 "items": {
                     "type": "object",
@@ -973,6 +993,29 @@ def _batched_output_schema(per_row_output_schema: dict, defs: dict, batch_size: 
     return schema
 
 
+def _normalize_prelabel_output(output: dict, *, task_id: str, row_index: int) -> dict:
+    """Normalize v2 prelabeled output to the v3 schema shape.
+
+    v2 wrote ``json_structures`` as a list (often empty ``[]``, or holding
+    legacy 5-placeholder records). v3 requires an object keyed by phrase type.
+    We coerce empty lists to ``{}`` silently and warn-and-coerce non-empty
+    lists (the legacy types do not auto-translate to v3 phrase types).
+    """
+    if not isinstance(output, dict):
+        return output
+    normalized = dict(output)
+    js = normalized.get("json_structures")
+    if isinstance(js, list):
+        if js:
+            print(
+                f"warning: dropping non-empty legacy json_structures list "
+                f"(task={task_id}, row_index={row_index}, count={len(js)}); "
+                f"v3 schema requires an object keyed by phrase type."
+            )
+        normalized["json_structures"] = {}
+    return normalized
+
+
 def _save_jsonl_prelabeled_task(
     *,
     store: SqliteStore,
@@ -981,8 +1024,6 @@ def _save_jsonl_prelabeled_task(
     batch_idx: int,
     batch: list[dict],
     source_file: Path,
-    output_schema: dict,
-    schema_defs: dict,
     annotation_types: list[str],
     modality: str,
 ) -> None:
@@ -990,7 +1031,6 @@ def _save_jsonl_prelabeled_task(
     # globally-unique attempts.attempt_id primary key.
     attempt_id = f"{task_id}-attempt-0-prelabel"
     row_ids = [str(row.get("task_id") or row.get("row_id") or f"row-{i}") for i, row in enumerate(batch)]
-    batched_schema = _batched_output_schema(output_schema, schema_defs, batch_size=len(batch))
     rows_payload = [
         {
             "row_index": i,
@@ -1002,7 +1042,11 @@ def _save_jsonl_prelabeled_task(
     ]
     annotation_payload = {
         "rows": [
-            {"row_index": i, "row_id": row_ids[i], "output": batch[i]["output"]}
+            {
+                "row_index": i,
+                "row_id": row_ids[i],
+                "output": _normalize_prelabel_output(batch[i]["output"], task_id=task_id, row_index=i),
+            }
             for i in range(len(batch))
         ]
     }
@@ -1017,7 +1061,6 @@ def _save_jsonl_prelabeled_task(
             "payload": {
                 "rows": rows_payload,
                 "annotation_guidance": {
-                    "output_schema": batched_schema,
                     "rules_path": "annotation_rules.yaml",
                 },
             },

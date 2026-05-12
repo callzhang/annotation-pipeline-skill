@@ -941,9 +941,14 @@ def test_cli_import_jsonl_prelabeled_creates_tasks_with_prelabel_metadata(tmp_pa
         "input": "text body 0",
     }
     guidance = task0.source_ref["payload"]["annotation_guidance"]
-    assert "output_schema" in guidance
-    batched = guidance["output_schema"]
-    assert batched["properties"]["rows"]["minItems"] == 10
+    # Per-task source_ref no longer carries the schema -- it lives at the project level.
+    assert "output_schema" not in guidance
+    assert guidance == {"rules_path": "annotation_rules.yaml"}
+    project_schema_path = tmp_path / ".annotation-pipeline" / "output_schema.json"
+    assert project_schema_path.exists()
+    batched = json.loads(project_schema_path.read_text(encoding="utf-8"))
+    # Project-level schema accepts partial-final batches (minItems=1, maxItems=batch_size).
+    assert batched["properties"]["rows"]["minItems"] == 1
     assert batched["properties"]["rows"]["maxItems"] == 10
     # $defs hoisted to root of batched schema so $refs in per-row output resolve.
     assert "$defs" in batched
@@ -994,6 +999,191 @@ def test_cli_import_jsonl_prelabeled_writes_annotation_artifact(tmp_path):
     assert inner["rows"][0]["row_index"] == 0
     assert inner["rows"][0]["row_id"] == "row-000"
     assert inner["rows"][0]["output"] == {"labels": [{"text": "e0", "type": "ENTITY"}]}
+
+
+def test_cli_import_writes_project_output_schema_file(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=3)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    assert rc == 0
+    project_schema_path = tmp_path / ".annotation-pipeline" / "output_schema.json"
+    assert project_schema_path.exists()
+    schema = json.loads(project_schema_path.read_text(encoding="utf-8"))
+    assert schema["type"] == "object"
+    assert schema["properties"]["rows"]["maxItems"] == 10
+    assert schema["properties"]["rows"]["minItems"] == 1
+    assert "$defs" in schema
+
+
+def test_cli_import_omits_per_task_inline_schema(tmp_path):
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=3)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    task = store.load_task("v3-000000")
+    guidance = task.source_ref["payload"]["annotation_guidance"]
+    assert "output_schema" not in guidance
+    # rules_path is still present for the annotator instructions.
+    assert guidance.get("rules_path") == "annotation_rules.yaml"
+
+
+def test_cli_import_normalizes_empty_json_structures_array(tmp_path):
+    """v2 prelabeled rows often had ``output.json_structures: []``; v3 requires an object."""
+    source = tmp_path / "prelabel.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "task_id": "row-000",
+                "input": "hello",
+                "output": {"labels": [], "json_structures": []},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    schema_file = _write_minimal_schema_file(tmp_path)
+    main(["init", "--project-root", str(tmp_path)])
+    rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    assert rc == 0
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    artifact = store.list_artifacts("v3-000000")[0]
+    payload = json.loads((store.root / artifact.path).read_text(encoding="utf-8"))
+    inner = json.loads(payload["text"])
+    assert inner["rows"][0]["output"]["json_structures"] == {}
+
+
+def test_cli_import_normalizes_non_empty_json_structures_array(tmp_path, capsys):
+    """Non-empty legacy list is dropped (with warning) since v2->v3 types do not auto-translate."""
+    source = tmp_path / "prelabel.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "task_id": "row-000",
+                "input": "hello",
+                "output": {
+                    "labels": [],
+                    "json_structures": [{"phrase": "x", "type": "LEGACY_TYPE"}],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    schema_file = _write_minimal_schema_file(tmp_path)
+    main(["init", "--project-root", str(tmp_path)])
+    rc = main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr().out
+    assert "warning" in captured.lower() and "json_structures" in captured
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    artifact = store.list_artifacts("v3-000000")[0]
+    payload = json.loads((store.root / artifact.path).read_text(encoding="utf-8"))
+    inner = json.loads(payload["text"])
+    assert inner["rows"][0]["output"]["json_structures"] == {}
+
+
+def test_cli_import_preserves_dict_json_structures(tmp_path):
+    """v3-shaped dict json_structures must pass through unchanged."""
+    js_dict = {"PHRASE_TYPE_A": [{"phrase": "alpha"}]}
+    source = tmp_path / "prelabel.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "task_id": "row-000",
+                "input": "hello",
+                "output": {"labels": [], "json_structures": js_dict},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    schema_file = _write_minimal_schema_file(tmp_path)
+    main(["init", "--project-root", str(tmp_path)])
+    main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    artifact = store.list_artifacts("v3-000000")[0]
+    payload = json.loads((store.root / artifact.path).read_text(encoding="utf-8"))
+    inner = json.loads(payload["text"])
+    assert inner["rows"][0]["output"]["json_structures"] == js_dict
 
 
 def test_cli_import_jsonl_prelabeled_appends_attempt_record(tmp_path):
