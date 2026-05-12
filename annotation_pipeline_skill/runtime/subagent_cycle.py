@@ -503,6 +503,7 @@ class SubagentRuntime:
                 "task": _task_payload(task),
                 "feedback_bundle": build_feedback_bundle(self.store, task.task_id),
                 "prior_artifacts": self._artifact_context(task.task_id),
+                "output_schema": resolve_output_schema(task, self.store),
             },
             sort_keys=True,
         )
@@ -516,6 +517,7 @@ class SubagentRuntime:
                     "payload": self._read_artifact_payload(annotation_artifact),
                 },
                 "feedback_bundle": build_feedback_bundle(self.store, task.task_id),
+                "output_schema": resolve_output_schema(task, self.store),
             },
             sort_keys=True,
         )
@@ -617,7 +619,7 @@ class SubagentRuntime:
 def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str:
     base = (
         "You are an annotation subagent. Return raw JSON only, with no markdown fences or commentary. "
-        "Follow task.source_ref.payload.annotation_guidance when it is present, including output_schema, allowed_entity_types, and rules. "
+        "Follow the output_schema and annotation_guidance fields in this prompt (output_schema is the JSON Schema your response must conform to). Honor allowed_entity_types and rules from annotation_guidance when present. "
         "For text entity spans, copy exact contiguous text spans from task.source_ref.payload.text. "
         "Do not add entity labels outside the configured allowed entity types. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
@@ -633,7 +635,7 @@ def _qc_instructions(task: Task, *, guideline: str | None = None) -> str:
         "Return raw JSON with no markdown fences. Include a boolean field named passed. "
         "If passed is false, include message or failures. failures must be a list of objects with row_id or target, category, message, severity, and suggested_action. "
         "When feedback discussions or annotator rebuttals are present, include feedback_resolution as a list of row-level decisions with row_id, decision, and reason. "
-        "Use task.source_ref.payload.annotation_guidance as the quality policy when it is present. "
+        "Use the output_schema and annotation_guidance fields in this prompt as the quality policy when present. "
         "Use task.metadata.qc_policy to decide the QC scope for this task. "
         "When qc_policy.mode is sample_count or sample_ratio, inspect exactly qc_policy.sample_count rows/items from this task, "
         "choose them deterministically from task payload order, and include sampled row ids or row indexes in the QC response. "

@@ -793,3 +793,80 @@ def test_prior_artifacts_capped_per_kind(tmp_path):
     # Verify the most-recent indexes are retained (2, 3, 4 — last 3).
     assert [a["payload"]["index"] for a in by_kind["annotation_result"]] == [2, 3, 4]
     assert [a["payload"]["index"] for a in by_kind["qc_result"]] == [2, 3, 4]
+
+
+def test_annotation_prompt_includes_resolved_schema_from_project(tmp_path):
+    """When a task lacks an inline schema, the annotator prompt must inline the project schema."""
+    project_schema = {
+        "type": "object",
+        "required": ["labels"],
+        "properties": {"labels": {"type": "array"}},
+    }
+    store = SqliteStore.open(tmp_path)
+    (store.root / "output_schema.json").write_text(
+        json.dumps(project_schema), encoding="utf-8"
+    )
+    # Task carries NO inline output_schema -- it should be picked up from the project file.
+    task = Task.new(
+        task_id="t-proj",
+        pipeline_id="pipe",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {"text": "alpha", "annotation_guidance": {"rules_path": "annotation_rules.yaml"}},
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    annotation_client = StubLLMClient(final_text='{"labels": []}', provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    assert annotation_client.requests, "annotator was not invoked"
+    prompt_obj = json.loads(annotation_client.requests[0].prompt)
+    assert prompt_obj["output_schema"] == project_schema
+    # QC prompt also carries it.
+    qc_prompt_obj = json.loads(qc_client.requests[0].prompt)
+    assert qc_prompt_obj["output_schema"] == project_schema
+
+
+def test_annotation_prompt_uses_inline_schema_when_present(tmp_path):
+    """Inline schema in source_ref must take precedence over the project file."""
+    project_schema = {"type": "object", "required": ["from_project"]}
+    inline_schema = {
+        "type": "object",
+        "required": ["labels"],
+        "properties": {"labels": {"type": "array"}},
+    }
+    store = SqliteStore.open(tmp_path)
+    (store.root / "output_schema.json").write_text(
+        json.dumps(project_schema), encoding="utf-8"
+    )
+    task = Task.new(
+        task_id="t-inline",
+        pipeline_id="pipe",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "text": "alpha",
+                "annotation_guidance": {"output_schema": inline_schema},
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    annotation_client = StubLLMClient(final_text='{"labels": []}', provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    prompt_obj = json.loads(annotation_client.requests[0].prompt)
+    assert prompt_obj["output_schema"] == inline_schema
