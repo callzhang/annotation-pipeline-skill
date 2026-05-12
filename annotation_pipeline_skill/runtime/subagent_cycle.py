@@ -202,15 +202,20 @@ class SubagentRuntime:
         )
 
     def _retry_round_count(self, task_id: str) -> int:
-        """Count how many full retry rounds have happened for this task.
+        """Count how many *open* retry rounds have happened for this task.
 
-        A round is any feedback record from QC or VALIDATION stages that
-        bounced the task back to PENDING. We count both because either kind
-        of failure indicates the annotator must redo the work.
+        A round is any QC/VALIDATION feedback that bounced the task back to
+        PENDING. Feedbacks that have already been resolved by consensus
+        (QC accepted an annotator rebuttal) are excluded — otherwise a
+        single subjective complaint that both sides agreed to drop would
+        still march the task toward HUMAN_REVIEW.
         """
+        discussions = self.store.list_feedback_discussions(task_id)
+        consensus_ids = {d.feedback_id for d in discussions if d.consensus}
         return sum(
             1 for f in self.store.list_feedback(task_id)
-            if f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION
+            if (f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION)
+            and f.feedback_id not in consensus_ids
         )
 
     async def _run_validation_and_qc(
@@ -316,6 +321,10 @@ class SubagentRuntime:
 
         task.metadata["qc_continuity_handle"] = qc_result.continuity_handle
         task.metadata.pop("runtime_next_stage", None)
+        # Honor explicit consensus from QC (e.g. accepted annotator rebuttal)
+        # even when overall QC verdict is fail — those specific feedbacks are
+        # closed by consensus and won't count toward future retry rounds.
+        self._record_explicit_consensus(task, qc_attempt_id, qc_artifact, qc_decision)
         if qc_decision["passed"]:
             self._record_feedback_resolution(task, qc_attempt_id, qc_artifact, qc_decision)
             self._transition(
@@ -383,6 +392,38 @@ class SubagentRuntime:
                         "attempt_id": qc_attempt_id,
                         "qc_artifact_id": qc_artifact.artifact_id,
                         "resolution_source": "subsequent_qc_pass",
+                    },
+                )
+            )
+
+    def _record_explicit_consensus(
+        self,
+        task: Task,
+        qc_attempt_id: str,
+        qc_artifact: ArtifactRef,
+        qc_decision: dict[str, Any],
+    ) -> None:
+        """Mark feedbacks as resolved by consensus when QC explicitly acks an annotator rebuttal."""
+        ack_ids = qc_decision.get("consensus_acknowledgements") or []
+        if not ack_ids:
+            return
+        known_feedback_ids = {f.feedback_id for f in self.store.list_feedback(task.task_id)}
+        for feedback_id in ack_ids:
+            if feedback_id not in known_feedback_ids:
+                continue
+            self.store.append_feedback_discussion(
+                FeedbackDiscussionEntry.new(
+                    task_id=task.task_id,
+                    feedback_id=feedback_id,
+                    role="qc",
+                    stance="agree",
+                    message="QC accepted annotator rebuttal; feedback closed by consensus.",
+                    consensus=True,
+                    created_by="qc-agent",
+                    metadata={
+                        "attempt_id": qc_attempt_id,
+                        "qc_artifact_id": qc_artifact.artifact_id,
+                        "resolution_source": "consensus_acknowledgement",
                     },
                 )
             )
@@ -702,17 +743,24 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "json_structures object with verbatim {text, start, end} entries. Building codes, requirements, must/shall "
         "statements are almost always constraints. Empty json_structures = {} is only acceptable when the input genuinely "
         "contains no instance of any type. "
-        "When prior QC feedback is present in feedback_bundle, you have two options for each item: "
-        "(a) silently correct the annotation in your output; "
-        "(b) if you believe the QC feedback is wrong or partly wrong, push back by including a top-level field "
-        "discussion_replies (array). Each entry must be an object with keys: "
-        "feedback_id (must match an existing feedback_id from feedback_bundle.items), "
-        "stance (one of: agree, partial_agree, disagree, proposal), message (your reasoning, required), "
-        "and optionally agreed_points (array of strings), disputed_points (array of strings), "
-        "proposed_resolution (string). You may do both: correct what is correct and dispute what is wrong. "
-        "discussion_replies is optional. Do not include it on a fresh task with no prior feedback. "
-        "Do not set consensus yourself — that is for QC to decide on the next pass. "
-        f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
+        "\n\n"
+        "HANDLING QC FEEDBACK: when feedback_bundle has prior QC complaints, choose per-item: "
+        "(a) if the complaint is correct and grounded — silently fix the annotation; "
+        "(b) if the complaint is WRONG, BORDERLINE, or based on a stretched reading — push back via "
+        "discussion_replies with stance='disagree' (or 'partial_agree' if you accept part of it). Do NOT "
+        "force a phrase into json_structures just to satisfy QC if the span is not clearly grounded; that "
+        "lowers data quality. Common cases where you SHOULD disagree: QC's complaint uses hedged language "
+        "('could be argued', 'might be considered', 'arguably', 'possibly'); QC asks for a phrase that "
+        "requires inference rather than verbatim extraction; QC's claimed span doesn't exist in the input "
+        "text. State your reasoning in message, list disputed_points, and KEEP your annotation as you "
+        "believe is correct — don't add the disputed phrase. "
+        "\n\n"
+        "discussion_replies schema: array of objects with feedback_id (must match feedback_bundle.items), "
+        "stance ('agree' | 'partial_agree' | 'disagree' | 'proposal'), message (your reasoning, required), "
+        "and optional agreed_points / disputed_points (string arrays) / proposed_resolution (string). "
+        "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself — "
+        "QC decides that. "
+        f"\n\nModality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
     if guideline:
         return f"{base}\n\n{guideline}"
@@ -752,23 +800,31 @@ def _build_qc_instructions(
     guideline: str | None = None,
 ) -> str:
     base = (
-        "You are a QC subagent. Inspect the task and latest annotation artifact. "
+        "You are a QC subagent. Inspect EVERY row of the task and the latest annotation artifact end-to-end. "
         "Return raw JSON with no markdown fences. Include a boolean field named passed. "
         "If passed is false, include message or failures. failures must be a list of objects with row_id or target, category, message, severity, and suggested_action. "
         "When feedback discussions or annotator rebuttals are present, include feedback_resolution as a list of row-level decisions with row_id, decision, and reason. "
         "Use the output_schema and annotation_guidance fields in this prompt as the quality policy when present. "
-        "json_structures recall check: for each inspected row, re-read the input text and look for "
-        "instances of all 10 phrase types (status, risk, goal, strategy, constraint, decision, task, "
-        "preference, reason, technology) as defined in annotation_guidance. If the input clearly contains "
-        "instances of one or more types and the annotation's json_structures lacks them (or has an empty {} "
-        "when phrases obviously exist — e.g., must/shall/should statements without a constraint entry), "
-        "fail QC with category='missing_phrase' and list each missing type+expected span in failures. "
-        "Building codes, requirements, and prescriptive sentences are almost always constraints. "
-        "Always duplicate technology entities into json_structures.technology. "
-        f"Apply the project-level qc_policy below to decide the QC scope for this task: {json.dumps(resolved_policy, sort_keys=True)}. "
-        "When qc_policy.mode is sample_count or sample_ratio, inspect exactly qc_policy.sample_count rows/items from this task "
-        "(or the count implied by sample_ratio * row_count when sample_count is null), "
-        "choose them deterministically from task payload order, and include sampled row ids or row indexes in the QC response. "
+        "\n\n"
+        "DETERMINISM: scan every row exactly once. Do not sample, do not pick random rows. "
+        "If you fail this task, the NEXT QC pass on the same input MUST produce the same failure list — "
+        "do not surface different missing types on different passes; that creates infinite retry loops. "
+        "\n\n"
+        "json_structures recall: for each row, scan the input text for all 10 phrase types "
+        "(status, risk, goal, strategy, constraint, decision, task, preference, reason, technology) defined "
+        "in annotation_guidance. ONLY fail with category='missing_phrase' when the missing instance is "
+        "OBVIOUS, VERBATIM-EXTRACTABLE, and UNAMBIGUOUS. Do not use the words 'could be argued', "
+        "'might be considered', 'arguably', 'possibly', 'one could see'. If you find yourself writing those "
+        "words, the phrase is too borderline to fail on — pass instead. Building codes / must / shall / "
+        "should statements are clear constraints. Always duplicate technology entities into "
+        "json_structures.technology. "
+        "\n\n"
+        "ANNOTATOR REBUTTALS: if the feedback_bundle has an annotator discussion_reply with stance='disagree' "
+        "or 'partial_agree' that defends a specific complaint, weigh it. If the annotator's defense is "
+        "reasonable (input is ambiguous on that point), record consensus by including consensus_acknowledgements "
+        "(list of feedback_ids) in your response — those feedbacks will be marked resolved by consensus. "
+        "\n\n"
+        f"qc_policy (informational): {json.dumps(resolved_policy, sort_keys=True)}. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
     if guideline:
@@ -803,6 +859,9 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
         raise QCParseError("QC response feedback_resolution must be a list when present.", raw_text=text)
     if payload["passed"] is False and not str(payload.get("message") or payload.get("summary") or "").strip() and not failures:
         raise QCParseError("Rejected QC response must include message or failures.", raw_text=text)
+    consensus_acks = payload.get("consensus_acknowledgements", [])
+    if consensus_acks is not None and not isinstance(consensus_acks, list):
+        consensus_acks = []
     return {
         "passed": bool(payload.get("passed", False)),
         "message": str(payload.get("message") or payload.get("summary") or ""),
@@ -812,6 +871,7 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
         "suggested_action": str(payload.get("suggested_action") or "annotator_rerun"),
         "failures": failures or [],
         "feedback_resolution": feedback_resolution or [],
+        "consensus_acknowledgements": [str(x) for x in consensus_acks if isinstance(x, str)],
         "raw_response": payload,
     }
 
