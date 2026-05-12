@@ -126,6 +126,7 @@ def _task_card(index: dict, task: Task) -> dict:
         row_count = int(raw_row_count) if raw_row_count is not None else None
     except (TypeError, ValueError):
         row_count = None
+    annotator_model, qc_model = _stage_models(task, attempts)
     return {
         "task_id": task.task_id,
         "status": task.status.value,
@@ -134,6 +135,8 @@ def _task_card(index: dict, task: Task) -> dict:
         "modality": task.modality,
         "annotation_types": annotation_types,
         "selected_annotator_id": task.selected_annotator_id,
+        "annotator_model": annotator_model,
+        "qc_model": qc_model,
         "status_age_seconds": int((datetime.now(timezone.utc) - task.updated_at).total_seconds()),
         "latest_attempt_status": latest_attempt.get("status") if latest_attempt else None,
         "feedback_count": feedback_count,
@@ -143,6 +146,16 @@ def _task_card(index: dict, task: Task) -> dict:
         "row_count": row_count,
         "attempt_count": int(task.current_attempt or 0),
     }
+
+
+def _stage_models(task: Task, attempts: list) -> tuple[str | None, str | None]:
+    def latest_model(stage: str) -> str | None:
+        stage_attempts = [a for a in attempts if a.get("stage") == stage and a.get("model")]
+        return str(stage_attempts[-1]["model"]) if stage_attempts else None
+
+    annotator_model = latest_model("annotation") or task.selected_annotator_id
+    qc_model = latest_model("qc")
+    return annotator_model, qc_model
 
 
 def _pipeline_chain(task: Task, attempts) -> str:

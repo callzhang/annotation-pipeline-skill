@@ -79,31 +79,37 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
 
-    Promise.all([fetchProjects(selectedStoreKey), fetchKanbanSnapshot(selectedProjectId, selectedStoreKey)])
-      .then(([projectSnapshot, nextSnapshot]) => {
+    async function refresh(showLoading: boolean) {
+      if (showLoading) setLoading(true);
+      try {
+        const [projectSnapshot, nextSnapshot] = await Promise.all([
+          fetchProjects(selectedStoreKey),
+          fetchKanbanSnapshot(selectedProjectId, selectedStoreKey),
+        ]);
         if (!active) return;
         setProjects(projectSnapshot.projects);
         setSnapshot(nextSnapshot);
         setError(null);
-        // Auto-select the only project when no explicit choice is made, so
-        // single-project workspaces don't strand users on the "Select one project" empty state.
         if (!selectedProjectId && projectSnapshot.projects.length === 1) {
           setProject(projectSnapshot.projects[0].project_id);
         }
-      })
-      .catch((reason: unknown) => {
+      } catch (reason: unknown) {
         if (!active) return;
         setError(reason instanceof Error ? reason.message : "Unable to load dashboard data");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+      } finally {
+        if (active && showLoading) setLoading(false);
+      }
+    }
+
+    refresh(true);
+    const timer = setInterval(() => refresh(false), 5000);
 
     return () => {
       active = false;
+      clearInterval(timer);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId, selectedStoreKey]);
 
   useEffect(() => {

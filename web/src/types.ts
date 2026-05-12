@@ -6,6 +6,8 @@ export interface TaskCard {
   modality: string;
   annotation_types: string[];
   selected_annotator_id: string | null;
+  annotator_model: string | null;
+  qc_model: string | null;
   status_age_seconds: number;
   latest_attempt_status: string | null;
   feedback_count: number;

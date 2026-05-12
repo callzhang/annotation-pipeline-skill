@@ -13,7 +13,7 @@ import yaml
 from annotation_pipeline_skill.core.models import AuditEvent, FeedbackDiscussionEntry, Task, utc_now
 from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
 from annotation_pipeline_skill.core.runtime import RuntimeConfig, RuntimeSnapshot
-from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+from annotation_pipeline_skill.core.schema_validation import SchemaValidationError, load_project_output_schema
 from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
 from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
@@ -91,6 +91,11 @@ class DashboardApi:
             return self._json_response(200, build_project_summaries(store))
         if route == "/api/kanban":
             return self._json_response(200, build_kanban_snapshot(store, project_id=project_id, stage_view=stage_view))
+        if route == "/api/schema":
+            schema = load_project_output_schema(store.root) if store else None
+            return self._json_response(200, {"schema": schema})
+        if route == "/api/guidelines":
+            return self._json_response(200, self._guidelines_response(store))
         if route == "/api/config":
             return self._json_response(200, {"files": self._config_files(store)})
         if route == "/api/providers":
@@ -535,6 +540,32 @@ class DashboardApi:
             return json.loads(text)
         except json.JSONDecodeError:
             return text
+
+    def _guidelines_response(self, store: SqliteStore | None) -> dict[str, Any]:
+        if store is None:
+            return {"guidelines": []}
+        # config.json lives in the project dir, one level above the store root
+        config_path = store.root.parent / "config.json"
+        if not config_path.exists():
+            return {"guidelines": []}
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {"guidelines": []}
+        annotation_rules = config.get("annotation_rules", {})
+        guidelines = []
+        for label, value in annotation_rules.items():
+            if not isinstance(value, str) or not value.endswith(".md"):
+                continue
+            path = Path(value)
+            guidelines.append({
+                "label": label,
+                "path": value,
+                "filename": path.name,
+                "exists": path.exists(),
+                "content": path.read_text(encoding="utf-8") if path.exists() else None,
+            })
+        return {"guidelines": guidelines}
 
     def _config_files(self, store: SqliteStore) -> list[dict[str, Any]]:
         files = []

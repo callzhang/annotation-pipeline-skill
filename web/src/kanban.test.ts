@@ -17,6 +17,8 @@ const snapshot: KanbanSnapshot = {
           modality: "text",
           annotation_types: ["entity_span"],
           selected_annotator_id: null,
+          annotator_model: null,
+          qc_model: null,
           status_age_seconds: 3,
           latest_attempt_status: null,
           feedback_count: 0,
@@ -41,9 +43,7 @@ describe("kanban helpers", () => {
     expect(visibleColumns(snapshot).map((column) => column.id)).toEqual(["pending", "human_review"]);
   });
 
-  it("builds a compact card subtitle from modality and annotation types", () => {
-    expect(cardSubtitle({ modality: "image", annotation_types: ["bounding_box", "segmentation"] })).toBe(
-      "image · bounding_box, segmentation",
-    );
+  it("returns modality as the card subtitle", () => {
+    expect(cardSubtitle({ modality: "image" })).toBe("image");
   });
 });

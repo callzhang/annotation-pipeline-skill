@@ -8,7 +8,6 @@ export function visibleColumns(snapshot: KanbanSnapshot): KanbanColumn[] {
   return snapshot.columns;
 }
 
-export function cardSubtitle(card: Pick<TaskCard, "modality" | "annotation_types">): string {
-  const types = card.annotation_types.length > 0 ? card.annotation_types.join(", ") : "untyped";
-  return `${card.modality} · ${types}`;
+export function cardSubtitle(card: Pick<TaskCard, "modality">): string {
+  return card.modality;
 }

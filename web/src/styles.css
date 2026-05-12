@@ -298,6 +298,24 @@ button {
   color: #6d2c12;
 }
 
+.badge.model-a {
+  background: #e8f4f1;
+  border-color: #a8d4c8;
+  color: #1a5244;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge.model-q {
+  background: #eeeaf8;
+  border-color: #c5b8ec;
+  color: #3a2466;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .task-drawer-backdrop {
   background: rgb(23 32 38 / 32%);
   bottom: 0;
@@ -337,6 +355,34 @@ button {
 .task-drawer-resize-handle:hover,
 .task-drawer-resize-handle:active {
   background: rgb(58 138 215 / 25%);
+}
+
+.drawer-tabs {
+  border-bottom: 1px solid #d7e0e5;
+  display: flex;
+  gap: 2px;
+  margin: 14px 0 0;
+}
+
+.drawer-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #52616b;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: -1px;
+  padding: 6px 14px;
+}
+
+.drawer-tab:hover {
+  color: #172026;
+}
+
+.drawer-tab.selected {
+  border-bottom-color: #2f6f73;
+  color: #2f6f73;
 }
 
 .drawer-header {
@@ -504,6 +550,33 @@ button {
   color: #2b3a42;
   font-size: 12px;
   padding: 3px 7px;
+}
+
+.guideline-section {
+  margin-bottom: 24px;
+}
+
+.guideline-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  color: #52616b;
+}
+
+.guideline-content {
+  background: #f5f8fa;
+  border: 1px solid #d7e0e5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 8px 0 0;
+  max-height: 480px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .json-block {

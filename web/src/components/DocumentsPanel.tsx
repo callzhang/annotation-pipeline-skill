@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { createDocument, createDocumentVersion, fetchDocumentDetail, fetchDocuments } from "../api";
+import { createDocument, createDocumentVersion, fetchDocumentDetail, fetchDocuments, fetchGuidelines } from "../api";
+import type { Guideline } from "../api";
 import type { AnnotationDocument, AnnotationDocumentVersion, DocumentDetail } from "../types";
 
 interface DocumentsPanelProps {
@@ -7,6 +8,7 @@ interface DocumentsPanelProps {
 }
 
 export function DocumentsPanel({ storeKey }: DocumentsPanelProps) {
+  const [guidelines, setGuidelines] = useState<Guideline[]>([]);
   const [documents, setDocuments] = useState<AnnotationDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,10 +32,11 @@ export function DocumentsPanel({ storeKey }: DocumentsPanelProps) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    fetchDocuments(storeKey)
-      .then((snap) => {
+    Promise.all([fetchDocuments(storeKey), fetchGuidelines(storeKey)])
+      .then(([docSnap, guideSnap]) => {
         if (!active) return;
-        setDocuments(snap.documents);
+        setDocuments(docSnap.documents);
+        setGuidelines(guideSnap.guidelines);
         setError(null);
       })
       .catch((reason: unknown) => {
@@ -143,7 +146,16 @@ export function DocumentsPanel({ storeKey }: DocumentsPanelProps) {
       {loading ? <div className="drawer-state">Loading documents</div> : null}
       {error ? <div className="drawer-error">{error}</div> : null}
 
-      {!loading && documents.length === 0 ? (
+      {guidelines.length > 0 ? (
+        <div className="guideline-section">
+          <h3 className="guideline-section-title">Annotation Guidelines</h3>
+          {guidelines.map((g) => (
+            <GuidelineCard key={g.label} guideline={g} />
+          ))}
+        </div>
+      ) : null}
+
+      {!loading && documents.length === 0 && guidelines.length === 0 ? (
         <p className="empty-detail">No annotation documents yet.</p>
       ) : null}
 
@@ -214,6 +226,34 @@ export function DocumentsPanel({ storeKey }: DocumentsPanelProps) {
         </div>
       ))}
     </div>
+  );
+}
+
+function GuidelineCard({ guideline }: { guideline: Guideline }) {
+  const [expanded, setExpanded] = useState(false);
+  const labelMap: Record<string, string> = {
+    primary: "Primary Guide",
+    source_overrides: "Source Overrides",
+  };
+  const title = labelMap[guideline.label] ?? guideline.label;
+  return (
+    <details
+      className="timeline-item guideline-card"
+      open={expanded}
+      onToggle={(e) => setExpanded((e.target as HTMLDetailsElement).open)}
+    >
+      <summary>
+        <span>{title}</span>
+        <small>{guideline.filename}{!guideline.exists ? " · file not found" : ""}</small>
+      </summary>
+      {expanded ? (
+        guideline.content ? (
+          <pre className="guideline-content">{guideline.content}</pre>
+        ) : (
+          <p className="empty-detail">File not found: {guideline.path}</p>
+        )
+      ) : null}
+    </details>
   );
 }
 

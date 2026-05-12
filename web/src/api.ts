@@ -322,3 +322,23 @@ export async function createDocumentVersion(
   }
   return response.json() as Promise<AnnotationDocumentVersion>;
 }
+
+export async function fetchProjectSchema(storeKey: string | null = null): Promise<{ schema: Record<string, unknown> | null }> {
+  const response = await fetch(withStore("/api/schema", storeKey));
+  if (!response.ok) throw new Error(`Schema fetch returned ${response.status}`);
+  return response.json() as Promise<{ schema: Record<string, unknown> | null }>;
+}
+
+export interface Guideline {
+  label: string;
+  path: string;
+  filename: string;
+  exists: boolean;
+  content: string | null;
+}
+
+export async function fetchGuidelines(storeKey: string | null = null): Promise<{ guidelines: Guideline[] }> {
+  const response = await fetch(withStore("/api/guidelines", storeKey));
+  if (!response.ok) throw new Error(`Guidelines fetch returned ${response.status}`);
+  return response.json() as Promise<{ guidelines: Guideline[] }>;
+}
