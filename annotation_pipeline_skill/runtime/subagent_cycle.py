@@ -184,6 +184,7 @@ class SubagentRuntime:
             ),
             annotation_artifact,
         )
+        self._record_annotator_replies(task, annotation_attempt_id, annotation_result.final_text)
 
         self._transition(
             task,
@@ -502,6 +503,8 @@ class SubagentRuntime:
                 "message": f"Annotation result is not valid JSON: {exc}",
                 "reason": "schema validation failed",
             }
+        if isinstance(payload, dict):
+            payload.pop("discussion_replies", None)
         try:
             validate_payload_against_task_schema(task, payload, store=self.store)
         except SchemaValidationError as exc:
@@ -512,6 +515,49 @@ class SubagentRuntime:
                 "target": {"errors": exc.errors},
             }
         return None
+
+    def _record_annotator_replies(self, task: Task, attempt_id: str, final_text: str) -> int:
+        try:
+            payload = json.loads(_strip_markdown_json_fence(final_text))
+        except (json.JSONDecodeError, ValueError):
+            return 0
+        if not isinstance(payload, dict):
+            return 0
+        replies = payload.get("discussion_replies")
+        if not isinstance(replies, list) or not replies:
+            return 0
+        known_feedback_ids = {f.feedback_id for f in self.store.list_feedback(task.task_id)}
+        written = 0
+        for reply in replies:
+            if not isinstance(reply, dict):
+                continue
+            fid = reply.get("feedback_id")
+            if not isinstance(fid, str) or fid not in known_feedback_ids:
+                continue
+            message = str(reply.get("message") or "").strip()
+            if not message:
+                continue
+            self.store.append_feedback_discussion(
+                FeedbackDiscussionEntry.new(
+                    task_id=task.task_id,
+                    feedback_id=fid,
+                    role="annotator",
+                    stance=str(reply.get("stance") or "comment"),
+                    message=message,
+                    agreed_points=[str(p) for p in (reply.get("agreed_points") or []) if isinstance(p, str)],
+                    disputed_points=[str(p) for p in (reply.get("disputed_points") or []) if isinstance(p, str)],
+                    proposed_resolution=(
+                        str(reply["proposed_resolution"])
+                        if isinstance(reply.get("proposed_resolution"), str)
+                        else None
+                    ),
+                    consensus=False,
+                    created_by="annotator-agent",
+                    metadata={"attempt_id": attempt_id},
+                )
+            )
+            written += 1
+        return written
 
     def _resolved_qc_policy(self, task: Task) -> dict[str, Any]:
         return _resolve_qc_policy_from_task_or_config(task, self.config)
@@ -648,6 +694,16 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "Follow the output_schema and annotation_guidance fields in this prompt (output_schema is the JSON Schema your response must conform to). Honor allowed_entity_types and rules from annotation_guidance when present. "
         "For text entity spans, copy exact contiguous text spans from task.source_ref.payload.text. "
         "Do not add entity labels outside the configured allowed entity types. "
+        "When prior QC feedback is present in feedback_bundle, you have two options for each item: "
+        "(a) silently correct the annotation in your output; "
+        "(b) if you believe the QC feedback is wrong or partly wrong, push back by including a top-level field "
+        "discussion_replies (array). Each entry must be an object with keys: "
+        "feedback_id (must match an existing feedback_id from feedback_bundle.items), "
+        "stance (one of: agree, partial_agree, disagree, proposal), message (your reasoning, required), "
+        "and optionally agreed_points (array of strings), disputed_points (array of strings), "
+        "proposed_resolution (string). You may do both: correct what is correct and dispute what is wrong. "
+        "discussion_replies is optional. Do not include it on a fresh task with no prior feedback. "
+        "Do not set consensus yourself — that is for QC to decide on the next pass. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
     if guideline:

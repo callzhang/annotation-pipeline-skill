@@ -18,7 +18,6 @@ interface TaskDrawerProps {
   loading: boolean;
   saving: boolean;
   error: string | null;
-  onSubmitFeedbackDiscussion: (payload: Record<string, unknown>) => Promise<void>;
   onSubmitHumanReviewDecision: (payload: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }
@@ -29,7 +28,6 @@ export function TaskDrawer({
   loading,
   saving,
   error,
-  onSubmitFeedbackDiscussion,
   onSubmitHumanReviewDecision,
   onClose,
 }: TaskDrawerProps) {
@@ -226,8 +224,6 @@ export function TaskDrawer({
                           discussions={detail.feedback_discussions.filter(
                             (entry) => entry.feedback_id === item.feedback_id,
                           )}
-                          saving={saving}
-                          onSubmit={onSubmitFeedbackDiscussion}
                         />
                       ))}
                     </>
@@ -431,33 +427,18 @@ function ConsensusSummary({ detail }: { detail: TaskDetail }) {
 function FeedbackAgreementCard({
   feedback,
   discussions,
-  saving,
-  onSubmit,
 }: {
   feedback: Record<string, unknown>;
   discussions: Array<Record<string, unknown>>;
-  saving: boolean;
-  onSubmit: (payload: Record<string, unknown>) => Promise<void>;
 }) {
-  const [role, setRole] = useState("annotator");
-  const [stance, setStance] = useState("partial_agree");
-  const [message, setMessage] = useState("");
-  const [consensus, setConsensus] = useState(false);
   const consensusReached = useMemo(() => discussions.some((entry) => entry.consensus === true), [discussions]);
 
   const sourceLabel = SOURCE_LABELS[String(feedback.source_stage ?? "")] ?? "QC Agent";
   const severityClass = String(feedback.severity) === "critical" ? "severity-critical"
     : String(feedback.severity) === "warning" ? "severity-warning" : "severity-info";
 
-  async function submit() {
-    await onSubmit({ feedback_id: feedback.feedback_id, role, stance, message, consensus, created_by: role });
-    setMessage("");
-    setConsensus(false);
-  }
-
   return (
     <div className="feedback-card">
-      {/* Feedback issued by QC/system */}
       <div className="feedback-issue">
         <div className="feedback-issue-meta">
           <span className="feedback-from">{sourceLabel}</span>
@@ -470,9 +451,8 @@ function FeedbackAgreementCard({
         <p className="feedback-message">{String(feedback.message)}</p>
       </div>
 
-      {/* Discussion thread */}
       {discussions.length === 0 ? (
-        <p className="discussion-empty">No responses yet — use the form below to reply.</p>
+        <p className="discussion-empty">No responses yet.</p>
       ) : (
         <div className="discussion-thread">
           {discussions.map((entry) => (
@@ -489,44 +469,6 @@ function FeedbackAgreementCard({
           ))}
         </div>
       )}
-
-      {/* Reply form */}
-      {!consensusReached ? (
-        <div className="discussion-reply-form">
-          <p className="reply-form-label">Post a reply</p>
-          <div className="reply-form-selectors">
-            <label>
-              <span>Replying as</span>
-              <select value={role} onChange={(e) => setRole(e.target.value)}>
-                <option value="annotator">Annotator</option>
-                <option value="qc">QC Reviewer</option>
-                <option value="coordinator">Coordinator</option>
-              </select>
-            </label>
-            <label>
-              <span>Stance on this feedback</span>
-              <select value={stance} onChange={(e) => setStance(e.target.value)}>
-                <option value="agree">Agree — accept the feedback</option>
-                <option value="partial_agree">Partially agree</option>
-                <option value="disagree">Disagree — reject the feedback</option>
-                <option value="proposal">Proposal — suggest an alternative</option>
-              </select>
-            </label>
-          </div>
-          <textarea
-            placeholder="Write your response, correction, or justification here…"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-          />
-          <label className="checkbox-row">
-            <input checked={consensus} type="checkbox" onChange={(e) => setConsensus(e.target.checked)} />
-            Mark as final — annotator and QC reviewer have reached agreement on this item
-          </label>
-          <button className="primary-button" type="button" disabled={saving || !message.trim()} onClick={submit}>
-            {saving ? "Posting…" : "Post reply"}
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -969,3 +969,109 @@ def test_runtime_legacy_task_qc_policy_overrides_project_config(tmp_path):
     assert '"sample_ratio": 0.25' in instructions
     assert '"mode": "sample_ratio"' in instructions
     assert '"sample_count": 9' not in instructions
+
+
+def test_annotator_discussion_replies_are_recorded_and_stripped_from_schema(tmp_path):
+    """Annotator may push back on prior QC feedback via top-level discussion_replies.
+
+    The replies must be persisted as FeedbackDiscussion rows (role='annotator')
+    and must NOT cause schema validation to fail even when the output schema
+    has additionalProperties: false at the top level.
+    """
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["entities"],
+        "properties": {"entities": {"type": "array"}},
+    }
+    task = Task.new(
+        task_id="t-reply",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {"text": "Acme is a company", "annotation_guidance": {"output_schema": schema}},
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    prior = FeedbackRecord.new(
+        task_id="t-reply",
+        attempt_id="t-reply-attempt-prior",
+        source_stage=FeedbackSource.QC,
+        severity=FeedbackSeverity.WARNING,
+        category="missing_entity",
+        message="Missing entity 'Acme'.",
+        target={},
+        suggested_action="add_entity",
+        created_by="qc-agent",
+    )
+    store.append_feedback(prior)
+
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {
+                "feedback_id": prior.feedback_id,
+                "stance": "disagree",
+                "message": "Acme is part of a different document; not in this row.",
+                "disputed_points": ["entity scope"],
+                "proposed_resolution": "Keep current annotation.",
+            }
+        ],
+    }
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true, "summary": "ok"}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    discussions = store.list_feedback_discussions("t-reply")
+    annotator_replies = [d for d in discussions if d.role == "annotator"]
+    assert len(annotator_replies) == 1
+    reply = annotator_replies[0]
+    assert reply.feedback_id == prior.feedback_id
+    assert reply.stance == "disagree"
+    assert reply.disputed_points == ["entity scope"]
+    assert reply.consensus is False
+    assert reply.created_by == "annotator-agent"
+    # Task reached ACCEPTED — schema validation did not trip on discussion_replies.
+    assert store.load_task("t-reply").status is TaskStatus.ACCEPTED
+
+
+def test_annotator_discussion_reply_for_unknown_feedback_id_is_ignored(tmp_path):
+    """Bogus or stale feedback_ids in discussion_replies must not crash and must not be persisted."""
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-bogus",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "x"}},  # no schema → annotation passes through
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": "feedback-does-not-exist", "stance": "agree", "message": "ack"},
+            {"feedback_id": "another-ghost", "stance": "disagree"},  # missing message → skipped
+        ],
+    }
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    assert store.list_feedback_discussions("t-bogus") == []
+    assert store.load_task("t-bogus").status is TaskStatus.ACCEPTED

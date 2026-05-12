@@ -4,7 +4,6 @@ import {
   fetchProjects,
   fetchStores,
   fetchTaskDetail,
-  postFeedbackDiscussion,
   postHumanReviewDecision,
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
@@ -152,21 +151,6 @@ export default function App() {
     setTask(null);
   }
 
-  async function submitFeedbackDiscussion(payload: Record<string, unknown>) {
-    if (!selectedTaskId) return;
-    setDetailSaving(true);
-    setDetailError(null);
-    try {
-      const detail = await postFeedbackDiscussion(selectedTaskId, payload, selectedStoreKey);
-      setSelectedDetail(detail);
-      setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
-    } catch (reason: unknown) {
-      setDetailError(reason instanceof Error ? reason.message : "Unable to save feedback discussion");
-    } finally {
-      setDetailSaving(false);
-    }
-  }
-
   async function submitHumanReviewDecision(payload: Record<string, unknown>) {
     if (!selectedTaskId) return;
     setDetailSaving(true);
@@ -288,7 +272,6 @@ export default function App() {
         loading={detailLoading}
         saving={detailSaving}
         error={detailError}
-        onSubmitFeedbackDiscussion={submitFeedbackDiscussion}
         onSubmitHumanReviewDecision={submitHumanReviewDecision}
         onClose={() => setTask(null)}
       />
