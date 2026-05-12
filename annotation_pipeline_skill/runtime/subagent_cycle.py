@@ -443,7 +443,13 @@ class SubagentRuntime:
         self.store.append_artifact(artifact)
 
     def _next_attempt_id(self, task: Task) -> str:
-        return f"{task.task_id}-attempt-{task.current_attempt + 1}"
+        # Derive from MAX(idx) of already-persisted attempts rather than
+        # task.current_attempt: the latter can be reset to 0 by an import
+        # UPSERT, which would otherwise produce a colliding attempt-1 and
+        # blow up on the attempts.attempt_id UNIQUE constraint.
+        existing = self.store.list_attempts(task.task_id)
+        max_idx = max((a.index for a in existing), default=0)
+        return f"{task.task_id}-attempt-{max_idx + 1}"
 
     def _record_validation_feedback(
         self,

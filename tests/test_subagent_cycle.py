@@ -870,3 +870,44 @@ def test_annotation_prompt_uses_inline_schema_when_present(tmp_path):
 
     prompt_obj = json.loads(annotation_client.requests[0].prompt)
     assert prompt_obj["output_schema"] == inline_schema
+
+
+def test_next_attempt_id_uses_max_existing_index_not_current_attempt(tmp_path):
+    """Regression for the import-overwrite scenario: handle_import_jsonl_prelabeled
+    used to UPSERT a task with current_attempt=0 while leaving stale child rows
+    in `attempts`. _next_attempt_id then formatted f"...-attempt-1", colliding
+    with the leftover attempt-1 and tripping the UNIQUE constraint.
+
+    Derive the next id from MAX(attempts.idx)+1 so we are robust to a
+    desynchronized current_attempt counter.
+    """
+    from annotation_pipeline_skill.core.models import Attempt
+    from annotation_pipeline_skill.core.states import AttemptStatus
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="task-resync",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "x"}},
+    )
+    # Simulate post-UPSERT state: parent says current_attempt=0, but
+    # stale attempts at indices 1 and 2 remain in the children table.
+    task.current_attempt = 0
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    store.append_attempt(
+        Attempt(attempt_id="task-resync-attempt-1", task_id="task-resync",
+                index=1, stage="annotation", status=AttemptStatus.SUCCEEDED)
+    )
+    store.append_attempt(
+        Attempt(attempt_id="task-resync-attempt-2", task_id="task-resync",
+                index=2, stage="annotation", status=AttemptStatus.SUCCEEDED)
+    )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: StubLLMClient())
+
+    next_id = runtime._next_attempt_id(task)
+    assert next_id == "task-resync-attempt-3", (
+        f"expected attempt-3 (MAX(idx)+1), got {next_id!r}; "
+        "_next_attempt_id must not trust task.current_attempt after an import reset"
+    )
