@@ -514,10 +514,25 @@ class SubagentRuntime:
             sort_keys=True,
         )
 
-    def _artifact_context(self, task_id: str) -> list[dict[str, Any]]:
+    def _artifact_context(
+        self, task_id: str, *, per_kind_limit: int = 3
+    ) -> list[dict[str, Any]]:
+        """Return artifacts grouped by kind, keeping only the most recent N per kind.
+
+        Prevents the annotator prompt from growing unbounded when a task loops
+        through repeated annotation/QC retries (the 73-attempt case we hit in
+        production blew past the LLM context window).
+        """
+        by_kind: dict[str, list[ArtifactRef]] = {}
+        for artifact in self.store.list_artifacts(task_id):
+            by_kind.setdefault(artifact.kind, []).append(artifact)
+        selected: list[ArtifactRef] = []
+        for arts in by_kind.values():
+            # Artifacts are returned in insertion (seq) order — keep tail N
+            selected.extend(arts[-per_kind_limit:])
         return [
             {**artifact.to_dict(), "payload": self._read_artifact_payload(artifact)}
-            for artifact in self.store.list_artifacts(task_id)
+            for artifact in selected
         ]
 
     def _read_artifact_payload(self, artifact: ArtifactRef) -> Any:

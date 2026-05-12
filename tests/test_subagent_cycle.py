@@ -746,3 +746,50 @@ def test_prelabeled_task_fails_schema_validation_on_existing_artifact(tmp_path):
     assert qc_called["count"] == 0
     feedbacks = store.list_feedback("pre-3")
     assert any(f.category == "schema_invalid" for f in feedbacks), f"got {[f.category for f in feedbacks]}"
+
+
+def test_prior_artifacts_capped_per_kind(tmp_path):
+    """Verify _artifact_context returns at most N artifacts per kind to bound prompt growth."""
+    from annotation_pipeline_skill.core.models import ArtifactRef
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="task-cap", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    # Write 5 annotation_result + 5 qc_result artifacts (10 total).
+    for i in range(5):
+        for kind in ("annotation_result", "qc_result"):
+            rel_path = f"artifact_payloads/task-cap/attempt-{i}-{kind}.json"
+            full_path = store.root / rel_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(
+                json.dumps({"kind": kind, "index": i}, sort_keys=True),
+                encoding="utf-8",
+            )
+            store.append_artifact(
+                ArtifactRef.new(
+                    task_id="task-cap",
+                    kind=kind,
+                    path=rel_path,
+                    content_type="application/json",
+                    metadata={"index": i},
+                )
+            )
+
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: StubLLMClient(),
+    )
+    artifacts = runtime._artifact_context("task-cap", per_kind_limit=3)
+
+    # Expect exactly 6: the last 3 of each kind.
+    assert len(artifacts) == 6
+    by_kind: dict[str, list] = {}
+    for entry in artifacts:
+        by_kind.setdefault(entry["kind"], []).append(entry)
+    assert len(by_kind["annotation_result"]) == 3
+    assert len(by_kind["qc_result"]) == 3
+    # Verify the most-recent indexes are retained (2, 3, 4 — last 3).
+    assert [a["payload"]["index"] for a in by_kind["annotation_result"]] == [2, 3, 4]
+    assert [a["payload"]["index"] for a in by_kind["qc_result"]] == [2, 3, 4]

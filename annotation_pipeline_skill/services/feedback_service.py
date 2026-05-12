@@ -1,8 +1,10 @@
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
-def build_feedback_bundle(store: SqliteStore, task_id: str) -> dict:
+def build_feedback_bundle(store: SqliteStore, task_id: str, *, limit: int = 6) -> dict:
     records = sorted(store.list_feedback(task_id), key=lambda record: record.created_at)
+    # Keep only the most-recent N records to bound prompt growth across retries.
+    records = records[-limit:]
     discussions = sorted(store.list_feedback_discussions(task_id), key=lambda entry: entry.created_at)
     return {
         "task_id": task_id,
