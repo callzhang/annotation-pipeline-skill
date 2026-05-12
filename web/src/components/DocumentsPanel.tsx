@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { marked } from "marked";
 import { createDocument, createDocumentVersion, fetchDocumentDetail, fetchDocuments, fetchGuidelines } from "../api";
 import type { Guideline } from "../api";
 import type { AnnotationDocument, AnnotationDocumentVersion, DocumentDetail } from "../types";
@@ -236,6 +237,10 @@ function GuidelineCard({ guideline }: { guideline: Guideline }) {
     source_overrides: "Source Overrides",
   };
   const title = labelMap[guideline.label] ?? guideline.label;
+  const html = useMemo(
+    () => (guideline.content ? (marked.parse(guideline.content) as string) : null),
+    [guideline.content],
+  );
   return (
     <details
       className="timeline-item guideline-card"
@@ -247,8 +252,8 @@ function GuidelineCard({ guideline }: { guideline: Guideline }) {
         <small>{guideline.filename}{!guideline.exists ? " · file not found" : ""}</small>
       </summary>
       {expanded ? (
-        guideline.content ? (
-          <pre className="guideline-content">{guideline.content}</pre>
+        html ? (
+          <div className="guideline-content markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <p className="empty-detail">File not found: {guideline.path}</p>
         )

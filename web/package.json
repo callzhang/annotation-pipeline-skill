@@ -10,7 +10,9 @@
     "verify:memory-ner-ui": "node tests/memory-ner-ui-acceptance.mjs"
   },
   "dependencies": {
+    "@types/marked": "^5.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "marked": "^18.0.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.8.0",
