@@ -1173,3 +1173,82 @@ def test_both_low_confidence_escalates_to_human_review_early(tmp_path):
     loaded = store.load_task("t-uncertain")
     assert loaded.status is TaskStatus.HUMAN_REVIEW
     assert fb.feedback_id in loaded.metadata.get("low_confidence_feedback_ids", [])
+
+
+def test_both_high_confidence_stalemate_also_escalates_early(tmp_path):
+    """When QC and annotator are BOTH highly confident (>=0.85) but disagree,
+    more retries won't help — escalate to HR immediately."""
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-stalemate",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    fb = FeedbackRecord.new(
+        task_id="t-stalemate",
+        attempt_id="t-stalemate-attempt-prior",
+        source_stage=FeedbackSource.QC,
+        severity=FeedbackSeverity.WARNING,
+        category="missing_phrase",
+        message="Definitely missing.",
+        target={},
+        suggested_action="annotator_rerun",
+        created_by="qc-agent",
+        metadata={"confidence": 0.95},
+    )
+    store.append_feedback(fb)
+
+    # annotator equally sure QC is wrong, gap < 0.1 so no auto-consensus.
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": fb.feedback_id, "confidence": 0.92, "message": "Span isn't in the text."}
+        ],
+    }
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    loaded = store.load_task("t-stalemate")
+    assert loaded.status is TaskStatus.HUMAN_REVIEW
+    assert loaded.metadata.get("early_hr_reason") == "high_confidence_stalemate"
+    assert fb.feedback_id in loaded.metadata.get("low_confidence_feedback_ids", [])
+
+
+def test_confidence_normalization_uses_per_role_history(tmp_path):
+    """When each role has a stable scale (QC outputs 0.85-0.99, annotator
+    outputs 0.7-0.95), normalization re-maps both to [0,1] so the comparison
+    isn't dominated by one role's habitual range."""
+    store = SqliteStore.open(tmp_path)
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda _t: StubLLMClient(),
+    )
+
+    # Below the min-samples threshold: raw value is returned unchanged.
+    assert runtime._normalize_confidence("qc", 0.9) == 0.9
+
+    for v in [0.85, 0.88, 0.90, 0.92, 0.95, 0.97, 0.99, 0.86, 0.93, 0.96]:
+        runtime._record_confidence_sample("qc", v)
+    for v in [0.70, 0.75, 0.80, 0.85, 0.90, 0.78, 0.82, 0.88, 0.74, 0.92]:
+        runtime._record_confidence_sample("annotator", v)
+
+    # 0.99 is the top of QC's range → 1.0 normalized; 0.85 is the bottom → 0.0.
+    assert runtime._normalize_confidence("qc", 0.99) == 1.0
+    assert runtime._normalize_confidence("qc", 0.85) == 0.0
+    # 0.92 is the top of annotator's range → 1.0 normalized.
+    assert runtime._normalize_confidence("annotator", 0.92) == 1.0
+    assert runtime._normalize_confidence("annotator", 0.70) == 0.0
+    # An out-of-window value is clamped.
+    assert runtime._normalize_confidence("annotator", 1.0) == 1.0
+    assert runtime._normalize_confidence("annotator", 0.0) == 0.0

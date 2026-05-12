@@ -53,6 +53,15 @@ class SubagentRuntime:
         self.max_qc_rounds = (
             max_qc_rounds if max_qc_rounds is not None else self.config.max_qc_rounds
         )
+        # Rolling per-role confidence history used to normalize raw model
+        # output. LLMs are systematically miscalibrated (QC tends to output
+        # 0.85-0.99; annotator the same), so the literal numbers don't
+        # compare. Tracking each role's recent min/max and re-scaling lets us
+        # treat 0.85 as "low for this role" or "high for this role" depending
+        # on the speaker's habits.
+        self._confidence_history: dict[str, list[float]] = {"qc": [], "annotator": []}
+        self._confidence_window = 200
+        self._confidence_min_samples = 10
 
     def run_once(self, stage_target: str = "annotation", limit: int | None = None) -> SubagentRuntimeResult:
         pending_tasks = self.store.list_tasks_by_status({TaskStatus.PENDING})
@@ -191,13 +200,22 @@ class SubagentRuntime:
         # rounds. _record_annotator_replies sets the flag.
         if task.metadata.pop("needs_early_hr_low_confidence", False):
             low_ids = task.metadata.get("low_confidence_feedback_ids", [])
+            reason_key = task.metadata.get("early_hr_reason", "low_confidence")
+            reason_msg = {
+                "low_confidence": "escalated: QC and annotator both have low confidence (<0.5) on disputed feedback",
+                "high_confidence_stalemate": "escalated: QC and annotator both highly confident (>=0.85) and disagreeing — semantic stalemate",
+            }.get(reason_key, "escalated: confidence-based dispute resolution selected human review")
             self._transition(
                 task,
                 TaskStatus.HUMAN_REVIEW,
-                reason="escalated: QC and annotator both have low confidence on disputed feedback",
+                reason=reason_msg,
                 stage="annotation",
                 attempt_id=annotation_attempt_id,
-                metadata={"low_confidence_feedback_ids": low_ids},
+                metadata={
+                    "low_confidence_feedback_ids": low_ids,
+                    "early_hr_reason": reason_key,
+                    "early_hr_confidence": task.metadata.get("early_hr_confidence", {}),
+                },
             )
             return
 
@@ -353,6 +371,9 @@ class SubagentRuntime:
         else:
             feedback = _feedback_from_qc_decision(task, qc_attempt_id, qc_decision)
             self.store.append_feedback(feedback)
+            qc_conf = _clamp_confidence(feedback.metadata.get("confidence"))
+            if qc_conf is not None:
+                self._record_confidence_sample("qc", qc_conf)
             round_count = self._retry_round_count(task.task_id)
             if round_count >= self.max_qc_rounds:
                 self._transition(
@@ -623,11 +644,17 @@ class SubagentRuntime:
             # dispute the data already settles.
             if ann_conf is None:
                 continue
+            self._record_confidence_sample("annotator", ann_conf)
             qc_feedback = feedback_index[fid]
             qc_conf = _clamp_confidence(qc_feedback.metadata.get("confidence"))
             if qc_conf is None:
                 continue
-            if ann_conf >= qc_conf + 0.1:
+            # Normalize both sides against each role's own recent range, so a
+            # uniformly-overconfident QC doesn't drown out a relatively-bolder
+            # annotator (and vice versa).
+            ann_norm = self._normalize_confidence("annotator", ann_conf)
+            qc_norm = self._normalize_confidence("qc", qc_conf)
+            if ann_norm >= qc_norm + 0.1:
                 self.store.append_feedback_discussion(
                     FeedbackDiscussionEntry.new(
                         task_id=task.task_id,
@@ -635,8 +662,9 @@ class SubagentRuntime:
                         role="qc",
                         stance="agree",
                         message=(
-                            f"Auto-consensus: annotator confidence {ann_conf:.2f} > "
-                            f"QC original confidence {qc_conf:.2f}."
+                            f"Auto-consensus: annotator confidence {ann_conf:.2f} "
+                            f"(normalized {ann_norm:.2f}) > QC {qc_conf:.2f} "
+                            f"(normalized {qc_norm:.2f})."
                         ),
                         consensus=True,
                         created_by="confidence-auto-resolver",
@@ -645,16 +673,52 @@ class SubagentRuntime:
                             "resolution_source": "confidence_auto",
                             "annotator_confidence": ann_conf,
                             "qc_confidence": qc_conf,
+                            "annotator_confidence_normalized": ann_norm,
+                            "qc_confidence_normalized": qc_norm,
                         },
                     )
                 )
-            elif max(ann_conf, qc_conf) < 0.5:
-                # Both sides are uncertain — this is the human-review case.
-                task.metadata["needs_early_hr_low_confidence"] = True
-                task.metadata["low_confidence_feedback_ids"] = (
-                    task.metadata.get("low_confidence_feedback_ids", []) + [fid]
-                )
+            elif max(ann_norm, qc_norm) < 0.5:
+                # Both sides are uncertain (on each role's own scale) — punt to human.
+                self._mark_early_hr(task, fid, "low_confidence", ann_conf, qc_conf)
+            elif min(ann_norm, qc_norm) >= 0.85:
+                # Both sides are at the high end of their own scale and disagree —
+                # genuine semantic stalemate, more retries won't resolve it.
+                self._mark_early_hr(task, fid, "high_confidence_stalemate", ann_conf, qc_conf)
         return written
+
+    def _record_confidence_sample(self, role: str, value: float) -> None:
+        history = self._confidence_history.setdefault(role, [])
+        history.append(value)
+        if len(history) > self._confidence_window:
+            del history[: len(history) - self._confidence_window]
+
+    def _normalize_confidence(self, role: str, value: float) -> float:
+        history = self._confidence_history.get(role, [])
+        if len(history) < self._confidence_min_samples:
+            return value
+        lo, hi = min(history), max(history)
+        if hi <= lo:
+            return value
+        return max(0.0, min(1.0, (value - lo) / (hi - lo)))
+
+    def _mark_early_hr(
+        self,
+        task: Task,
+        feedback_id: str,
+        reason: str,
+        annotator_confidence: float,
+        qc_confidence: float,
+    ) -> None:
+        task.metadata["needs_early_hr_low_confidence"] = True
+        task.metadata.setdefault("early_hr_reason", reason)
+        ids = list(task.metadata.get("low_confidence_feedback_ids", []))
+        if feedback_id not in ids:
+            ids.append(feedback_id)
+        task.metadata["low_confidence_feedback_ids"] = ids
+        confs = dict(task.metadata.get("early_hr_confidence", {}))
+        confs[feedback_id] = {"annotator": annotator_confidence, "qc": qc_confidence}
+        task.metadata["early_hr_confidence"] = confs
 
     def _resolved_qc_policy(self, task: Task) -> dict[str, Any]:
         return _resolve_qc_policy_from_task_or_config(task, self.config)
@@ -810,13 +874,15 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "\n\n"
         "discussion_replies schema (each entry):\n"
         "  feedback_id: str (must match feedback_bundle.items)\n"
-        "  confidence:  float 0.0-1.0, REQUIRED — your certainty that QC is WRONG on this item. "
-        "1.0 = absolutely sure QC is wrong; 0.0 = QC is correct, I agree. Use the middle range (0.4-0.6) "
-        "honestly when you're genuinely uncertain.\n"
+        "  confidence:  float 0.0-1.0, REQUIRED — your certainty that QC is WRONG on this item. USE THE "
+        "FULL RANGE: 0.95-1.00 only when QC's claimed span is provably not in the input or QC asks for "
+        "something the input cannot support; 0.75-0.90 when you have a strong case but QC has any "
+        "leg to stand on; 0.55-0.70 for judgment-call disagreements; 0.35-0.50 when you're leaning "
+        "'QC is wrong' but unsure. If you default everything to 0.9+, you are miscalibrated.\n"
         "  message:     str, REQUIRED, your reasoning\n"
         "  disputed_points: list[str], optional\n"
         "  proposed_resolution: str, optional\n"
-        "  stance:      str, optional — only for human readability. Confidence is the decision signal.\n"
+        "  stance:      str, optional — for human readability only. Confidence is the decision signal.\n"
         "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself."
         f"\n\nModality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
@@ -873,10 +939,15 @@ def _build_qc_instructions(
         "in annotation_guidance. Building codes / must / shall / should statements are clear constraints. "
         "Always duplicate technology entities into json_structures.technology. "
         "\n\n"
-        "CONFIDENCE: every entry in failures MUST include a numeric confidence field (0.0-1.0) — your "
-        "certainty that this is a real defect that the annotator must fix. Use 0.9+ only when the input text "
-        "verbatim and obviously contains the missing/wrong content. Use 0.5-0.7 when it's plausible but "
-        "borderline. Use < 0.5 when you're genuinely unsure (don't manufacture failures you can't defend). "
+        "CONFIDENCE (CALIBRATED): every entry in failures MUST include a numeric confidence field (0.0-1.0). "
+        "USE THE FULL RANGE — do not default everything to 0.9+. Calibration guide: "
+        "0.95-1.00 only when you can quote the exact verbatim span from input text that the annotation "
+        "missed or got factually wrong. "
+        "0.75-0.90 when the defect is strong but requires reading more than one sentence to confirm. "
+        "0.55-0.70 when this is a judgment call you'd defend but a reasonable reviewer could disagree. "
+        "0.35-0.50 when you're leaning toward 'defect' but it's borderline. "
+        "<0.35 when you're really unsure — at that point, just pass instead of flagging. "
+        "If most of your failures end up at 0.9+, you are MISCALIBRATED. Stop and re-score honestly. "
         "\n\n"
         "ANNOTATOR REBUTTALS: if feedback_bundle items carry annotator discussion_replies, each reply has "
         "a confidence value (annotator's certainty that you were wrong). For every such item, compare "
