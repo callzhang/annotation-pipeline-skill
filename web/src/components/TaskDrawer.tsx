@@ -8,6 +8,7 @@ import {
   saveDrawerWidth,
 } from "../drawer_state";
 import { JsonViewer } from "./JsonViewer";
+import { PerRowView } from "./PerRowView";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
 import type { ReactNode } from "react";
 
@@ -145,8 +146,14 @@ export function TaskDrawer({
 
       {detail ? (
         <div className="detail-sections">
+          <PerRowView sourceRef={detail.task.source_ref} artifacts={detail.artifacts} />
+
           <DetailSection title="Raw Source">
             <JsonViewer value={detail.task.source_ref} />
+          </DetailSection>
+
+          <DetailSection title="Schema">
+            <JsonViewer value={detail.task.annotation_requirements} />
           </DetailSection>
 
           {detail.task.metadata.qc_policy ? (

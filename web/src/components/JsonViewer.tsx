@@ -44,7 +44,7 @@ interface Token {
   text: string;
 }
 
-function tokenize(value: unknown, indent = 0): Token[] {
+export function tokenize(value: unknown, indent = 0): Token[] {
   const tokens: Token[] = [];
   const pad = (n: number) => "  ".repeat(n);
 
@@ -108,7 +108,7 @@ function tokenize(value: unknown, indent = 0): Token[] {
   return tokens;
 }
 
-function tokensToString(tokens: Token[]): string {
+export function tokensToString(tokens: Token[]): string {
   return tokens.map((t) => t.text).join("");
 }
 
@@ -215,7 +215,7 @@ interface JsonPopupProps {
   onClose: () => void;
 }
 
-function JsonPopup({ tokens, fullText, onClose }: JsonPopupProps) {
+export function JsonPopup({ tokens, fullText, onClose }: JsonPopupProps) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
