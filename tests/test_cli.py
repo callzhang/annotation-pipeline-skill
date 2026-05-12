@@ -1521,3 +1521,37 @@ def test_cli_pipeline_delete_nonexistent_returns_1(tmp_path, capsys):
     assert rc == 1
     payload = json.loads(out)
     assert payload == {"error": "pipeline_not_found", "pipeline_id": "does-not-exist"}
+
+
+def test_cli_import_does_not_inject_qc_policy_into_task_metadata(tmp_path):
+    """After the QC-config lift, ``apl import jsonl-prelabeled`` must NOT write
+    per-task ``metadata.qc_policy`` — the policy now lives at project level in
+    workflow.yaml > runtime.qc_*. (Legacy tasks may still carry it; new ones
+    must not.)"""
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=4)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    main(
+        [
+            "import",
+            "jsonl-prelabeled",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            str(source),
+            "--pipeline-id",
+            "v3_no_qc",
+            "--batch-size",
+            "10",
+            "--output-schema-file",
+            str(schema_file),
+        ]
+    )
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    task = store.load_task("v3_no_qc-000000")
+    assert "qc_policy" not in task.metadata, (
+        f"task.metadata still carries qc_policy={task.metadata.get('qc_policy')!r}; "
+        "the QC policy must come from project workflow.yaml, not per-task injection"
+    )

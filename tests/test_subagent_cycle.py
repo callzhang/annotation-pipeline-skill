@@ -911,3 +911,61 @@ def test_next_attempt_id_uses_max_existing_index_not_current_attempt(tmp_path):
         f"expected attempt-3 (MAX(idx)+1), got {next_id!r}; "
         "_next_attempt_id must not trust task.current_attempt after an import reset"
     )
+
+
+def test_runtime_uses_project_qc_policy_when_task_lacks_one(tmp_path):
+    """When a task carries no ``metadata.qc_policy``, the QC prompt must be built
+    from the project-level RuntimeConfig.qc_sample_* fields."""
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="task-1",
+        pipeline_id="pipe",
+        source_ref={"kind": "jsonl", "payload": {"rows": [{"text": "a"}, {"text": "b"}, {"text": "c"}]}},
+        metadata={},  # NO qc_policy on the task itself
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    annotation_client = StubLLMClient(final_text='{"labels":[]}', provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+        config=RuntimeConfig(qc_sample_mode="sample_count", qc_sample_count=3, qc_sample_ratio=1.0),
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    instructions = qc_client.requests[0].instructions
+    assert "qc_policy" in instructions
+    assert "sample_count" in instructions
+    assert '"sample_count": 3' in instructions
+    assert '"mode": "sample_count"' in instructions
+
+
+def test_runtime_legacy_task_qc_policy_overrides_project_config(tmp_path):
+    """A legacy task whose ``metadata.qc_policy`` is already populated must
+    keep its per-task override (so the running 100-task import doesn't break)."""
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="legacy",
+        pipeline_id="pipe",
+        source_ref={"kind": "jsonl", "payload": {"rows": [{"text": "x"}]}},
+        metadata={"qc_policy": {"mode": "sample_ratio", "sample_ratio": 0.25}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    annotation_client = StubLLMClient(final_text='{"labels":[]}', provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+        config=RuntimeConfig(qc_sample_mode="sample_count", qc_sample_count=9),
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    instructions = qc_client.requests[0].instructions
+    # Per-task legacy override wins over the project default.
+    assert '"sample_ratio": 0.25' in instructions
+    assert '"mode": "sample_ratio"' in instructions
+    assert '"sample_count": 9' not in instructions

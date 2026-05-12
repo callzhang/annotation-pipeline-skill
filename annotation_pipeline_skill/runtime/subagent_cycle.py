@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task, utc_now
+from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.schema_validation import (
     SchemaValidationError,
     resolve_output_schema,
@@ -38,11 +39,20 @@ class SubagentRuntime:
         store: SqliteStore,
         client_factory: Callable[[str], LLMClient],
         *,
-        max_qc_rounds: int = 3,
+        max_qc_rounds: int | None = None,
+        config: RuntimeConfig | None = None,
     ):
         self.store = store
         self.client_factory = client_factory
-        self.max_qc_rounds = max_qc_rounds
+        # ``config`` carries the project-level QC sampling policy and the
+        # max-rounds setting. When omitted (callers that predate the lift, or
+        # tests that only care about the per-task flow), fall back to defaults.
+        self.config = config or RuntimeConfig()
+        # Explicit ``max_qc_rounds`` still wins for backward compat with the
+        # local scheduler kwarg that already passed it directly.
+        self.max_qc_rounds = (
+            max_qc_rounds if max_qc_rounds is not None else self.config.max_qc_rounds
+        )
 
     def run_once(self, stage_target: str = "annotation", limit: int | None = None) -> SubagentRuntimeResult:
         pending_tasks = self.store.list_tasks_by_status({TaskStatus.PENDING})
@@ -265,7 +275,7 @@ class SubagentRuntime:
         qc_result = await self._generate_async(
             "qc",
             LLMGenerateRequest(
-                instructions=_qc_instructions(task, guideline=guideline),
+                instructions=self._qc_instructions(task, guideline=guideline),
                 prompt=self._qc_prompt(task, annotation_artifact),
                 continuity_handle=task.metadata.get("qc_continuity_handle"),
             ),
@@ -503,6 +513,16 @@ class SubagentRuntime:
             }
         return None
 
+    def _resolved_qc_policy(self, task: Task) -> dict[str, Any]:
+        return _resolve_qc_policy_from_task_or_config(task, self.config)
+
+    def _qc_instructions(self, task: Task, *, guideline: str | None = None) -> str:
+        return _build_qc_instructions(
+            task,
+            resolved_policy=self._resolved_qc_policy(task),
+            guideline=guideline,
+        )
+
     def _annotation_prompt(self, task: Task) -> str:
         return json.dumps(
             {
@@ -636,14 +656,46 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
 
 
 def _qc_instructions(task: Task, *, guideline: str | None = None) -> str:
+    """Legacy module-level helper retained for any external callers.
+
+    The runtime now uses ``SubagentRuntime._qc_instructions``, which resolves
+    the QC sampling policy from project config when the task has none. This
+    fallback uses the default ``RuntimeConfig``.
+    """
+    return _build_qc_instructions(
+        task,
+        resolved_policy=_resolve_qc_policy_from_task_or_config(task, RuntimeConfig()),
+        guideline=guideline,
+    )
+
+
+def _resolve_qc_policy_from_task_or_config(task: Task, config: RuntimeConfig) -> dict[str, Any]:
+    """Build the QC sampling policy: legacy per-task override wins, else project default."""
+    task_policy = task.metadata.get("qc_policy") if isinstance(task.metadata, dict) else None
+    if isinstance(task_policy, dict) and task_policy:
+        return task_policy
+    return {
+        "mode": config.qc_sample_mode,
+        "sample_ratio": config.qc_sample_ratio,
+        "sample_count": config.qc_sample_count,
+    }
+
+
+def _build_qc_instructions(
+    task: Task,
+    *,
+    resolved_policy: dict[str, Any],
+    guideline: str | None = None,
+) -> str:
     base = (
         "You are a QC subagent. Inspect the task and latest annotation artifact. "
         "Return raw JSON with no markdown fences. Include a boolean field named passed. "
         "If passed is false, include message or failures. failures must be a list of objects with row_id or target, category, message, severity, and suggested_action. "
         "When feedback discussions or annotator rebuttals are present, include feedback_resolution as a list of row-level decisions with row_id, decision, and reason. "
         "Use the output_schema and annotation_guidance fields in this prompt as the quality policy when present. "
-        "Use task.metadata.qc_policy to decide the QC scope for this task. "
-        "When qc_policy.mode is sample_count or sample_ratio, inspect exactly qc_policy.sample_count rows/items from this task, "
+        f"Apply the project-level qc_policy below to decide the QC scope for this task: {json.dumps(resolved_policy, sort_keys=True)}. "
+        "When qc_policy.mode is sample_count or sample_ratio, inspect exactly qc_policy.sample_count rows/items from this task "
+        "(or the count implied by sample_ratio * row_count when sample_count is null), "
         "choose them deterministically from task payload order, and include sampled row ids or row indexes in the QC response. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )

@@ -85,6 +85,7 @@ class LocalRuntimeScheduler:
             store=self.store,
             client_factory=self.client_factory,
             max_qc_rounds=self.config.max_qc_rounds,
+            config=self.config,
         )
 
         cycle_outcome = asyncio.run(

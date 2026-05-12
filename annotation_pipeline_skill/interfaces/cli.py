@@ -64,6 +64,12 @@ runtime:
   stale_after_seconds: 600
   retry_delay_seconds: 3600
   loop_interval_seconds: 5
+  # QC behavior (project-level -- applies to all tasks unless a legacy task
+  # carries its own metadata.qc_policy override).
+  max_qc_rounds: 3
+  qc_sample_mode: sample_ratio
+  qc_sample_ratio: 1.0
+  qc_sample_count: null
 """,
     "annotators.yaml": """annotators:
   text_annotator:
@@ -1114,7 +1120,9 @@ def _save_jsonl_prelabeled_task(
         metadata={
             "prelabeled": True,
             "prelabel_source": str(source_file),
-            "qc_policy": {"mode": "sample_ratio", "sample_ratio": 1.0},
+            # QC policy is project-level (workflow.yaml > runtime.qc_*). No
+            # per-task injection here — the SubagentRuntime resolves it from
+            # project config at QC time.
             "batch_size": len(batch),
             "row_ids": row_ids,
         },

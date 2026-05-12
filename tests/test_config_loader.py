@@ -96,3 +96,35 @@ def test_load_runtime_config_picks_up_max_qc_rounds(tmp_path):
     )
     runtime_cfg = load_runtime_config(root)
     assert runtime_cfg.max_qc_rounds == 7
+
+
+def test_load_runtime_config_picks_up_project_qc_sampling_fields(tmp_path):
+    """Project-level QC sampling knobs land on RuntimeConfig.qc_sample_*."""
+    from annotation_pipeline_skill.config.loader import load_runtime_config
+    root = tmp_path / "proj"
+    cfg_dir = root / ".annotation-pipeline"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "workflow.yaml").write_text(
+        "runtime:\n"
+        "  qc_sample_mode: sample_count\n"
+        "  qc_sample_ratio: 0.4\n"
+        "  qc_sample_count: 5\n",
+        encoding="utf-8",
+    )
+    runtime_cfg = load_runtime_config(root)
+    assert runtime_cfg.qc_sample_mode == "sample_count"
+    assert runtime_cfg.qc_sample_ratio == 0.4
+    assert runtime_cfg.qc_sample_count == 5
+
+
+def test_runtime_config_defaults_when_yaml_omits_qc_fields(tmp_path):
+    """A workflow.yaml without any qc_sample_* keys yields the documented defaults."""
+    from annotation_pipeline_skill.config.loader import load_runtime_config
+    root = tmp_path / "proj"
+    cfg_dir = root / ".annotation-pipeline"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "workflow.yaml").write_text("runtime:\n  max_concurrent_tasks: 2\n", encoding="utf-8")
+    runtime_cfg = load_runtime_config(root)
+    assert runtime_cfg.qc_sample_mode == "sample_ratio"
+    assert runtime_cfg.qc_sample_ratio == 1.0
+    assert runtime_cfg.qc_sample_count is None
