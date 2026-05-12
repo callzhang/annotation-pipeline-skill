@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from annotation_pipeline_skill.core.models import utc_now
 from annotation_pipeline_skill.core.states import FeedbackSeverity, OutboxStatus, TaskStatus
@@ -13,13 +13,10 @@ from annotation_pipeline_skill.services.readiness_service import build_readiness
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
-RULE_UPDATE_KIND = "rule_updates"
-LONG_TAIL_KIND = "long_tail_issues"
-
-
 class CoordinatorService:
-    def __init__(self, store: SqliteStore):
+    def __init__(self, store: SqliteStore, *, workspace_root: Path | None = None):
         self.store = store
+        self.workspace_root = workspace_root
 
     def build_report(self, project_id: str | None = None) -> dict[str, Any]:
         tasks = self._project_tasks(project_id)
@@ -58,8 +55,6 @@ class CoordinatorService:
             "outbox_counts": _outbox_counts(outbox_records),
             "readiness": readiness,
             "provider_diagnostics": self._provider_diagnostics(),
-            "rule_updates": self.list_rule_updates(project_id),
-            "long_tail_issues": self.list_long_tail_issues(project_id),
             "recommended_actions": self._recommended_actions(
                 project_id=project_id,
                 human_review_count=sum(1 for task in tasks if task.status is TaskStatus.HUMAN_REVIEW),
@@ -70,68 +65,6 @@ class CoordinatorService:
             ),
         }
 
-    def record_rule_update(
-        self,
-        *,
-        project_id: str,
-        source: str,
-        summary: str,
-        action: str,
-        created_by: str,
-        task_ids: list[str] | None = None,
-        status: str = "open",
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        record = {
-            "record_id": f"rule-update-{uuid4().hex}",
-            "project_id": _required_text(project_id, "project_id"),
-            "source": _required_text(source, "source"),
-            "summary": _required_text(summary, "summary"),
-            "action": _required_text(action, "action"),
-            "status": _required_text(status, "status"),
-            "task_ids": sorted(str(task_id) for task_id in (task_ids or [])),
-            "created_at": utc_now().isoformat(),
-            "created_by": _required_text(created_by, "created_by"),
-            "metadata": metadata or {},
-        }
-        self.store.append_coordination_record(RULE_UPDATE_KIND, record)
-        return record
-
-    def record_long_tail_issue(
-        self,
-        *,
-        project_id: str,
-        category: str,
-        summary: str,
-        recommended_action: str,
-        created_by: str,
-        severity: str = "medium",
-        task_ids: list[str] | None = None,
-        status: str = "open",
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        record = {
-            "issue_id": f"long-tail-{uuid4().hex}",
-            "project_id": _required_text(project_id, "project_id"),
-            "category": _required_text(category, "category"),
-            "summary": _required_text(summary, "summary"),
-            "recommended_action": _required_text(recommended_action, "recommended_action"),
-            "severity": _required_text(severity, "severity"),
-            "status": _required_text(status, "status"),
-            "task_ids": sorted(str(task_id) for task_id in (task_ids or [])),
-            "created_at": utc_now().isoformat(),
-            "created_by": _required_text(created_by, "created_by"),
-            "metadata": metadata or {},
-        }
-        self.store.append_coordination_record(LONG_TAIL_KIND, record)
-        return record
-
-    def list_rule_updates(self, project_id: str | None = None) -> list[dict[str, Any]]:
-        return _filter_project_records(self.store.list_coordination_records(RULE_UPDATE_KIND), project_id)
-
-    def list_long_tail_issues(self, project_id: str | None = None) -> list[dict[str, Any]]:
-        return _filter_project_records(self.store.list_coordination_records(LONG_TAIL_KIND), project_id)
-
     def _project_tasks(self, project_id: str | None):
         if project_id is None:
             return self.store.list_tasks()
@@ -139,7 +72,10 @@ class CoordinatorService:
 
     def _provider_diagnostics(self) -> dict[str, Any]:
         try:
-            snapshot = build_provider_config_snapshot(self.store.root)
+            snapshot = build_provider_config_snapshot(
+                self.store.root,
+                workspace_root=self.workspace_root,
+            )
         except (OSError, ProfileValidationError) as exc:
             return {"config_valid": False, "error": str(exc), "diagnostics": {}}
         return {
@@ -187,14 +123,3 @@ def build_outbox_summary_from_records(records) -> dict[str, Any]:
         if record.status.value in counts:
             counts[record.status.value] += 1
     return {"counts": counts}
-
-
-def _filter_project_records(records: list[dict[str, Any]], project_id: str | None) -> list[dict[str, Any]]:
-    filtered = records if project_id is None else [record for record in records if record.get("project_id") == project_id]
-    return sorted(filtered, key=lambda record: str(record.get("created_at", "")), reverse=True)
-
-
-def _required_text(value: str, label: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{label} is required")
-    return value.strip()

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCoordinatorViewModel,
-  classifyLongTailIssue,
   classifyProviderDiagnostic,
   coordinatorEmptyState,
   formatActionLabel,
@@ -45,60 +44,6 @@ const report: CoordinatorReport = {
       },
     },
   },
-  rule_updates: [
-    {
-      record_id: "rule-old",
-      project_id: "pipe",
-      source: "feedback",
-      summary: "Clarify date span",
-      action: "update_guidance",
-      status: "accepted",
-      task_ids: ["task-1"],
-      created_at: "2026-05-05T10:00:00Z",
-      created_by: "coordinator-agent",
-      metadata: {},
-    },
-    {
-      record_id: "rule-new",
-      project_id: "pipe",
-      source: "human_review",
-      summary: "Require evidence quotes",
-      action: "add_rule",
-      status: "pending",
-      task_ids: ["task-2", "task-3"],
-      created_at: "2026-05-05T11:50:00Z",
-      created_by: "coordinator-agent",
-      metadata: {},
-    },
-  ],
-  long_tail_issues: [
-    {
-      issue_id: "issue-low",
-      project_id: "pipe",
-      category: "format",
-      summary: "Rare whitespace issue",
-      recommended_action: "queue_human_review",
-      severity: "low",
-      status: "open",
-      task_ids: ["task-4"],
-      created_at: "2026-05-05T11:55:00Z",
-      created_by: "coordinator-agent",
-      metadata: {},
-    },
-    {
-      issue_id: "issue-high",
-      project_id: "pipe",
-      category: "schema",
-      summary: "Ambiguous statute references",
-      recommended_action: "escalate_human_review",
-      severity: "high",
-      status: "open",
-      task_ids: ["task-5", "task-6"],
-      created_at: "2026-05-05T11:00:00Z",
-      created_by: "coordinator-agent",
-      metadata: {},
-    },
-  ],
   recommended_actions: ["complete_human_review", "drain_external_outbox"],
 };
 
@@ -127,24 +72,12 @@ describe("coordinator helpers", () => {
       ["review_llm", "Review LLM", "critical"],
       ["local_codex", "Local Codex", "ok"],
     ]);
-    expect(view.ruleUpdateRows.map((row) => [row.id, row.summary, row.createdAtLabel])).toEqual([
-      ["rule-new", "Require evidence quotes", "10m ago"],
-      ["rule-old", "Clarify date span", "2h ago"],
-    ]);
-    expect(view.longTailIssueRows.map((row) => [row.id, row.severity, row.taskCount])).toEqual([
-      ["issue-high", "critical", 2],
-      ["issue-low", "info", 1],
-    ]);
     expect(view.actionRows.map((row) => row.label)).toEqual(["Complete Human Review", "Drain external outbox"]);
   });
 
-  it("orders long-tail issues and provider diagnostics by severity before recency or label", () => {
+  it("orders provider diagnostics by severity before label", () => {
     const view = buildCoordinatorViewModel(report, now);
-
     expect(classifyProviderDiagnostic(report.provider_diagnostics.diagnostics.review_llm)).toBe("critical");
-    expect(classifyLongTailIssue(report.long_tail_issues[0])).toBe("info");
-    expect(classifyLongTailIssue(report.long_tail_issues[1])).toBe("critical");
-    expect(view.longTailIssueRows[0].id).toBe("issue-high");
     expect(view.providerCards.map((card) => card.id).slice(0, 2)).toEqual(["provider_config", "review_llm"]);
   });
 
@@ -184,8 +117,6 @@ describe("coordinator helpers", () => {
       blocking_feedback_count: 0,
       outbox_counts: { pending: 0, sent: 0, dead_letter: 0 },
       provider_diagnostics: { config_valid: true, diagnostics: {} },
-      rule_updates: [],
-      long_tail_issues: [],
       recommended_actions: [],
     };
 
@@ -193,12 +124,10 @@ describe("coordinator helpers", () => {
 
     expect(coordinatorEmptyState(emptyReport)).toEqual({
       title: "No coordinator activity yet",
-      detail: "Coordinator guidance will appear after tasks, feedback, provider checks, or rule updates exist.",
+      detail: "Coordinator guidance will appear after tasks, feedback, or provider checks exist.",
     });
     expect(view.emptyState?.title).toBe("No coordinator activity yet");
     expect(view.providerCards).toEqual([]);
-    expect(view.ruleUpdateRows).toEqual([]);
-    expect(view.longTailIssueRows).toEqual([]);
     expect(view.actionRows).toEqual([]);
   });
 });

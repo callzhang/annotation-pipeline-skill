@@ -12,9 +12,8 @@ import { DocumentsPanel } from "./components/DocumentsPanel";
 import { SchemaPanel } from "./components/SchemaPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
-import { OutboxPanel } from "./components/OutboxPanel";
+import { OutputPanel } from "./components/OutputPanel";
 import { ProvidersPanel } from "./components/ProvidersPanel";
-import { ReadinessPanel } from "./components/ReadinessPanel";
 import { RuntimePanel } from "./components/RuntimePanel";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { countCards } from "./kanban";
@@ -22,7 +21,7 @@ import type { KanbanSnapshot, ProjectSummary, StoreInfo, TaskCard, TaskDetail } 
 import { useUrlState, type UrlState } from "./url_state";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "readiness" | "outbox" | "providers" | "coordinator" | "config" | "events" | "documents" | "schema";
+type ViewMode = "kanban" | "runtime" | "output" | "providers" | "coordinator" | "config" | "events" | "documents" | "schema";
 
 const urlDefaults: UrlState = { view: "kanban", store: null, project: null, task: null };
 
@@ -219,11 +218,8 @@ export default function App() {
         <button className={viewMode === "runtime" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("runtime")}>
           Runtime
         </button>
-        <button className={viewMode === "readiness" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("readiness")}>
-          Readiness
-        </button>
-        <button className={viewMode === "outbox" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("outbox")}>
-          Outbox
+        <button className={viewMode === "output" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("output")}>
+          Output
         </button>
         <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("providers")}>
           Providers
@@ -258,8 +254,7 @@ export default function App() {
         />
       ) : null}
       {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}
-      {viewMode === "readiness" ? <ReadinessPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
-      {viewMode === "outbox" ? <OutboxPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
+      {viewMode === "output" ? <OutputPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "providers" ? <ProvidersPanel /> : null}
       {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "config" ? <ConfigPanel storeKey={selectedStoreKey} /> : null}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchConfigSnapshot, saveConfigFile } from "../api";
 import type { ConfigFile } from "../types";
+import { AnnotatorsForm } from "./AnnotatorsForm";
 
 const configHints: Record<string, string> = {
   "annotation_rules.yaml": "Rules that guide how annotators should label the data.",
@@ -88,7 +89,9 @@ export function ConfigPanel({ storeKey }: ConfigPanelProps) {
       </aside>
 
       <div className="config-editor">
-        {selected ? (
+        {selected && selected.id === "annotators.yaml" ? (
+          <AnnotatorsForm storeKey={storeKey} />
+        ) : selected ? (
           <>
             <div className="config-editor-header">
               <div>

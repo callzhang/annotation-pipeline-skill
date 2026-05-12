@@ -52,21 +52,6 @@ run_cli create-tasks \
   --pipeline-id handoff \
   --batch-size 1
 
-run_cli coordinator rule-update \
-  --project-root "$PROJECT_ROOT" \
-  --project-id handoff \
-  --source qc \
-  --summary "Clarify entity boundary examples." \
-  --action "Update annotation_rules.yaml before the next batch." >/dev/null
-
-run_cli coordinator long-tail-issue \
-  --project-root "$PROJECT_ROOT" \
-  --project-id handoff \
-  --category ambiguous_boundary \
-  --summary "A boundary case needs algorithm-engineer guidance." \
-  --recommended-action "Ask the user to choose a project rule." \
-  --severity warning >/dev/null
-
 uv run --project "$SKILL_DIR" --no-dev python - "$PROJECT_ROOT" <<'PY'
 import json
 import sys
@@ -159,37 +144,6 @@ for key in ("config_valid", "profiles", "targets", "diagnostics"):
 coordinator = request("/api/coordinator?project=handoff")
 if coordinator.get("project_id") != "handoff":
     raise SystemExit(f"invalid coordinator project: {coordinator}")
-if not coordinator.get("rule_updates") or not coordinator.get("long_tail_issues"):
-    raise SystemExit(f"coordinator records missing: {coordinator}")
-
-rule = request(
-    "/api/coordinator/rule-updates",
-    {
-        "project_id": "handoff",
-        "source": "human_review",
-        "summary": "Add a Human Review example.",
-        "action": "Update project guidance.",
-        "created_by": "handoff-agent",
-        "task_ids": ["handoff-000001"],
-    },
-)
-if rule.get("project_id") != "handoff" or not rule.get("record_id"):
-    raise SystemExit(f"invalid rule update response: {rule}")
-
-issue = request(
-    "/api/coordinator/long-tail-issues",
-    {
-        "project_id": "handoff",
-        "category": "rare_case",
-        "summary": "Rare case needs guidance.",
-        "recommended_action": "Ask the algorithm engineer.",
-        "severity": "warning",
-        "created_by": "handoff-agent",
-        "task_ids": ["handoff-000002"],
-    },
-)
-if issue.get("project_id") != "handoff" or not issue.get("issue_id"):
-    raise SystemExit(f"invalid long-tail issue response: {issue}")
 
 readiness = request("/api/readiness?project=handoff")
 for key in ("ready_for_training", "accepted_count", "recommended_next_action"):

@@ -1,9 +1,4 @@
-import type {
-  CoordinatorLongTailIssue,
-  CoordinatorReport,
-  CoordinatorRuleUpdate,
-  ProviderDiagnostic,
-} from "./types";
+import type { CoordinatorReport, ProviderDiagnostic } from "./types";
 
 export type CoordinatorSeverity = "critical" | "warning" | "info" | "ok";
 export type CoordinatorTone = "critical" | "warning" | "success" | "neutral";
@@ -24,31 +19,6 @@ export interface CoordinatorProviderCard {
   message: string;
 }
 
-export interface CoordinatorRuleUpdateRow {
-  id: string;
-  summary: string;
-  sourceLabel: string;
-  actionLabel: string;
-  statusLabel: string;
-  taskCount: number;
-  createdAt: string;
-  createdAtLabel: string;
-  createdBy: string;
-}
-
-export interface CoordinatorLongTailIssueRow {
-  id: string;
-  categoryLabel: string;
-  summary: string;
-  recommendedActionLabel: string;
-  severity: CoordinatorSeverity;
-  statusLabel: string;
-  taskCount: number;
-  createdAt: string;
-  createdAtLabel: string;
-  createdBy: string;
-}
-
 export interface CoordinatorActionRow {
   id: string;
   label: string;
@@ -64,8 +34,6 @@ export interface CoordinatorViewModel {
   generatedAtLabel: string;
   overviewStats: CoordinatorStat[];
   providerCards: CoordinatorProviderCard[];
-  ruleUpdateRows: CoordinatorRuleUpdateRow[];
-  longTailIssueRows: CoordinatorLongTailIssueRow[];
   actionRows: CoordinatorActionRow[];
   emptyState: CoordinatorEmptyState | null;
 }
@@ -100,20 +68,6 @@ export function classifyProviderDiagnostic(diagnostic: ProviderDiagnostic): Coor
     return "warning";
   }
   return "ok";
-}
-
-export function classifyLongTailIssue(issue: CoordinatorLongTailIssue): CoordinatorSeverity {
-  const severity = issue.severity.toLowerCase();
-  if (severity === "critical" || severity === "high" || severity === "error") {
-    return "critical";
-  }
-  if (severity === "warning" || severity === "medium") {
-    return "warning";
-  }
-  if (severity === "ok" || severity === "resolved") {
-    return "ok";
-  }
-  return "info";
 }
 
 export function formatProviderLabel(providerId: string): string {
@@ -177,8 +131,6 @@ export function buildCoordinatorViewModel(report: CoordinatorReport, now: Date =
     generatedAtLabel: formatTimestampRecency(report.generated_at, now),
     overviewStats: buildOverviewStats(report),
     providerCards: buildProviderCards(report),
-    ruleUpdateRows: buildRuleUpdateRows(report.rule_updates, now),
-    longTailIssueRows: buildLongTailIssueRows(report.long_tail_issues, now),
     actionRows: buildActionRows(report.recommended_actions),
     emptyState: coordinatorEmptyState(report),
   };
@@ -239,51 +191,6 @@ export function buildProviderCards(report: CoordinatorReport): CoordinatorProvid
   return [...configErrorCard, ...diagnosticCards].sort(compareProviderCards);
 }
 
-export function buildRuleUpdateRows(
-  ruleUpdates: CoordinatorRuleUpdate[],
-  now: Date = new Date(),
-): CoordinatorRuleUpdateRow[] {
-  return [...ruleUpdates]
-    .sort((left, right) => compareTimestampDesc(left.created_at, right.created_at))
-    .map((ruleUpdate) => ({
-      id: ruleUpdate.record_id,
-      summary: ruleUpdate.summary,
-      sourceLabel: formatTitleLabel(ruleUpdate.source),
-      actionLabel: formatActionLabel(ruleUpdate.action),
-      statusLabel: formatTitleLabel(ruleUpdate.status),
-      taskCount: ruleUpdate.task_ids.length,
-      createdAt: ruleUpdate.created_at,
-      createdAtLabel: formatTimestampRecency(ruleUpdate.created_at, now),
-      createdBy: ruleUpdate.created_by,
-    }));
-}
-
-export function buildLongTailIssueRows(
-  issues: CoordinatorLongTailIssue[],
-  now: Date = new Date(),
-): CoordinatorLongTailIssueRow[] {
-  return [...issues]
-    .sort((left, right) => {
-      const bySeverity = severityRank[classifyLongTailIssue(left)] - severityRank[classifyLongTailIssue(right)];
-      if (bySeverity !== 0) {
-        return bySeverity;
-      }
-      return compareTimestampDesc(left.created_at, right.created_at);
-    })
-    .map((issue) => ({
-      id: issue.issue_id,
-      categoryLabel: formatTitleLabel(issue.category),
-      summary: issue.summary,
-      recommendedActionLabel: formatActionLabel(issue.recommended_action),
-      severity: classifyLongTailIssue(issue),
-      statusLabel: formatTitleLabel(issue.status),
-      taskCount: issue.task_ids.length,
-      createdAt: issue.created_at,
-      createdAtLabel: formatTimestampRecency(issue.created_at, now),
-      createdBy: issue.created_by,
-    }));
-}
-
 export function buildActionRows(actions: string[]): CoordinatorActionRow[] {
   return actions.map((action) => ({
     id: action,
@@ -300,8 +207,6 @@ export function coordinatorEmptyState(report: CoordinatorReport): CoordinatorEmp
     report.outbox_counts.pending > 0 ||
     report.outbox_counts.dead_letter > 0 ||
     Object.keys(report.provider_diagnostics.diagnostics).length > 0 ||
-    report.rule_updates.length > 0 ||
-    report.long_tail_issues.length > 0 ||
     report.recommended_actions.length > 0;
 
   if (hasActivity) {
@@ -310,7 +215,7 @@ export function coordinatorEmptyState(report: CoordinatorReport): CoordinatorEmp
 
   return {
     title: "No coordinator activity yet",
-    detail: "Coordinator guidance will appear after tasks, feedback, provider checks, or rule updates exist.",
+    detail: "Coordinator guidance will appear after tasks, feedback, or provider checks exist.",
   };
 }
 
@@ -320,10 +225,6 @@ function compareProviderCards(left: CoordinatorProviderCard, right: CoordinatorP
     return bySeverity;
   }
   return left.label.localeCompare(right.label);
-}
-
-function compareTimestampDesc(left: string, right: string): number {
-  return Date.parse(right) - Date.parse(left);
 }
 
 function formatTitleLabel(value: string): string {

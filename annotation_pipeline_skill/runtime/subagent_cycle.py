@@ -645,6 +645,9 @@ class SubagentRuntime:
             metadata=metadata,
         )
         self.store.append_event(event)
+        # Persist the new status immediately so the kanban (5s poll) can show
+        # tasks transiting ANNOTATING → VALIDATING → QC, not just PENDING → ACCEPTED.
+        self.store.save_task(task)
 
     def _write_stage_artifact(
         self,

@@ -7,6 +7,7 @@ import {
   loadDrawerWidth,
   saveDrawerWidth,
 } from "../drawer_state";
+import { AnnotationView } from "./AnnotationView";
 import { JsonViewer } from "./JsonViewer";
 import { PerRowView } from "./PerRowView";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
@@ -33,6 +34,7 @@ export function TaskDrawer({
 }: TaskDrawerProps) {
   const [width, setWidth] = useState<number>(DRAWER_DEFAULT_WIDTH);
   const [drawerTab, setDrawerTab] = useState<"raw" | "annotation" | "discussions" | "logs">("annotation");
+  const [annotationFormat, setAnnotationFormat] = useState<"structured" | "json">("structured");
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
@@ -173,29 +175,64 @@ export function TaskDrawer({
                 {annotationArtifacts.length === 0 ? (
                   <p className="empty-detail">No annotation artifacts recorded.</p>
                 ) : (
-                  annotationArtifacts.map((artifact, index) => {
-                    const isLatest = index === annotationArtifacts.length - 1;
-                    const label = artifact.metadata.provider
-                      ? String(artifact.metadata.provider)
-                      : artifact.content_type;
-                    return isLatest ? (
-                      <div className="artifact-panel" key={artifact.artifact_id}>
+                  <>
+                    <div className="annotation-format-toggle">
+                      <button
+                        type="button"
+                        className={annotationFormat === "structured" ? "segment selected" : "segment"}
+                        onClick={() => setAnnotationFormat("structured")}
+                      >
+                        Structured
+                      </button>
+                      <button
+                        type="button"
+                        className={annotationFormat === "json" ? "segment selected" : "segment"}
+                        onClick={() => setAnnotationFormat("json")}
+                      >
+                        JSON
+                      </button>
+                    </div>
+                    {annotationFormat === "structured" ? (
+                      <div className="artifact-panel">
                         <div className="artifact-title">
                           <span>Latest</span>
-                          <span>{label}</span>
+                          <span>
+                            {annotationArtifacts[annotationArtifacts.length - 1].metadata.provider
+                              ? String(annotationArtifacts[annotationArtifacts.length - 1].metadata.provider)
+                              : annotationArtifacts[annotationArtifacts.length - 1].content_type}
+                          </span>
                         </div>
-                        <JsonViewer value={artifact.payload} />
+                        <AnnotationView
+                          artifacts={annotationArtifacts}
+                          sourceRef={detail.task.source_ref}
+                        />
                       </div>
                     ) : (
-                      <details className="artifact-panel artifact-collapsed" key={artifact.artifact_id}>
-                        <summary className="artifact-title">
-                          <span>#{index + 1}</span>
-                          <span>{label}</span>
-                        </summary>
-                        <JsonViewer value={artifact.payload} />
-                      </details>
-                    );
-                  })
+                      annotationArtifacts.map((artifact, index) => {
+                        const isLatest = index === annotationArtifacts.length - 1;
+                        const label = artifact.metadata.provider
+                          ? String(artifact.metadata.provider)
+                          : artifact.content_type;
+                        return isLatest ? (
+                          <div className="artifact-panel" key={artifact.artifact_id}>
+                            <div className="artifact-title">
+                              <span>Latest</span>
+                              <span>{label}</span>
+                            </div>
+                            <JsonViewer value={artifact.payload} />
+                          </div>
+                        ) : (
+                          <details className="artifact-panel artifact-collapsed" key={artifact.artifact_id}>
+                            <summary className="artifact-title">
+                              <span>#{index + 1}</span>
+                              <span>{label}</span>
+                            </summary>
+                            <JsonViewer value={artifact.payload} />
+                          </details>
+                        );
+                      })
+                    )}
+                  </>
                 )}
                 {previewEvidence.length > 0 ? (
                   <DetailSection title="Preview Evidence">

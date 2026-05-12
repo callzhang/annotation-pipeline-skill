@@ -54,11 +54,6 @@ def dump_to_json(store: SqliteStore, out_dir: Path) -> None:
         for ver in store.list_document_versions(doc.document_id):
             write_json(out_dir / "document_versions" / f"{ver.version_id}.json", ver.to_dict())
 
-    for kind in ("rule_updates", "long_tail_issues"):
-        records = store.list_coordination_records(kind)
-        if records:
-            write_jsonl(out_dir / "coordination" / f"{kind}.jsonl", records)
-
     for run in store.list_active_runs():
         write_json(out_dir / "runtime" / "active_runs" / f"{run.run_id}.json", run.to_dict())
     for lease in store.list_runtime_leases():

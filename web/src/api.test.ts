@@ -2,8 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchCoordinatorReport,
   fetchOutboxSummary,
-  postCoordinatorLongTailIssue,
-  postCoordinatorRuleUpdate,
   postHumanReviewDecision,
   saveTaskQcPolicy,
 } from "./api";
@@ -112,40 +110,4 @@ describe("dashboard API client", () => {
     expect(report.recommended_actions).toEqual(["resolve_annotator_qc_feedback"]);
   });
 
-  it("posts coordinator records", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ record_id: "rule-1", project_id: "pipe" }) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ issue_id: "issue-1", project_id: "pipe" }) });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await postCoordinatorRuleUpdate({
-      project_id: "pipe",
-      source: "qc",
-      summary: "Boundary examples are missing.",
-      action: "Update annotation_rules.yaml.",
-      created_by: "coordinator-agent",
-      task_ids: ["task-1"],
-    });
-    await postCoordinatorLongTailIssue({
-      project_id: "pipe",
-      category: "ambiguous_abbreviation",
-      summary: "Abbreviations need guidance.",
-      recommended_action: "Ask the algorithm engineer for a rule.",
-      severity: "medium",
-      created_by: "coordinator-agent",
-      task_ids: ["task-1"],
-    });
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/coordinator/rule-updates",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/coordinator/long-tail-issues",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
 });

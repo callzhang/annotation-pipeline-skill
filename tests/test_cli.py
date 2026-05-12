@@ -104,37 +104,6 @@ def test_cli_doctor_succeeds_after_init(tmp_path):
     assert exit_code == 0
 
 
-def test_cli_coordinator_records_rule_update_and_report(tmp_path, capsys):
-    main(["init", "--project-root", str(tmp_path)])
-
-    exit_code = main(
-        [
-            "coordinator",
-            "rule-update",
-            "--project-root",
-            str(tmp_path),
-            "--project-id",
-            "pipe",
-            "--source",
-            "qc",
-            "--summary",
-            "Need stricter entity boundary rule.",
-            "--action",
-            "Update annotation_rules.yaml before rerun.",
-            "--task-id",
-            "task-1",
-        ]
-    )
-    record = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert record["project_id"] == "pipe"
-
-    exit_code = main(["coordinator", "report", "--project-root", str(tmp_path), "--project-id", "pipe"])
-    report = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert report["rule_updates"][0]["summary"] == "Need stricter entity boundary rule."
-
-
 def test_cli_runtime_status_returns_snapshot_after_init(tmp_path, capsys):
     main(["init", "--project-root", str(tmp_path)])
 
