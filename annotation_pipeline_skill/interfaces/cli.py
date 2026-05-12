@@ -18,7 +18,7 @@ from annotation_pipeline_skill.config.loader import (
 )
 from annotation_pipeline_skill.config.models import ProjectConfig
 from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, Task, utc_now
-from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
+from annotation_pipeline_skill.core.qc_policy import validate_qc_sample_options
 from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.states import AttemptStatus, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
@@ -783,11 +783,6 @@ def _save_annotation_manager_v2_task(
             "source_task_id": source_task.get("task_id"),
             "source_task_status": source_task.get("status"),
             "runtime_next_stage": "qc",
-            "qc_policy": build_qc_policy(
-                row_count=len(source_rows),
-                qc_sample_count=qc_sample_count,
-                qc_sample_ratio=qc_sample_ratio,
-            ),
         },
     )
     prepare_event = transition_task(
@@ -1296,14 +1291,7 @@ def batch_metadata(
     qc_sample_ratio: float | None = None,
 ) -> dict:
     sources = sorted({str(row.get("source") or row.get("source_dataset") or "") for row in batch if row.get("source") or row.get("source_dataset")})
-    metadata = {
-        "row_count": len(batch),
-        "qc_policy": build_qc_policy(
-            row_count=len(batch),
-            qc_sample_count=qc_sample_count,
-            qc_sample_ratio=qc_sample_ratio,
-        ),
-    }
+    metadata = {"row_count": len(batch)}
     if sources:
         metadata["sources"] = sources
     return metadata

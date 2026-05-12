@@ -103,14 +103,8 @@ def test_external_task_pull_is_idempotent_and_creates_status_outbox(tmp_path):
     record = service.enqueue_status(first, status="pending")
 
     assert first.task_id == second.task_id
-    assert first.metadata["qc_policy"] == {
-        "mode": "all_rows",
-        "row_count": 1,
-        "sample_scope": "per_task",
-        "selection": "deterministic_from_task_payload_order",
-        "sample_count": 1,
-        "required_correct_rows": 1,
-        "feedback_loop": "annotator_may_accept_or_dispute_qc_items",
-    }
+    # qc_policy is now project-level (RuntimeConfig); external pull no longer
+    # injects per-task qc_policy.
+    assert "qc_policy" not in first.metadata
     assert record.kind is OutboxKind.STATUS
     assert store.list_outbox() == [record]

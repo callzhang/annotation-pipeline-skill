@@ -256,8 +256,8 @@ def test_cli_create_batched_jsonl_tasks(tmp_path):
     assert tasks[0].source_ref["line_end"] == 2
     assert len(tasks[0].source_ref["payload"]["rows"]) == 2
     assert tasks[0].annotation_requirements == {"annotation_types": ["entity_span", "structured_json"]}
-    assert tasks[0].metadata["qc_policy"]["mode"] == "all_rows"
-    assert tasks[0].metadata["qc_policy"]["required_correct_rows"] == 2
+    # qc_policy moved to project-level RuntimeConfig (workflow.yaml). No per-task injection.
+    assert "qc_policy" not in tasks[0].metadata
     assert tasks[0].metadata["sources"] == ["demo_source"]
 
 
@@ -287,16 +287,9 @@ def test_cli_create_batched_jsonl_tasks_with_qc_sample_count(tmp_path):
 
     task = SqliteStore.open(tmp_path / ".annotation-pipeline").load_task("sample-count-000001")
     assert exit_code == 0
-    assert task.metadata["qc_policy"] == {
-        "mode": "sample_count",
-        "row_count": 5,
-        "requested_sample_count": 2,
-        "sample_count": 2,
-        "required_correct_rows": 2,
-        "sample_scope": "per_task",
-        "selection": "deterministic_from_task_payload_order",
-        "feedback_loop": "annotator_may_accept_or_dispute_qc_items",
-    }
+    # qc_policy moved to project-level RuntimeConfig. --qc-sample-count is accepted
+    # by the CLI for backward compat but no longer populates per-task metadata.
+    assert "qc_policy" not in task.metadata
 
 
 def test_cli_create_batched_jsonl_tasks_with_qc_sample_ratio(tmp_path):
@@ -325,10 +318,8 @@ def test_cli_create_batched_jsonl_tasks_with_qc_sample_ratio(tmp_path):
 
     task = SqliteStore.open(tmp_path / ".annotation-pipeline").load_task("sample-ratio-000001")
     assert exit_code == 0
-    assert task.metadata["qc_policy"]["mode"] == "sample_ratio"
-    assert task.metadata["qc_policy"]["sample_ratio"] == 0.4
-    assert task.metadata["qc_policy"]["sample_count"] == 2
-    assert task.metadata["qc_policy"]["required_correct_rows"] == 2
+    # qc_policy moved to project-level RuntimeConfig.
+    assert "qc_policy" not in task.metadata
 
 
 def test_cli_create_tasks_rejects_conflicting_qc_sample_options(tmp_path):
@@ -469,7 +460,8 @@ def test_cli_import_annotation_manager_v2_queues_imported_annotations_for_qc(tmp
     assert task.current_attempt == 1
     assert task.metadata["runtime_next_stage"] == "qc"
     assert task.metadata["source_task_id"] == "legacy_task_001"
-    assert task.metadata["qc_policy"]["mode"] == "sample_count"
+    # qc_policy moved to project-level RuntimeConfig; v2 import no longer injects it.
+    assert "qc_policy" not in task.metadata
     assert task.source_ref["kind"] == "annotation_manager_v2"
     assert task.source_ref["payload"]["rows"][0]["text"].startswith("Repo: nodejs/node")
     assert [event.next_status.value for event in events] == ["pending", "annotating", "validating", "qc"]

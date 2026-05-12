@@ -60,7 +60,9 @@ def test_external_http_pull_creates_pending_tasks_status_outbox_and_events(tmp_p
     assert result["existing"] == 0
     assert [task.status for task in tasks] == [TaskStatus.PENDING, TaskStatus.PENDING]
     assert sorted(task.external_ref.external_task_id for task in tasks if task.external_ref) == ["ext-1", "ext-2"]
-    assert [task.metadata["qc_policy"]["mode"] for task in tasks] == ["all_rows", "all_rows"]
+    # qc_policy is now project-level (RuntimeConfig); external pull no longer
+    # injects per-task qc_policy. The metadata should NOT carry it.
+    assert all("qc_policy" not in task.metadata for task in tasks)
     assert [record.kind for record in store.list_outbox()] == [OutboxKind.STATUS, OutboxKind.STATUS]
     assert store.list_events(tasks[0].task_id)[0].reason == "created from external task pull"
 
@@ -86,10 +88,10 @@ def test_external_http_pull_applies_source_qc_sampling_policy(tmp_path):
 
     task = store.list_tasks()[0]
     assert task.metadata["row_count"] == 3
-    assert task.metadata["qc_policy"]["mode"] == "sample_ratio"
-    assert task.metadata["qc_policy"]["sample_ratio"] == 0.5
-    assert task.metadata["qc_policy"]["sample_count"] == 2
-    assert task.metadata["qc_policy"]["sample_scope"] == "per_task"
+    # qc_policy moved to project-level RuntimeConfig (workflow.yaml). External
+    # pull's qc_sample_ratio config knob is now ignored at task-creation time;
+    # if you need per-source policy, set it at the project (or future per-source) level.
+    assert "qc_policy" not in task.metadata
 
 
 def test_external_http_pull_is_idempotent_on_repeated_external_ids(tmp_path):

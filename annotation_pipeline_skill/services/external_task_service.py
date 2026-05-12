@@ -6,7 +6,7 @@ from hashlib import sha256
 from urllib.request import Request, urlopen
 
 from annotation_pipeline_skill.core.models import ExternalTaskRef, OutboxRecord, Task
-from annotation_pipeline_skill.core.qc_policy import build_qc_policy, validate_qc_sample_options
+from annotation_pipeline_skill.core.qc_policy import validate_qc_sample_options
 from annotation_pipeline_skill.core.states import OutboxKind, TaskStatus
 from annotation_pipeline_skill.core.transitions import transition_task
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
@@ -46,11 +46,6 @@ class ExternalTaskService:
             ),
             metadata={
                 "row_count": row_count,
-                "qc_policy": build_qc_policy(
-                    row_count=row_count,
-                    qc_sample_count=qc_sample_count,
-                    qc_sample_ratio=qc_sample_ratio,
-                ),
             },
         )
         event = transition_task(
