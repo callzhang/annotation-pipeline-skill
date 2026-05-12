@@ -100,7 +100,7 @@ class HumanReviewService:
             raise InvalidTransition(f"task {task_id} is not in human_review")
 
         # Schema-validate. Raises SchemaValidationError on failure (missing schema OR mismatch).
-        validate_payload_against_task_schema(task, answer)
+        validate_payload_against_task_schema(task, answer, store=self.store)
 
         artifact = self._write_correction_artifact(task_id, answer, actor=actor, note=note)
         event = transition_task(

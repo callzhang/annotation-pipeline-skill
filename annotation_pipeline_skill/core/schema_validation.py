@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
 
 from annotation_pipeline_skill.core.models import Task
+
+if TYPE_CHECKING:
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+
+PROJECT_SCHEMA_FILENAME = "output_schema.json"
 
 
 class SchemaValidationError(ValueError):
@@ -14,6 +22,12 @@ class SchemaValidationError(ValueError):
 
 
 def load_output_schema(task: Task) -> dict | None:
+    """Return inline per-task output_schema if present.
+
+    Backward compat path for tasks imported before the schema moved to the
+    project level. Callers that want full resolution (with project fallback)
+    should use :func:`resolve_output_schema`.
+    """
     payload = task.source_ref.get("payload") if isinstance(task.source_ref, dict) else None
     if not isinstance(payload, dict):
         return None
@@ -24,8 +38,35 @@ def load_output_schema(task: Task) -> dict | None:
     return schema if isinstance(schema, dict) else None
 
 
-def validate_payload_against_task_schema(task: Task, payload: Any) -> None:
-    schema = load_output_schema(task)
+def load_project_output_schema(project_config_root: Path) -> dict | None:
+    """Read ``<project_config_root>/output_schema.json`` if it exists."""
+    path = Path(project_config_root) / PROJECT_SCHEMA_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def resolve_output_schema(task: Task, store: "SqliteStore | None") -> dict | None:
+    """Resolve a task's output schema, preferring inline then project-level."""
+    inline = load_output_schema(task)
+    if inline is not None:
+        return inline
+    if store is None:
+        return None
+    return load_project_output_schema(store.root)
+
+
+def validate_payload_against_task_schema(
+    task: Task,
+    payload: Any,
+    *,
+    store: "SqliteStore | None" = None,
+) -> None:
+    schema = resolve_output_schema(task, store)
     if schema is None:
         raise SchemaValidationError(
             "task has no output_schema",

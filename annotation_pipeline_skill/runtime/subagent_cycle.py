@@ -9,7 +9,7 @@ from typing import Any, Callable
 from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task, utc_now
 from annotation_pipeline_skill.core.schema_validation import (
     SchemaValidationError,
-    load_output_schema,
+    resolve_output_schema,
     validate_payload_against_task_schema,
 )
 from annotation_pipeline_skill.core.states import AttemptStatus, FeedbackSeverity, FeedbackSource, TaskStatus
@@ -475,7 +475,7 @@ class SubagentRuntime:
                 "message": "Annotation result was empty.",
                 "reason": "deterministic validation failed",
             }
-        schema = load_output_schema(task)
+        schema = resolve_output_schema(task, self.store)
         if schema is None:
             return None
         try:
@@ -487,7 +487,7 @@ class SubagentRuntime:
                 "reason": "schema validation failed",
             }
         try:
-            validate_payload_against_task_schema(task, payload)
+            validate_payload_against_task_schema(task, payload, store=self.store)
         except SchemaValidationError as exc:
             return {
                 "category": "schema_invalid",
