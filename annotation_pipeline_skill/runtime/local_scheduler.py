@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -126,19 +127,22 @@ class LocalRuntimeScheduler:
         stage_target: str,
         cycle_started_at: datetime,
     ) -> _CycleOutcome:
-        """Run all selected tasks concurrently via asyncio.gather.
+        """Run a cycle with continuous-fill parallelism.
 
-        Each task acquires its lease + active_run, dispatches the async
-        SubagentRuntime, and tears down its records on completion. LLM
-        calls overlap; SQLite writes are serialized by the connection
-        but are fast relative to the LLM round-trip.
+        ``selected_tasks`` seeds the initial wave (up to max_concurrent_tasks).
+        Whenever a task finishes, the scheduler pulls another PENDING/QC-resume
+        task from the store and starts it — so a slow tail never starves the
+        remaining slots. Refill stops once the cycle exceeds
+        ``cycle_max_seconds`` or fewer than 1 task is runnable; in-flight tasks
+        always drain before stats are reported.
         """
 
         async def run_one(task: Task) -> dict | None:
-            lease = self._lease_for(task, cycle_started_at)
+            task_started_at = self._now_fn()
+            lease = self._lease_for(task, task_started_at)
             if not self.store.save_runtime_lease(lease):
                 return None
-            run = self._active_run_for(task, stage_target, cycle_started_at, lease.lease_id)
+            run = self._active_run_for(task, stage_target, task_started_at, lease.lease_id)
             self.store.save_active_run(run)
             outcome: dict = {"started": True, "accepted": False, "error": None, "run": run}
             try:
@@ -163,20 +167,82 @@ class LocalRuntimeScheduler:
                 self.store.delete_runtime_lease(lease.lease_id)
             return outcome
 
-        results = await asyncio.gather(*(run_one(task) for task in selected_tasks))
         started = 0
         accepted = 0
         failed = 0
         errors: list[dict] = []
-        for outcome in results:
+        in_flight: set[asyncio.Task] = set()
+        seen_task_ids: set[str] = set()
+
+        def collect(fut: asyncio.Task) -> None:
+            nonlocal started, accepted, failed
+            outcome = fut.result()
             if outcome is None:
-                continue
+                return
             started += 1
-            if outcome["accepted"]:
+            if outcome.get("accepted"):
                 accepted += 1
-            if outcome["error"] is not None:
+            if outcome.get("error") is not None:
                 failed += 1
                 errors.append(outcome["error"])
+
+        def schedule(task: Task) -> None:
+            seen_task_ids.add(task.task_id)
+            in_flight.add(asyncio.create_task(run_one(task)))
+
+        def refill() -> int:
+            remaining_starts = max(self.config.max_starts_per_cycle - len(seen_task_ids), 0)
+            if remaining_starts == 0:
+                return 0
+            slots = min(self.config.max_concurrent_tasks - len(in_flight), remaining_starts)
+            if slots <= 0:
+                return 0
+            runnable = [
+                candidate for candidate in self.store.list_tasks()
+                if (
+                    candidate.status is TaskStatus.PENDING
+                    or (
+                        candidate.status is TaskStatus.QC
+                        and candidate.metadata.get("runtime_next_stage") == "qc"
+                    )
+                )
+                and candidate.task_id not in seen_task_ids
+            ][:slots]
+            for task in runnable:
+                schedule(task)
+            return len(runnable)
+
+        # Initial wave from the snapshot the caller selected.
+        for task in selected_tasks:
+            if task.task_id in seen_task_ids:
+                continue
+            schedule(task)
+
+        deadline = time.monotonic() + max(self.config.cycle_max_seconds, 1)
+
+        while in_flight:
+            now = time.monotonic()
+            if now >= deadline:
+                # Past budget: stop refilling, just drain.
+                done, _ = await asyncio.wait(set(in_flight), return_when=asyncio.ALL_COMPLETED)
+                for fut in done:
+                    in_flight.discard(fut)
+                    collect(fut)
+                break
+
+            timeout = deadline - now
+            done, _ = await asyncio.wait(
+                set(in_flight),
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=timeout,
+            )
+            for fut in done:
+                in_flight.discard(fut)
+                collect(fut)
+
+            if time.monotonic() < deadline:
+                refill()
+
         return _CycleOutcome(started=started, accepted=accepted, failed=failed, errors=errors)
 
     def _lease_for(self, task: Task, acquired_at: datetime) -> RuntimeLease:

@@ -13,6 +13,11 @@ class RuntimeConfig:
     stale_after_seconds: int = 600
     retry_delay_seconds: int = 3600
     loop_interval_seconds: int = 5
+    # Wall-clock budget for one cycle. Inside this window the scheduler
+    # continuously refills its parallelism slots from PENDING as workers
+    # finish (no barrier). When the deadline passes, it stops starting new
+    # tasks but drains in-flight before reporting stats.
+    cycle_max_seconds: int = 60
     max_qc_rounds: int = 3
     # Project-level QC sampling policy. Applies to all tasks in this project
     # unless an individual task carries a legacy ``metadata.qc_policy`` override
@@ -28,6 +33,7 @@ class RuntimeConfig:
             "stale_after_seconds": self.stale_after_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
             "loop_interval_seconds": self.loop_interval_seconds,
+            "cycle_max_seconds": self.cycle_max_seconds,
             "max_qc_rounds": self.max_qc_rounds,
             "qc_sample_mode": self.qc_sample_mode,
             "qc_sample_ratio": self.qc_sample_ratio,
@@ -42,6 +48,7 @@ class RuntimeConfig:
             stale_after_seconds=data.get("stale_after_seconds", 600),
             retry_delay_seconds=data.get("retry_delay_seconds", 3600),
             loop_interval_seconds=data.get("loop_interval_seconds", 5),
+            cycle_max_seconds=int(data.get("cycle_max_seconds", 60)),
             max_qc_rounds=data.get("max_qc_rounds", 3),
             qc_sample_mode=data.get("qc_sample_mode", "sample_ratio"),
             qc_sample_ratio=float(data.get("qc_sample_ratio", 1.0)),

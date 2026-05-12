@@ -316,3 +316,57 @@ def test_scheduler_does_not_clear_fresh_active_runs_on_construction(tmp_path):
 
     assert len(store.list_active_runs()) == 1
     assert len(store.list_runtime_leases()) == 1
+
+
+def test_continuous_fill_refills_finished_slots_within_budget(tmp_path):
+    """Continuous-fill: with max_concurrent < max_starts_per_cycle, the cycle
+    keeps recruiting from PENDING as workers finish, instead of waiting for the
+    initial wave to drain (the old gather-barrier behavior)."""
+    store = SqliteStore.open(tmp_path)
+    for index in range(1, 11):
+        task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+        task.status = TaskStatus.PENDING
+        store.save_task(task)
+    scheduler = LocalRuntimeScheduler(
+        store=store,
+        client_factory=passing_client_factory,
+        config=RuntimeConfig(
+            max_concurrent_tasks=2,
+            max_starts_per_cycle=10,
+            cycle_max_seconds=30,
+        ),
+    )
+
+    snapshot = scheduler.run_once(stage_target="annotation")
+
+    # All 10 PENDING tasks should have run within the single cycle because
+    # the scheduler refills slots as soon as workers finish.
+    assert snapshot.queue_counts.accepted == 10
+    assert snapshot.queue_counts.pending == 0
+    assert snapshot.cycle_stats[-1].started == 10
+    assert snapshot.cycle_stats[-1].accepted == 10
+
+
+def test_max_starts_per_cycle_is_a_hard_ceiling_under_continuous_fill(tmp_path):
+    """Even with refill enabled, max_starts_per_cycle caps how many tasks one
+    cycle initiates — extra PENDING tasks wait for the next cycle."""
+    store = SqliteStore.open(tmp_path)
+    for index in range(1, 8):  # 7 PENDING
+        task = Task.new(task_id=f"task-{index}", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+        task.status = TaskStatus.PENDING
+        store.save_task(task)
+    scheduler = LocalRuntimeScheduler(
+        store=store,
+        client_factory=passing_client_factory,
+        config=RuntimeConfig(
+            max_concurrent_tasks=2,
+            max_starts_per_cycle=4,
+            cycle_max_seconds=30,
+        ),
+    )
+
+    snapshot = scheduler.run_once(stage_target="annotation")
+
+    assert snapshot.cycle_stats[-1].started == 4
+    assert snapshot.queue_counts.accepted == 4
+    assert snapshot.queue_counts.pending == 3
