@@ -56,6 +56,31 @@ export function extractBatchRows(sourceRef: unknown): BatchRow[] {
 }
 
 /**
+ * Recursively strip any `<think>...</think>` reasoning blocks from string
+ * fields (the legacy artifacts wrote the raw LLM output, which can prefix
+ * the JSON payload with a chain-of-thought block).
+ */
+const THINK_BLOCK_RE = /<think>[\s\S]*?<\/think>/gi;
+
+function stripThinkBlocks(value: unknown): unknown {
+  if (typeof value === "string") {
+    if (!value.includes("<think>")) return value;
+    return value.replace(THINK_BLOCK_RE, "").trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripThinkBlocks);
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = stripThinkBlocks(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
  * Find the latest `annotation_result` artifact and pull its
  * `rows[].output` keyed by row_index. Strings that wrap JSON are unwrapped.
  */
@@ -65,8 +90,11 @@ export function extractOutputsByIndex(
   const annotation = artifacts.filter((a) => a.kind === "annotation_result");
   if (annotation.length === 0) return new Map();
   const latest = annotation[annotation.length - 1];
-  // The payload may itself be a stringified JSON envelope; unwrap recursively.
-  const unwrapped = unwrapJson(latest.payload);
+  // Strip <think>...</think> reasoning blocks before unwrapping. Older
+  // artifacts (pre-fix) embed the model's chain-of-thought ahead of the JSON
+  // payload, which trips the leading-brace check inside unwrapJson.
+  const cleaned = stripThinkBlocks(latest.payload);
+  const unwrapped = unwrapJson(cleaned);
   // Locate a `rows` array nested under common envelope keys.
   const rows = locateRowsArray(unwrapped);
   const out = new Map<number, AnnotationOutput>();

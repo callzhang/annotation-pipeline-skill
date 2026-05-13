@@ -169,12 +169,13 @@ class SubagentRuntime:
         )
         annotation_finished_at = utc_now()
         task.current_attempt += 1
+        cleaned_annotation_text = _strip_markdown_json_fence(annotation_result.final_text)
         annotation_artifact = self._write_stage_artifact(
             task,
             annotation_result,
             kind="annotation_result",
             attempt_id=annotation_attempt_id,
-            payload={"text": annotation_result.final_text},
+            payload={"text": cleaned_annotation_text},
         )
         self._append_attempt(
             Attempt(
