@@ -633,6 +633,63 @@ class SubagentRuntime:
                 "reason": "schema validation failed",
                 "target": {"errors": exc.errors},
             }
+        # After the schema check, enforce verbatim — every annotated entity /
+        # phrase string must exist in the corresponding input row's text.
+        # Catches "annotator hallucinated a span" failures at validation time
+        # instead of waiting for QC.
+        verbatim_failure = self._check_verbatim_spans(task, payload)
+        if verbatim_failure is not None:
+            return verbatim_failure
+        return None
+
+    def _check_verbatim_spans(self, task: Task, payload: Any) -> dict | None:
+        """Verify every entity / json_structures phrase is a verbatim substring
+        of the corresponding row's input text. Returns a validation-failure
+        dict on the first mismatch (so retry feedback stays focused), or None
+        when every span checks out.
+        """
+        if not isinstance(payload, dict):
+            return None
+        rows_out = payload.get("rows")
+        if not isinstance(rows_out, list):
+            return None
+        # Build an index of row inputs from the task's source_ref.
+        source_payload = task.source_ref.get("payload") if isinstance(task.source_ref, dict) else None
+        if not isinstance(source_payload, dict):
+            return None
+        source_rows = source_payload.get("rows")
+        if not isinstance(source_rows, list):
+            return None
+        input_by_index: dict[int, str] = {}
+        for i, r in enumerate(source_rows):
+            if not isinstance(r, dict):
+                continue
+            idx = r.get("row_index") if isinstance(r.get("row_index"), int) else i
+            text = r.get("input")
+            if isinstance(text, str):
+                input_by_index[idx] = text
+        for r in rows_out:
+            if not isinstance(r, dict):
+                continue
+            row_index = r.get("row_index") if isinstance(r.get("row_index"), int) else 0
+            input_text = input_by_index.get(row_index)
+            if not input_text:
+                continue
+            output = r.get("output")
+            if not isinstance(output, dict):
+                continue
+            for span, where in _iter_verbatim_spans(output):
+                if not isinstance(span, str) or not span:
+                    continue
+                if span not in input_text:
+                    return {
+                        "category": "non_verbatim_span",
+                        "message": (
+                            f"Row {row_index} {where}: span {span!r} is not a verbatim substring of the input text."
+                        ),
+                        "reason": "verbatim check failed",
+                        "target": {"row_index": row_index, "field": where, "span": span},
+                    }
         return None
 
     def _record_annotator_replies(self, task: Task, attempt_id: str, final_text: str) -> int:
@@ -975,8 +1032,10 @@ class SubagentRuntime:
             "annotation (annotator wins) or accompanied by a corrected_annotation (you fix it).\n\n"
             "corrected_annotation must exactly match the current_annotation shape: a "
             "{\"rows\": [{\"row_index\": int, \"output\": {entities, classifications, relations, "
-            "json_structures}}, ...]} object. Spans must be VERBATIM from input text with correct "
-            "0-indexed character offsets. Preserve fields the annotator already had right.\n\n"
+            "json_structures}}, ...]} object. All entity / phrase strings are VERBATIM substrings "
+            "of the corresponding row's input.text — no character offsets, just the text itself. "
+            "The pipeline rejects spans that aren't found in the input. Preserve fields the "
+            "annotator already had right.\n\n"
             "Return raw JSON only, no markdown fences:\n"
             "{\n"
             '  "verdicts": [{"feedback_id", "verdict", "confidence", "reasoning"}, ...],\n'
@@ -1313,10 +1372,11 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "For text entity spans, copy exact contiguous text spans from task.source_ref.payload.text. "
         "Do not add entity labels outside the configured allowed entity types. "
         "For json_structures: on every row, scan the input text for all 10 phrase types defined in annotation_guidance "
-        "(status, risk, goal, strategy, constraint, decision, task, preference, reason, technology) and populate the "
-        "json_structures object with verbatim {text, start, end} entries. Building codes, requirements, must/shall "
-        "statements are almost always constraints. Empty json_structures = {} is only acceptable when the input genuinely "
-        "contains no instance of any type. "
+        "(status, risk, goal, strategy, constraint, decision, task, preference, reason, technology) and populate "
+        "json_structures with arrays of VERBATIM strings copied from the input — no character offsets, just the text "
+        "itself. The pipeline rejects any span that isn't a substring of input.text, so do not paraphrase. Building "
+        "codes, requirements, must/shall statements are almost always constraints. Empty json_structures = {} is only "
+        "acceptable when the input genuinely contains no instance of any type. "
         "\n\n"
         "HANDLING QC FEEDBACK: for each item in feedback_bundle, choose either to fix or to rebut, "
         "and ALWAYS attach a confidence score: "
@@ -1390,8 +1450,10 @@ def _build_qc_instructions(
         "\n\n"
         "json_structures recall: for each row, scan the input text for all 10 phrase types "
         "(status, risk, goal, strategy, constraint, decision, task, preference, reason, technology) defined "
-        "in annotation_guidance. Building codes / must / shall / should statements are clear constraints. "
-        "Always duplicate technology entities into json_structures.technology. "
+        "in annotation_guidance. Each phrase is a verbatim string copied from input.text — no character offsets, "
+        "and the pipeline rejects spans that aren't substrings of input.text. Building codes / must / shall / "
+        "should statements are clear constraints. Always duplicate technology entities into "
+        "json_structures.technology. "
         "\n\n"
         "CONFIDENCE (CALIBRATED): every entry in failures MUST include a numeric confidence field (0.0-1.0). "
         "USE THE FULL RANGE — do not default everything to 0.9+. Calibration guide: "
@@ -1481,6 +1543,34 @@ def _strip_markdown_json_fence(text: str) -> str:
     if opening not in {"```", "```json"}:
         return stripped
     return "\n".join(lines[1:-1]).strip()
+
+
+def _iter_verbatim_spans(output: dict) -> "list[tuple[str, str]]":
+    """Yield (span_text, location) pairs from an annotation row's output for
+    verbatim-against-input checking. location is a short label like
+    'entities.number' or 'json_structures.constraint'.
+    """
+    spans: list[tuple[str, str]] = []
+    entities = output.get("entities")
+    if isinstance(entities, dict):
+        for ent_type, items in entities.items():
+            if not isinstance(items, list):
+                continue
+            for s in items:
+                if isinstance(s, str):
+                    spans.append((s, f"entities.{ent_type}"))
+    js = output.get("json_structures")
+    if isinstance(js, dict):
+        for phrase_type, items in js.items():
+            if not isinstance(items, list):
+                continue
+            for s in items:
+                if isinstance(s, str):
+                    spans.append((s, f"json_structures.{phrase_type}"))
+                elif isinstance(s, dict) and isinstance(s.get("text"), str):
+                    # Tolerate the legacy {text,start,end} shape too.
+                    spans.append((s["text"], f"json_structures.{phrase_type}"))
+    return spans
 
 
 def _clamp_confidence(value: Any) -> float | None:

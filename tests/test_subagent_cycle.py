@@ -1472,3 +1472,93 @@ def test_confidence_normalization_uses_per_role_history(tmp_path):
     # An out-of-window value is clamped.
     assert runtime._normalize_confidence("annotator", 1.0) == 1.0
     assert runtime._normalize_confidence("annotator", 0.0) == 0.0
+
+
+def test_verbatim_check_flags_hallucinated_span(tmp_path):
+    """Validation now requires every entity / phrase string to be a substring
+    of the corresponding row's input text. A made-up span trips the check
+    even when the JSON shape is fine."""
+    from annotation_pipeline_skill.core.models import Task as _Task
+
+    store = SqliteStore.open(tmp_path)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["rows"],
+        "properties": {
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["row_index", "output"],
+                    "properties": {
+                        "row_index": {"type": "integer"},
+                        "output": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "entities": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "json_structures": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+    task = _Task.new(
+        task_id="t-verbatim",
+        pipeline_id="p",
+        source_ref={
+            "kind": "jsonl",
+            "payload": {
+                "annotation_guidance": {"output_schema": schema},
+                "rows": [{"row_index": 0, "input": "Acme deployed v1 today."}],
+            },
+        },
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    # 'GPT-J' is not in the input — the verbatim check must catch it.
+    annotation_payload = {
+        "rows": [
+            {
+                "row_index": 0,
+                "output": {
+                    "entities": {"technology": ["GPT-J"]},
+                    "json_structures": {"decision": ["deployed v1 today"]},
+                },
+            }
+        ]
+    }
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
+        max_qc_rounds=3,
+    )
+
+    runtime.run_once(stage_target="annotation")
+
+    feedbacks = store.list_feedback("t-verbatim")
+    categories = {f.category for f in feedbacks}
+    assert "non_verbatim_span" in categories, f"expected non_verbatim_span feedback, got {categories}"
+    # The matching json_structures.decision span IS in the input, so the
+    # failure must be the entities.technology entry.
+    span_feedbacks = [f for f in feedbacks if f.category == "non_verbatim_span"]
+    assert "GPT-J" in span_feedbacks[0].message
