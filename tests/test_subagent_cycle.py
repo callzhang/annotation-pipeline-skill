@@ -1225,6 +1225,148 @@ def test_both_high_confidence_stalemate_also_escalates_early(tmp_path):
     assert fb.feedback_id in loaded.metadata.get("low_confidence_feedback_ids", [])
 
 
+def test_arbiter_rules_in_annotator_favor_avoids_hr(tmp_path):
+    """When the retry loop is about to escalate to HUMAN_REVIEW, the arbiter
+    is consulted. If it rules in the annotator's favor with confidence >= 0.7,
+    the disputed feedback is closed by consensus and the task can recover
+    instead of going to human review."""
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-arb",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    # Three prior QC complaints with annotator rebuttals; max_qc_rounds=3 → HR
+    # is about to fire when the next QC pass finishes.
+    feedback_ids = []
+    for index in range(3):
+        fb = FeedbackRecord.new(
+            task_id="t-arb",
+            attempt_id=f"t-arb-attempt-{index}",
+            source_stage=FeedbackSource.QC,
+            severity=FeedbackSeverity.WARNING,
+            category="missing_phrase",
+            message=f"Stretched complaint #{index}",
+            target={},
+            suggested_action="annotator_rerun",
+            created_by="qc-agent",
+            metadata={"confidence": 0.9},
+        )
+        store.append_feedback(fb)
+        feedback_ids.append(fb.feedback_id)
+
+    arbiter_response = json.dumps({
+        "verdicts": [
+            {"feedback_id": fid, "verdict": "annotator", "confidence": 0.85, "reasoning": "stretched, not verbatim"}
+            for fid in feedback_ids
+        ]
+    })
+
+    # Annotator produces a result with a rebuttal for each of the three opens.
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": fid, "confidence": 0.7, "message": "QC is wrong; span not in text."}
+            for fid in feedback_ids
+        ],
+    }
+    # Have QC fail one more time so the round_count crosses the threshold
+    # and the arbiter path is reached.
+    qc_response = '{"passed": false, "failures": [{"category": "missing_phrase", "confidence": 0.92, "message": "still missing"}]}'
+
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text=qc_response, provider="qc")
+    arbiter_client = StubLLMClient(final_text=arbiter_response, provider="arbiter")
+
+    def factory(target: str):
+        if target == "arbiter":
+            return arbiter_client
+        if target == "qc":
+            return qc_client
+        return annotation_client
+
+    runtime = SubagentRuntime(store=store, client_factory=factory, max_qc_rounds=3)
+    runtime.run_once(stage_target="annotation")
+
+    discussions = store.list_feedback_discussions("t-arb")
+    arbiter_closures = [d for d in discussions if d.metadata.get("resolution_source") == "arbiter"]
+    assert len(arbiter_closures) == 3, f"expected 3 arbiter-closed feedbacks, got {len(arbiter_closures)}"
+    # The task did NOT go to HR because the arbiter dropped retry_round_count
+    # back below the threshold.
+    assert store.load_task("t-arb").status is not TaskStatus.HUMAN_REVIEW
+
+
+def test_arbiter_low_confidence_falls_through_to_hr(tmp_path):
+    """When the arbiter's confidence is below 0.7 (uncertain ruling), the
+    task still escalates to HUMAN_REVIEW."""
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-arb-low",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    for index in range(3):
+        fb = FeedbackRecord.new(
+            task_id="t-arb-low",
+            attempt_id=f"t-arb-low-attempt-{index}",
+            source_stage=FeedbackSource.QC,
+            severity=FeedbackSeverity.WARNING,
+            category="missing_phrase",
+            message=f"Complaint #{index}",
+            target={},
+            suggested_action="annotator_rerun",
+            created_by="qc-agent",
+            metadata={"confidence": 0.9},
+        )
+        store.append_feedback(fb)
+
+    feedback_ids = [f.feedback_id for f in store.list_feedback("t-arb-low")]
+    # Arbiter is uncertain → 0.4 confidence on every verdict, below 0.7 cut.
+    arbiter_response = json.dumps({
+        "verdicts": [
+            {"feedback_id": fid, "verdict": "annotator", "confidence": 0.4, "reasoning": "unclear"}
+            for fid in feedback_ids
+        ]
+    })
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": fid, "confidence": 0.7, "message": "I disagree."}
+            for fid in feedback_ids
+        ],
+    }
+    qc_response = '{"passed": false, "failures": [{"category": "missing_phrase", "confidence": 0.92, "message": "still missing"}]}'
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text=qc_response, provider="qc")
+    arbiter_client = StubLLMClient(final_text=arbiter_response, provider="arbiter")
+
+    def factory(target: str):
+        if target == "arbiter":
+            return arbiter_client
+        if target == "qc":
+            return qc_client
+        return annotation_client
+
+    runtime = SubagentRuntime(store=store, client_factory=factory, max_qc_rounds=3)
+    runtime.run_once(stage_target="annotation")
+
+    assert store.load_task("t-arb-low").status is TaskStatus.HUMAN_REVIEW
+    discussions = store.list_feedback_discussions("t-arb-low")
+    # No arbiter-closed feedbacks (low confidence).
+    assert not any(d.metadata.get("resolution_source") == "arbiter" for d in discussions)
+
+
 def test_confidence_normalization_uses_per_role_history(tmp_path):
     """When each role has a stable scale (QC outputs 0.85-0.99, annotator
     outputs 0.7-0.95), normalization re-maps both to [0,1] so the comparison

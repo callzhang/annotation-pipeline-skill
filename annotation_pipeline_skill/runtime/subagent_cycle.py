@@ -206,19 +206,29 @@ class SubagentRuntime:
                 "low_confidence": "escalated: QC and annotator both have low confidence (<0.5) on disputed feedback",
                 "high_confidence_stalemate": "escalated: QC and annotator both highly confident (>=0.85) and disagreeing — semantic stalemate",
             }.get(reason_key, "escalated: confidence-based dispute resolution selected human review")
-            self._transition(
-                task,
-                TaskStatus.HUMAN_REVIEW,
-                reason=reason_msg,
-                stage="annotation",
-                attempt_id=annotation_attempt_id,
-                metadata={
-                    "low_confidence_feedback_ids": low_ids,
-                    "early_hr_reason": reason_key,
-                    "early_hr_confidence": task.metadata.get("early_hr_confidence", {}),
-                },
-            )
-            return
+            arbiter_closed = await self._arbitrate_and_apply(task, annotation_attempt_id, stage="annotation")
+            if arbiter_closed and self._retry_round_count(task.task_id) == 0:
+                # Arbiter closed every open dispute in annotator's favor — let
+                # the normal validation/QC flow continue from here.
+                task.metadata.pop("needs_early_hr_low_confidence", None)
+                task.metadata.pop("early_hr_reason", None)
+                task.metadata.pop("low_confidence_feedback_ids", None)
+                task.metadata.pop("early_hr_confidence", None)
+            else:
+                self._transition(
+                    task,
+                    TaskStatus.HUMAN_REVIEW,
+                    reason=reason_msg,
+                    stage="annotation",
+                    attempt_id=annotation_attempt_id,
+                    metadata={
+                        "low_confidence_feedback_ids": low_ids,
+                        "early_hr_reason": reason_key,
+                        "early_hr_confidence": task.metadata.get("early_hr_confidence", {}),
+                        "arbiter_ran": arbiter_closed is not False,
+                    },
+                )
+                return
 
         self._transition(
             task,
@@ -270,18 +280,29 @@ class SubagentRuntime:
             )
             round_count = self._retry_round_count(task.task_id)
             if round_count >= self.max_qc_rounds:
-                self._transition(
-                    task,
-                    TaskStatus.HUMAN_REVIEW,
-                    reason="auto-escalated after repeated annotation/QC failures",
-                    stage="validation",
-                    attempt_id=annotation_attempt_id,
-                    metadata={
-                        "auto_escalated": True,
-                        "round_count": round_count,
-                        "max_qc_rounds": self.max_qc_rounds,
-                    },
-                )
+                arbiter_closed = await self._arbitrate_and_apply(task, annotation_attempt_id, stage="validation")
+                if arbiter_closed and self._retry_round_count(task.task_id) < self.max_qc_rounds:
+                    self._transition(
+                        task,
+                        TaskStatus.PENDING,
+                        reason="arbiter resolved enough disputes; resuming retry loop",
+                        stage="validation",
+                        attempt_id=annotation_attempt_id,
+                    )
+                else:
+                    self._transition(
+                        task,
+                        TaskStatus.HUMAN_REVIEW,
+                        reason="auto-escalated after repeated annotation/QC failures",
+                        stage="validation",
+                        attempt_id=annotation_attempt_id,
+                        metadata={
+                            "auto_escalated": True,
+                            "round_count": round_count,
+                            "max_qc_rounds": self.max_qc_rounds,
+                            "arbiter_ran": arbiter_closed is not False,
+                        },
+                    )
             else:
                 self._transition(
                     task,
@@ -377,20 +398,32 @@ class SubagentRuntime:
                 self._record_confidence_sample("qc", qc_conf)
             round_count = self._retry_round_count(task.task_id)
             if round_count >= self.max_qc_rounds:
-                self._transition(
-                    task,
-                    TaskStatus.HUMAN_REVIEW,
-                    reason="auto-escalated after repeated annotation/QC failures",
-                    stage="qc",
-                    attempt_id=qc_attempt_id,
-                    metadata={
-                        "auto_escalated": True,
-                        "round_count": round_count,
-                        "max_qc_rounds": self.max_qc_rounds,
-                        "feedback_id": feedback.feedback_id,
-                        "qc_artifact_id": qc_artifact.artifact_id,
-                    },
-                )
+                arbiter_closed = await self._arbitrate_and_apply(task, qc_attempt_id, stage="qc")
+                if arbiter_closed and self._retry_round_count(task.task_id) < self.max_qc_rounds:
+                    self._transition(
+                        task,
+                        TaskStatus.PENDING,
+                        reason="arbiter resolved enough disputes; resuming retry loop",
+                        stage="qc",
+                        attempt_id=qc_attempt_id,
+                        metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
+                    )
+                else:
+                    self._transition(
+                        task,
+                        TaskStatus.HUMAN_REVIEW,
+                        reason="auto-escalated after repeated annotation/QC failures",
+                        stage="qc",
+                        attempt_id=qc_attempt_id,
+                        metadata={
+                            "auto_escalated": True,
+                            "round_count": round_count,
+                            "max_qc_rounds": self.max_qc_rounds,
+                            "feedback_id": feedback.feedback_id,
+                            "qc_artifact_id": qc_artifact.artifact_id,
+                            "arbiter_ran": arbiter_closed is not False,
+                        },
+                    )
             else:
                 self._transition(
                     task,
@@ -693,6 +726,150 @@ class SubagentRuntime:
                 # Both sides confidently disagree → genuine semantic stalemate.
                 self._mark_early_hr(task, fid, "high_confidence_stalemate", ann_conf, qc_conf)
         return written
+
+    async def _arbitrate_and_apply(
+        self,
+        task: Task,
+        attempt_id: str,
+        stage: str,
+    ) -> bool:
+        """Run an external arbiter over open disputes; close any feedback the
+        arbiter rules in the annotator's favor with high confidence.
+
+        Returns True if any open feedback was closed (so the caller can re-check
+        whether the task can be accepted instead of escalated to HR).
+        Returns False otherwise (no arbiter configured, no disputes to arbitrate,
+        or arbiter ruled for QC / was uncertain).
+        """
+        # Only arbitrate when an annotator rebuttal exists — no rebuttal means
+        # nothing to dispute, just an annotator who couldn't satisfy QC.
+        discussions = self.store.list_feedback_discussions(task.task_id)
+        replies_by_feedback = {
+            d.feedback_id: d for d in discussions
+            if d.role == "annotator"
+        }
+        if not replies_by_feedback:
+            return False
+        consensus_ids = {d.feedback_id for d in discussions if d.consensus}
+        open_feedbacks = [
+            f for f in self.store.list_feedback(task.task_id)
+            if f.feedback_id not in consensus_ids
+            and f.feedback_id in replies_by_feedback
+            and (f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION)
+        ]
+        if not open_feedbacks:
+            return False
+        try:
+            arbiter_client = self.client_factory("arbiter")
+        except Exception:
+            return False
+        items = []
+        for f in open_feedbacks:
+            reply = replies_by_feedback[f.feedback_id]
+            items.append({
+                "feedback_id": f.feedback_id,
+                "category": f.category,
+                "qc": {
+                    "message": f.message,
+                    "confidence": f.metadata.get("confidence"),
+                    "target": f.target,
+                },
+                "annotator": {
+                    "message": reply.message,
+                    "confidence": reply.metadata.get("confidence"),
+                    "disputed_points": reply.disputed_points,
+                    "agreed_points": reply.agreed_points,
+                },
+            })
+        instructions = (
+            "You are an impartial senior arbiter resolving disagreements between an "
+            "automated QC reviewer and an annotator. For each disputed feedback, "
+            "decide who is right and how sure you are. Use the FULL confidence range "
+            "(0.0-1.0); 0.95+ only when one side is provably correct, mid-range when "
+            "genuinely judgment-call. Return raw JSON with no markdown fences:\n"
+            '{ "verdicts": [ '
+            '{"feedback_id": "...", "verdict": "annotator" | "qc" | "unresolved", '
+            '"confidence": 0.0-1.0, "reasoning": "short explanation"}, ... ] }'
+        )
+        prompt = json.dumps({"task_id": task.task_id, "disputed_items": items}, indent=2, sort_keys=True)
+        started_at = utc_now()
+        try:
+            result = await arbiter_client.generate(LLMGenerateRequest(
+                instructions=instructions,
+                prompt=prompt,
+                continuity_handle=None,
+            ))
+        except Exception:
+            return False
+        finished_at = utc_now()
+        # Parse response
+        try:
+            payload = json.loads(_strip_markdown_json_fence(result.final_text))
+        except (json.JSONDecodeError, ValueError):
+            return False
+        verdicts = payload.get("verdicts") if isinstance(payload, dict) else None
+        if not isinstance(verdicts, list):
+            return False
+        # Record an Attempt for audit traceability.
+        arbiter_attempt_id = self._next_attempt_id(task)
+        task.current_attempt += 1
+        arbiter_artifact = self._write_stage_artifact(
+            task,
+            result,
+            kind="arbiter_result",
+            attempt_id=arbiter_attempt_id,
+            payload={"decision": payload, "items": items},
+        )
+        self._append_attempt(
+            Attempt(
+                attempt_id=arbiter_attempt_id,
+                task_id=task.task_id,
+                index=task.current_attempt,
+                stage="arbitration",
+                status=AttemptStatus.SUCCEEDED,
+                started_at=started_at,
+                finished_at=finished_at,
+                provider_id=result.provider,
+                model=result.model,
+                effort=None,
+                route_role="arbiter",
+                summary=result.final_text[:500],
+                artifacts=[arbiter_artifact],
+            ),
+            arbiter_artifact,
+        )
+        closed_any = False
+        known_ids = {f.feedback_id for f in open_feedbacks}
+        for verdict_entry in verdicts:
+            if not isinstance(verdict_entry, dict):
+                continue
+            fid = verdict_entry.get("feedback_id")
+            if not isinstance(fid, str) or fid not in known_ids:
+                continue
+            verdict = str(verdict_entry.get("verdict") or "").lower()
+            conf = _clamp_confidence(verdict_entry.get("confidence"))
+            reasoning = str(verdict_entry.get("reasoning") or "")
+            # Only close (in annotator's favor) when arbiter is sure enough.
+            if verdict == "annotator" and conf is not None and conf >= 0.7:
+                self.store.append_feedback_discussion(
+                    FeedbackDiscussionEntry.new(
+                        task_id=task.task_id,
+                        feedback_id=fid,
+                        role="qc",
+                        stance="agree",
+                        message=f"Arbiter ({result.provider}/{result.model}) ruled in annotator's favor: {reasoning}",
+                        consensus=True,
+                        created_by="arbiter",
+                        metadata={
+                            "attempt_id": arbiter_attempt_id,
+                            "resolution_source": "arbiter",
+                            "arbiter_confidence": conf,
+                            "arbiter_verdict": verdict,
+                        },
+                    )
+                )
+                closed_any = True
+        return closed_any
 
     def _record_confidence_sample(self, role: str, value: float) -> None:
         history = self._confidence_history.setdefault(role, [])
