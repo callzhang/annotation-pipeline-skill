@@ -1363,8 +1363,72 @@ def test_arbiter_low_confidence_falls_through_to_hr(tmp_path):
 
     assert store.load_task("t-arb-low").status is TaskStatus.HUMAN_REVIEW
     discussions = store.list_feedback_discussions("t-arb-low")
-    # No arbiter-closed feedbacks (low confidence).
-    assert not any(d.metadata.get("resolution_source") == "arbiter" for d in discussions)
+    arbiter_entries = [d for d in discussions if d.metadata.get("resolution_source") == "arbiter"]
+    # Arbiter recorded its uncertain verdict (for audit) but none are
+    # consensus=True — feedback stays open.
+    assert arbiter_entries, "expected arbiter to leave an audit trail even when uncertain"
+    assert not any(d.consensus for d in arbiter_entries), "uncertain arbiter must not write consensus"
+
+
+def test_arbiter_qc_wins_high_conf_rejects_task(tmp_path):
+    """When arbiter affirms QC with confidence >= 0.7, the task is REJECTED
+    outright (not bounced to HUMAN_REVIEW) — defects confirmed by senior
+    arbiter; further annotator retries can't help."""
+    from annotation_pipeline_skill.core.models import FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-arb-qc",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+    )
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    for index in range(3):
+        fb = FeedbackRecord.new(
+            task_id="t-arb-qc",
+            attempt_id=f"t-arb-qc-attempt-{index}",
+            source_stage=FeedbackSource.QC,
+            severity=FeedbackSeverity.WARNING,
+            category="missing_entity",
+            message=f"Real defect #{index}",
+            target={},
+            suggested_action="annotator_rerun",
+            created_by="qc-agent",
+            metadata={"confidence": 0.9},
+        )
+        store.append_feedback(fb)
+    feedback_ids = [f.feedback_id for f in store.list_feedback("t-arb-qc")]
+    arbiter_response = json.dumps({
+        "verdicts": [
+            {"feedback_id": fid, "verdict": "qc", "confidence": 0.92, "reasoning": "defect is real and verifiable"}
+            for fid in feedback_ids
+        ]
+    })
+    annotation_payload = {
+        "entities": [],
+        "discussion_replies": [
+            {"feedback_id": fid, "confidence": 0.6, "message": "I disagree."}
+            for fid in feedback_ids
+        ],
+    }
+    qc_response = '{"passed": false, "failures": [{"category": "missing_entity", "confidence": 0.95, "message": "still missing"}]}'
+    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
+    qc_client = StubLLMClient(final_text=qc_response, provider="qc")
+    arbiter_client = StubLLMClient(final_text=arbiter_response, provider="arbiter")
+
+    def factory(target: str):
+        if target == "arbiter":
+            return arbiter_client
+        if target == "qc":
+            return qc_client
+        return annotation_client
+
+    runtime = SubagentRuntime(store=store, client_factory=factory, max_qc_rounds=3)
+    runtime.run_once(stage_target="annotation")
+
+    assert store.load_task("t-arb-qc").status is TaskStatus.REJECTED
 
 
 def test_confidence_normalization_uses_per_role_history(tmp_path):

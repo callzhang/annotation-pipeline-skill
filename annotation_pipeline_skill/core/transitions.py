@@ -9,7 +9,14 @@ class InvalidTransition(ValueError):
 ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.DRAFT: {TaskStatus.PENDING, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
     TaskStatus.PENDING: {TaskStatus.ANNOTATING, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
-    TaskStatus.ANNOTATING: {TaskStatus.VALIDATING, TaskStatus.HUMAN_REVIEW, TaskStatus.BLOCKED, TaskStatus.CANCELLED},
+    TaskStatus.ANNOTATING: {
+        TaskStatus.VALIDATING,
+        TaskStatus.HUMAN_REVIEW,
+        TaskStatus.ACCEPTED,
+        TaskStatus.REJECTED,
+        TaskStatus.BLOCKED,
+        TaskStatus.CANCELLED,
+    },
     TaskStatus.VALIDATING: {
         TaskStatus.PENDING,
         TaskStatus.QC,
