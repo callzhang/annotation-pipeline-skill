@@ -1370,25 +1370,34 @@ def test_arbiter_low_confidence_falls_through_to_hr(tmp_path):
     assert not any(d.consensus for d in arbiter_entries), "uncertain arbiter must not write consensus"
 
 
-def test_arbiter_qc_wins_high_conf_rejects_task(tmp_path):
-    """When arbiter affirms QC with confidence >= 0.7, the task is REJECTED
-    outright (not bounced to HUMAN_REVIEW) — defects confirmed by senior
-    arbiter; further annotator retries can't help."""
+def test_arbiter_qc_wins_with_fix_accepts_task(tmp_path):
+    """When arbiter rules 'qc' (or 'neither') with confidence >= 0.7 AND provides a
+    corrected_annotation, the runtime writes the correction as the final
+    annotation and ACCEPTS the task (no Rejected outcome)."""
     from annotation_pipeline_skill.core.models import FeedbackRecord
     from annotation_pipeline_skill.core.states import FeedbackSeverity
 
     store = SqliteStore.open(tmp_path)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["entities"],
+        "properties": {"entities": {"type": "array"}},
+    }
     task = Task.new(
-        task_id="t-arb-qc",
+        task_id="t-arb-fix",
         pipeline_id="p",
-        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
+        source_ref={
+            "kind": "jsonl",
+            "payload": {"text": "alpha 42", "annotation_guidance": {"output_schema": schema}},
+        },
     )
     task.status = TaskStatus.PENDING
     store.save_task(task)
     for index in range(3):
         fb = FeedbackRecord.new(
-            task_id="t-arb-qc",
-            attempt_id=f"t-arb-qc-attempt-{index}",
+            task_id="t-arb-fix",
+            attempt_id=f"t-arb-fix-attempt-{index}",
             source_stage=FeedbackSource.QC,
             severity=FeedbackSeverity.WARNING,
             category="missing_entity",
@@ -1399,12 +1408,13 @@ def test_arbiter_qc_wins_high_conf_rejects_task(tmp_path):
             metadata={"confidence": 0.9},
         )
         store.append_feedback(fb)
-    feedback_ids = [f.feedback_id for f in store.list_feedback("t-arb-qc")]
+    feedback_ids = [f.feedback_id for f in store.list_feedback("t-arb-fix")]
     arbiter_response = json.dumps({
         "verdicts": [
-            {"feedback_id": fid, "verdict": "qc", "confidence": 0.92, "reasoning": "defect is real and verifiable"}
+            {"feedback_id": fid, "verdict": "qc", "confidence": 0.92, "reasoning": "defect is real"}
             for fid in feedback_ids
-        ]
+        ],
+        "corrected_annotation": {"entities": [{"text": "42", "type": "number"}]},
     })
     annotation_payload = {
         "entities": [],
@@ -1428,7 +1438,11 @@ def test_arbiter_qc_wins_high_conf_rejects_task(tmp_path):
     runtime = SubagentRuntime(store=store, client_factory=factory, max_qc_rounds=3)
     runtime.run_once(stage_target="annotation")
 
-    assert store.load_task("t-arb-qc").status is TaskStatus.REJECTED
+    loaded = store.load_task("t-arb-fix")
+    assert loaded.status is TaskStatus.ACCEPTED
+    artifacts = [a for a in store.list_artifacts("t-arb-fix") if a.kind == "annotation_result"]
+    arbiter_correction = [a for a in artifacts if a.metadata.get("source") == "arbiter_correction"]
+    assert arbiter_correction, "expected an arbiter_correction artifact to be saved"
 
 
 def test_confidence_normalization_uses_per_role_history(tmp_path):

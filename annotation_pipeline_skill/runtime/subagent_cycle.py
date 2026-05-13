@@ -734,37 +734,31 @@ class SubagentRuntime:
         stage: str,
         arb: dict[str, Any],
     ) -> TaskStatus | None:
-        """If the arbiter made an authoritative call, transition to a terminal
-        state and return it. Otherwise return None (caller continues normal HR
-        / retry flow).
+        """If the arbiter made an authoritative call, transition the task to a
+        terminal state and return it. Otherwise return None (caller continues
+        with the normal HR / retry flow).
 
         Rules:
-        - Any qc-wins verdict with confidence >= 0.7 → REJECTED (defects confirmed).
-          (qc-wins outranks annotator-wins; even one confirmed real defect means
-          the annotation is not acceptable.)
-        - Else if every open feedback was closed (annotator wins) and there's
-          no unresolved dispute → ACCEPTED.
-        - Else None (caller proceeds with HR).
+        - Any unresolved verdict (low confidence) → None (HR fallthrough).
+        - Any fixed verdict (qc-wins or neither, conf>=0.7) AND
+          corrected_annotation present → write the correction as the final
+          annotation and ACCEPT.
+        - All open feedbacks closed in annotator's favor (conf>=0.7) and zero
+          unresolved → ACCEPT with the current annotation.
+        - Anything else → None (HR fallthrough).
         """
         if not arb.get("ran"):
             return None
-        if arb["rejected"] > 0:
-            self._transition(
-                task,
-                TaskStatus.REJECTED,
-                reason="arbiter affirmed QC complaint with high confidence; annotation rejected",
-                stage=stage,
-                attempt_id=attempt_id,
-                metadata={
-                    "resolution_source": "arbiter",
-                    "arbiter_closed": arb["closed"],
-                    "arbiter_rejected": arb["rejected"],
-                    "arbiter_unresolved": arb["unresolved"],
-                },
-            )
-            return TaskStatus.REJECTED
-        if arb["unresolved"] == 0 and arb["closed"] > 0:
-            # Every dispute was resolved in annotator's favor by the arbiter.
+        if arb["unresolved"] > 0:
+            # The arbiter wasn't sure on at least one dispute; let HR handle it.
+            return None
+        if arb["fixed"] > 0:
+            corrected = arb.get("corrected_annotation")
+            if not isinstance(corrected, dict):
+                return None
+            applied = self._apply_arbiter_correction(task, attempt_id, corrected, arb)
+            return applied
+        if arb["closed"] > 0:
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
@@ -779,24 +773,90 @@ class SubagentRuntime:
             return TaskStatus.ACCEPTED
         return None
 
+    def _apply_arbiter_correction(
+        self,
+        task: Task,
+        attempt_id: str,
+        corrected: dict[str, Any],
+        arb: dict[str, Any],
+    ) -> TaskStatus | None:
+        """Write the arbiter's corrected_annotation as a fresh annotation_result
+        artifact and accept the task. Returns ACCEPTED on success or None if the
+        correction couldn't be applied (caller falls through to HR).
+        """
+        from annotation_pipeline_skill.core.schema_validation import (
+            SchemaValidationError,
+            validate_payload_against_task_schema,
+        )
+
+        # Schema check the corrected annotation up front. If it fails we punt
+        # back to HR rather than save a bad artifact.
+        try:
+            validate_payload_against_task_schema(task, corrected, store=self.store)
+        except SchemaValidationError:
+            return None
+
+        cleaned_text = json.dumps(corrected, sort_keys=True, indent=2)
+        relative_path = f"artifact_payloads/{task.task_id}/{attempt_id}_arbiter_correction.json"
+        artifact_path = self.store.root / relative_path
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(
+            json.dumps(
+                {
+                    "text": cleaned_text,
+                    "task_id": task.task_id,
+                    "source": "arbiter_correction",
+                    "diagnostics": {"resolution_source": "arbiter"},
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        artifact = ArtifactRef.new(
+            task_id=task.task_id,
+            kind="annotation_result",
+            path=relative_path,
+            content_type="application/json",
+            metadata={"source": "arbiter_correction", "attempt_id": attempt_id},
+        )
+        self.store.append_artifact(artifact)
+        self._transition(
+            task,
+            TaskStatus.ACCEPTED,
+            reason="arbiter produced corrected annotation; task accepted",
+            stage="arbitration",
+            attempt_id=attempt_id,
+            metadata={
+                "resolution_source": "arbiter",
+                "arbiter_closed": arb["closed"],
+                "arbiter_fixed": arb["fixed"],
+                "arbiter_correction_artifact_id": artifact.artifact_id,
+            },
+        )
+        return TaskStatus.ACCEPTED
+
     async def _arbitrate_and_apply(
         self,
         task: Task,
         attempt_id: str,
         stage: str,
     ) -> dict[str, Any]:
-        """Run an external arbiter over open disputes and apply the verdict.
+        """Run the external arbiter as judge + fixer over open disputes.
 
-        Returns a dict describing what to do next:
+        Returns:
             {
-                "ran": bool,        # whether arbiter was invoked at all
-                "closed": int,      # feedbacks closed by consensus (annotator wins, conf>=0.7)
-                "rejected": int,    # feedbacks the arbiter confirmed as real defects (qc wins, conf>=0.7)
-                "unresolved": int,  # feedbacks the arbiter couldn't settle (any verdict, conf<0.7)
+                "ran": bool,                 # arbiter was invoked
+                "closed": int,               # annotator-wins verdicts conf>=0.7
+                "fixed": int,                # qc-wins verdicts where arbiter also provided a fix
+                "unresolved": int,           # any verdict with conf<0.7, or qc-wins without a fix
+                "corrected_annotation": dict | None,  # full corrected annotation from arbiter, when provided
             }
-        Callers decide the terminal transition based on these counts.
+        Callers decide the terminal transition based on these counts (with help
+        from _terminal_from_arbiter, which applies the correction).
         """
-        empty = {"ran": False, "closed": 0, "rejected": 0, "unresolved": 0}
+        empty = {"ran": False, "closed": 0, "fixed": 0, "unresolved": 0, "corrected_annotation": None}
         # Only arbitrate when an annotator rebuttal exists — no rebuttal means
         # nothing to dispute, just an annotator who couldn't satisfy QC.
         discussions = self.store.list_feedback_discussions(task.task_id)
@@ -846,17 +906,48 @@ class SubagentRuntime:
                     "agreed_points": reply.agreed_points,
                 },
             })
+        # Build the full task context for arbiter-as-fixer: the input text and
+        # the annotator's latest annotation. Arbiter can both judge AND produce
+        # a corrected annotation that we'll apply on its behalf.
+        latest_annotation_artifact = self._latest_annotation_artifact(task.task_id)
+        current_annotation = self._read_artifact_payload(latest_annotation_artifact)
         instructions = (
-            "You are an impartial senior arbiter resolving disagreements between an "
-            "automated QC reviewer and an annotator. For each disputed feedback, "
-            "decide who is right and how sure you are. Use the FULL confidence range "
-            "(0.0-1.0); 0.95+ only when one side is provably correct, mid-range when "
-            "genuinely judgment-call. Return raw JSON with no markdown fences:\n"
-            '{ "verdicts": [ '
-            '{"feedback_id": "...", "verdict": "annotator" | "qc" | "unresolved", '
-            '"confidence": 0.0-1.0, "reasoning": "short explanation"}, ... ] }'
+            "You are a senior arbiter AND fixer for an annotation pipeline. You receive "
+            "the input task, the annotator's latest annotation, and a list of disputes "
+            "between the automated QC reviewer and the annotator.\n\n"
+            "For EACH disputed feedback, choose exactly one of three verdicts:\n"
+            "  - 'annotator': annotator's current annotation IS correct on this item; QC is wrong.\n"
+            "  - 'qc':        QC's complaint IS correct; the annotation needs the fix QC asks for.\n"
+            "  - 'neither':   both sides are wrong; you (arbiter) will provide the right answer in corrected_annotation.\n"
+            "Then attach a confidence 0.0-1.0. Use the full range — 0.95+ only when one side is "
+            "provably correct; mid-range for judgment calls; <0.7 when truly unsure.\n\n"
+            "DECISION RULE WIRED INTO THE RUNTIME:\n"
+            "  - All verdicts 'annotator' with conf >= 0.7  → task ACCEPTED with the current annotation.\n"
+            "  - ANY verdict 'qc' or 'neither' with conf >= 0.7  → you MUST also produce a full "
+            "corrected_annotation; the runtime will save it as the final answer and ACCEPT the task.\n"
+            "  - ANY verdict with conf < 0.7 (uncertain)    → the task goes to HUMAN REVIEW.\n"
+            "There is no 'rejected' outcome — confident verdicts MUST be either backed by the existing "
+            "annotation (annotator wins) or accompanied by a corrected_annotation (you fix it).\n\n"
+            "corrected_annotation must exactly match the current_annotation shape: a "
+            "{\"rows\": [{\"row_index\": int, \"output\": {entities, classifications, relations, "
+            "json_structures}}, ...]} object. Spans must be VERBATIM from input text with correct "
+            "0-indexed character offsets. Preserve fields the annotator already had right.\n\n"
+            "Return raw JSON only, no markdown fences:\n"
+            "{\n"
+            '  "verdicts": [{"feedback_id", "verdict", "confidence", "reasoning"}, ...],\n'
+            '  "corrected_annotation": <object matching current_annotation shape> | null\n'
+            "}"
         )
-        prompt = json.dumps({"task_id": task.task_id, "disputed_items": items}, indent=2, sort_keys=True)
+        prompt = json.dumps(
+            {
+                "task_id": task.task_id,
+                "input": task.source_ref.get("payload", {}),
+                "current_annotation": current_annotation,
+                "disputed_items": items,
+            },
+            indent=2,
+            sort_keys=True,
+        )
         started_at = utc_now()
         try:
             result = await arbiter_client.generate(LLMGenerateRequest(
@@ -903,7 +994,16 @@ class SubagentRuntime:
             ),
             arbiter_artifact,
         )
-        outcome = {"ran": True, "closed": 0, "rejected": 0, "unresolved": 0}
+        outcome = {
+            "ran": True,
+            "closed": 0,
+            "fixed": 0,
+            "unresolved": 0,
+            "corrected_annotation": None,
+        }
+        corrected = payload.get("corrected_annotation") if isinstance(payload, dict) else None
+        if isinstance(corrected, dict):
+            outcome["corrected_annotation"] = corrected
         known_ids = {f.feedback_id for f in open_feedbacks}
         for verdict_entry in verdicts:
             if not isinstance(verdict_entry, dict):
@@ -952,25 +1052,47 @@ class SubagentRuntime:
                         metadata=base_metadata,
                     )
                 )
-            elif verdict == "qc":
-                # Confident qc-wins: mark feedback as final-defect; caller will
-                # REJECT the task instead of bouncing to human review or retry.
-                outcome["rejected"] += 1
-                self.store.append_feedback_discussion(
-                    FeedbackDiscussionEntry.new(
-                        task_id=task.task_id,
-                        feedback_id=fid,
-                        role="qc",
-                        stance="affirm",
-                        message=f"Arbiter ({result.provider}/{result.model}) ruled in QC's favor: {reasoning}",
-                        consensus=True,
-                        created_by="arbiter",
-                        metadata=base_metadata,
+            elif verdict in {"qc", "neither"}:
+                # Confident the current annotation is wrong. The arbiter must have
+                # provided corrected_annotation — runtime will apply it and accept
+                # the task. If the correction is missing, fall back to HR.
+                if outcome["corrected_annotation"] is not None:
+                    outcome["fixed"] += 1
+                    self.store.append_feedback_discussion(
+                        FeedbackDiscussionEntry.new(
+                            task_id=task.task_id,
+                            feedback_id=fid,
+                            role="qc",
+                            stance="agree",
+                            message=(
+                                f"Arbiter ({result.provider}/{result.model}) ruled {verdict!r} "
+                                f"and produced a fix: {reasoning}"
+                            ),
+                            consensus=True,
+                            created_by="arbiter",
+                            metadata=base_metadata,
+                        )
                     )
-                )
+                else:
+                    # No fix provided — punt to HR.
+                    outcome["unresolved"] += 1
+                    self.store.append_feedback_discussion(
+                        FeedbackDiscussionEntry.new(
+                            task_id=task.task_id,
+                            feedback_id=fid,
+                            role="qc",
+                            stance="comment",
+                            message=(
+                                f"Arbiter ({result.provider}/{result.model}) ruled {verdict!r} but "
+                                f"did not produce a fix: {reasoning}"
+                            ),
+                            consensus=False,
+                            created_by="arbiter",
+                            metadata=base_metadata,
+                        )
+                    )
             else:
-                # Verdict like "unresolved" with confidence >= 0.7 — treat as
-                # "we know we don't know" → still HR.
+                # Unknown verdict value at high confidence — treat as uncertain.
                 outcome["unresolved"] += 1
         return outcome
 
