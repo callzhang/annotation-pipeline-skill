@@ -99,6 +99,14 @@ class SubagentRuntime:
         return f"Annotation guideline ({ver.version}):\n{ver.content}"
 
     async def _run_task(self, task: Task, stage_target: str) -> None:
+        if task.status is TaskStatus.ARBITRATING:
+            # Manual rearbitrate path: human dragged a REJECTED/HR card into the
+            # Arbitration column. Re-run the arbiter over the full feedback
+            # history (including consensus-closed entries from a prior arbiter
+            # pass) and dispatch the outcome.
+            await self._run_rearbitration(task)
+            return
+
         if task.status is TaskStatus.QC and task.metadata.get("runtime_next_stage") == "qc":
             await self._run_qc_only(task)
             return
@@ -837,11 +845,46 @@ class SubagentRuntime:
         )
         return TaskStatus.ACCEPTED
 
+    async def _run_rearbitration(self, task: Task) -> None:
+        """Worker entry for human-dragged REJECTED/HR → Arbitration cards.
+
+        Task already has status=ARBITRATING (the manual-move API set it).
+        We re-evaluate every QC/validation feedback (consensus-closed ones
+        included) and let the arbiter decide. On no-fix outcome the task
+        falls back to HUMAN_REVIEW.
+        """
+        attempt_id = self._next_attempt_id(task)
+        arb = await self._arbitrate_and_apply(
+            task,
+            attempt_id,
+            stage="arbitration",
+            include_closed_feedbacks=True,
+        )
+        terminal = self._terminal_from_arbiter(task, attempt_id, "arbitration", arb)
+        if terminal is None:
+            self._transition(
+                task,
+                TaskStatus.HUMAN_REVIEW,
+                reason="rearbitration produced no fix; routing back to human review",
+                stage="arbitration",
+                attempt_id=attempt_id,
+                metadata={
+                    "rearbitrate": True,
+                    "arbiter_ran": arb["ran"],
+                    "arbiter_unresolved": arb["unresolved"],
+                    "arbiter_closed": arb["closed"],
+                    "arbiter_fixed": arb["fixed"],
+                },
+            )
+        self.store.save_task(task)
+
     async def _arbitrate_and_apply(
         self,
         task: Task,
         attempt_id: str,
         stage: str,
+        *,
+        include_closed_feedbacks: bool = False,
     ) -> dict[str, Any]:
         """Run the external arbiter as judge + fixer over open disputes.
 
@@ -869,7 +912,7 @@ class SubagentRuntime:
         consensus_ids = {d.feedback_id for d in discussions if d.consensus}
         open_feedbacks = [
             f for f in self.store.list_feedback(task.task_id)
-            if f.feedback_id not in consensus_ids
+            if (include_closed_feedbacks or f.feedback_id not in consensus_ids)
             and f.feedback_id in replies_by_feedback
             and (f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION)
         ]
@@ -879,15 +922,17 @@ class SubagentRuntime:
             arbiter_client = self.client_factory("arbiter")
         except Exception:
             return empty
-        # Promote the task into ARBITRATING — this is a real pipeline stage now,
-        # visible in the kanban while the arbiter LLM is running.
-        self._transition(
-            task,
-            TaskStatus.ARBITRATING,
-            reason="invoking arbiter to resolve QC / annotator disputes",
-            stage="arbitration",
-            attempt_id=attempt_id,
-        )
+        # Promote the task into ARBITRATING — visible in the kanban while the
+        # arbiter LLM is running. Idempotent: if a human (or a prior step) has
+        # already moved the task into ARBITRATING, skip the transition.
+        if task.status is not TaskStatus.ARBITRATING:
+            self._transition(
+                task,
+                TaskStatus.ARBITRATING,
+                reason="invoking arbiter to resolve QC / annotator disputes",
+                stage="arbitration",
+                attempt_id=attempt_id,
+            )
         items = []
         for f in open_feedbacks:
             reply = replies_by_feedback[f.feedback_id]

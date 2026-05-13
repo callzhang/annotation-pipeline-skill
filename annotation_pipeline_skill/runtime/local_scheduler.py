@@ -162,10 +162,16 @@ class LocalRuntimeScheduler:
         method does not need a lock — only one worker runs at a time
         between awaits.
 
-        Queries only PENDING / QC tasks (covered by ``idx_tasks_status_created``)
-        so the worker pool stays cheap to poll even at 41k+ task volumes.
+        Queries only PENDING / QC / ARBITRATING tasks (covered by
+        ``idx_tasks_status_created``) so the worker pool stays cheap to poll
+        even at 41k+ task volumes. ARBITRATING tasks are queued by humans
+        dragging REJECTED / HR cards into the Arbitration column (re-arbitrate
+        flow) — the worker calls into SubagentRuntime to run the arbiter on
+        them.
         """
-        candidates = self.store.list_tasks_by_status({TaskStatus.PENDING, TaskStatus.QC})
+        candidates = self.store.list_tasks_by_status(
+            {TaskStatus.PENDING, TaskStatus.QC, TaskStatus.ARBITRATING}
+        )
         for candidate in candidates:
             if candidate.status is TaskStatus.QC and candidate.metadata.get("runtime_next_stage") != "qc":
                 continue

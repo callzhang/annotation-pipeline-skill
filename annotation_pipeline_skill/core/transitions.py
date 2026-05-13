@@ -40,12 +40,13 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.HUMAN_REVIEW: {
         TaskStatus.ACCEPTED,
         TaskStatus.ANNOTATING,
+        TaskStatus.ARBITRATING,
         TaskStatus.REJECTED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },
     TaskStatus.ACCEPTED: set(),
-    TaskStatus.REJECTED: set(),
+    TaskStatus.REJECTED: {TaskStatus.ARBITRATING},
     TaskStatus.BLOCKED: {TaskStatus.PENDING},
     TaskStatus.CANCELLED: set(),
 }

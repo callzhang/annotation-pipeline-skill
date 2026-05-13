@@ -548,3 +548,68 @@ def test_post_human_review_correction_rejects_invalid_state_409(tmp_path):
     assert status == 409
     payload = json.loads(response)
     assert payload["error"] == "invalid_transition"
+
+
+def test_dashboard_api_manual_move_rejected_to_arbitration(tmp_path):
+    """REJECTED → ARBITRATING via the manual-move endpoint is in the whitelist
+    and flips the task into the Arbitration queue for the worker to pick up."""
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="t-rej", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.REJECTED
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    body = json.dumps({"target_status": "arbitrating", "reason": "rearbitrate the rejection"}).encode("utf-8")
+    status, _headers, response = api.handle_post("/api/tasks/t-rej/move", body)
+
+    assert status == 200
+    assert store.load_task("t-rej").status is TaskStatus.ARBITRATING
+
+
+def test_dashboard_api_manual_move_blocks_disallowed_transition(tmp_path):
+    """PENDING → ANNOTATING is not in the manual-move whitelist (runtime owns
+    the in-flight pipeline). The endpoint rejects it with 400."""
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="t-pend", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+    api = DashboardApi(store)
+
+    body = json.dumps({"target_status": "annotating", "reason": "force"}).encode("utf-8")
+    status, _headers, response = api.handle_post("/api/tasks/t-pend/move", body)
+
+    assert status == 400
+    payload = json.loads(response)
+    assert payload["error"] == "manual_move_not_allowed"
+
+
+def test_dashboard_api_manual_move_blocks_in_flight_task(tmp_path):
+    """A task currently held by an active runtime lease cannot be manually
+    moved (would race with the worker)."""
+    from datetime import datetime, timedelta, timezone
+    from annotation_pipeline_skill.core.runtime import RuntimeLease
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="t-busy", pipeline_id="pipe", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.REJECTED
+    store.save_task(task)
+    now = datetime.now(timezone.utc)
+    store.save_runtime_lease(
+        RuntimeLease(
+            lease_id="lease-1",
+            task_id="t-busy",
+            stage="qc",
+            acquired_at=now,
+            heartbeat_at=now,
+            expires_at=now + timedelta(seconds=600),
+            owner="worker-x",
+        )
+    )
+    api = DashboardApi(store)
+
+    body = json.dumps({"target_status": "arbitrating", "reason": "rearbitrate"}).encode("utf-8")
+    status, _headers, response = api.handle_post("/api/tasks/t-busy/move", body)
+
+    assert status == 409
+    payload = json.loads(response)
+    assert payload["error"] == "task_in_flight"

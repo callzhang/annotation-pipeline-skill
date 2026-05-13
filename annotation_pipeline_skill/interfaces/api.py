@@ -179,6 +179,9 @@ class DashboardApi:
         if route.startswith("/api/tasks/") and route.endswith("/feedback-discussions"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/feedback-discussions").strip("/")
             return self._post_feedback_discussion_response(store, task_id, body)
+        if route.startswith("/api/tasks/") and route.endswith("/move"):
+            task_id = route.removeprefix("/api/tasks/").removesuffix("/move").strip("/")
+            return self._post_task_move_response(store, task_id, body)
         return self._json_response(404, {"error": "not_found"})
 
     def _stores_list(self) -> list[dict]:
@@ -371,6 +374,71 @@ class DashboardApi:
                 "task": store.load_task(task_id).to_dict(),
             },
         )
+
+    # Whitelist of manual moves a human can request through the UI's drag-drop.
+    # Drag actions that overlap with HR Decision (HR → Accepted / Rejected) are
+    # intentionally absent — those go through the HR Decision form instead.
+    _MANUAL_MOVE_WHITELIST: dict[TaskStatus, set[TaskStatus]] = {
+        TaskStatus.REJECTED: {TaskStatus.ARBITRATING},
+        TaskStatus.HUMAN_REVIEW: {TaskStatus.ARBITRATING, TaskStatus.PENDING},
+        TaskStatus.ACCEPTED: {TaskStatus.HUMAN_REVIEW},
+    }
+
+    def _post_task_move_response(self, store: SqliteStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
+        if not isinstance(payload, dict):
+            return self._json_response(400, {"error": "invalid_payload"})
+        target_value = str(payload.get("target_status") or "").lower()
+        reason = str(payload.get("reason") or "").strip()
+        actor = str(payload.get("actor") or "human")
+        try:
+            target_status = TaskStatus(target_value)
+        except ValueError:
+            return self._json_response(400, {"error": "invalid_target_status", "detail": target_value})
+        if not reason:
+            return self._json_response(400, {"error": "reason_required"})
+        try:
+            task = store.load_task(task_id)
+        except (FileNotFoundError, KeyError):
+            return self._json_response(404, {"error": "task_not_found"})
+        # Block manual move when the task is actively leased by the runtime —
+        # avoids racing with an in-flight worker on the same row.
+        active_leases = [
+            lease for lease in store.list_runtime_leases() if lease.task_id == task_id
+        ]
+        if active_leases:
+            return self._json_response(409, {"error": "task_in_flight", "detail": "task is currently being processed by the runtime"})
+        allowed = self._MANUAL_MOVE_WHITELIST.get(task.status, set())
+        if target_status not in allowed:
+            return self._json_response(
+                400,
+                {
+                    "error": "manual_move_not_allowed",
+                    "detail": f"cannot manually move {task.status.value} → {target_status.value}",
+                    "allowed_targets": sorted(s.value for s in allowed),
+                },
+            )
+        try:
+            event = transition_task(
+                task,
+                target_status,
+                actor=actor,
+                reason=f"manual_drag: {reason}",
+                stage="manual_move",
+                metadata={"via": "manual_drag", "manual_target": target_status.value},
+            )
+        except InvalidTransition as exc:
+            return self._json_response(400, {"error": "invalid_transition", "detail": str(exc)})
+        # If the target is PENDING (HR → Annotating), reset the retry counter
+        # so the annotator gets a fresh budget on the next worker pickup.
+        if target_status is TaskStatus.PENDING:
+            task.current_attempt = 0
+        store.save_task(task)
+        store.append_event(event)
+        return self._json_response(200, {"ok": True, "task": task.to_dict()})
 
     def _post_human_review_response(self, store: SqliteStore, task_id: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
         try:

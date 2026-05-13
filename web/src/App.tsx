@@ -5,6 +5,7 @@ import {
   fetchStores,
   fetchTaskDetail,
   postHumanReviewDecision,
+  postTaskMove,
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { CoordinatorPanel } from "./components/CoordinatorPanel";
@@ -251,6 +252,10 @@ export default function App() {
           snapshot={snapshot}
           selectedTaskId={selectedTaskId}
           onSelectTask={(card) => setTask(card.task_id)}
+          onMoveTask={async (card, targetStatus, reason) => {
+            await postTaskMove(card.task_id, targetStatus, reason, selectedStoreKey);
+            setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
+          }}
         />
       ) : null}
       {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}

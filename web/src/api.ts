@@ -83,6 +83,24 @@ export async function postFeedbackDiscussion(
   return fetchTaskDetail(taskId, storeKey);
 }
 
+export async function postTaskMove(
+  taskId: string,
+  targetStatus: string,
+  reason: string,
+  storeKey: string | null = null,
+): Promise<{ ok: boolean; task: Record<string, unknown> }> {
+  const response = await fetch(withStore(`/api/tasks/${encodeURIComponent(taskId)}/move`, storeKey), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target_status: targetStatus, reason }),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Task move API returned ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function postHumanReviewDecision(
   taskId: string,
   payload: Record<string, unknown>,

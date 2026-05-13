@@ -172,6 +172,26 @@ button {
   min-height: 420px;
   min-width: 180px;
   padding: 8px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.kanban-column.drop-allowed {
+  border-color: #82a3ff;
+  border-style: dashed;
+}
+
+.kanban-column.drop-active {
+  background: #dde7ff;
+  border-color: #5278ff;
+  box-shadow: inset 0 0 0 2px #5278ff;
+}
+
+.task-card[draggable="true"] {
+  cursor: grab;
+}
+
+.task-card[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .column-header {
