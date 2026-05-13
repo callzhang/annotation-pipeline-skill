@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
@@ -1016,8 +1017,14 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
     }
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
 def _strip_markdown_json_fence(text: str) -> str:
-    stripped = text.strip()
+    # Many recent open-weight models (minimax, deepseek-reasoner, qwen-r1, etc.)
+    # emit a leading <think>...</think> reasoning block before the JSON payload.
+    # Strip those blocks first, then handle the markdown fence.
+    stripped = _THINK_BLOCK_RE.sub("", text).strip()
     if not stripped.startswith("```"):
         return stripped
     lines = stripped.splitlines()
