@@ -9,6 +9,7 @@ KANBAN_COLUMNS: list[tuple[str, str, TaskStatus]] = [
     ("pending", "Pending", TaskStatus.PENDING),
     ("annotating", "Annotating", TaskStatus.ANNOTATING),
     ("qc", "QC", TaskStatus.QC),
+    ("arbitrating", "Arbitration", TaskStatus.ARBITRATING),
     ("human_review", "Human Review", TaskStatus.HUMAN_REVIEW),
     ("accepted", "Accepted", TaskStatus.ACCEPTED),
     ("rejected", "Rejected", TaskStatus.REJECTED),
@@ -18,6 +19,7 @@ OPERATOR_COLUMNS: list[tuple[str, str]] = [
     ("pending", "Pending"),
     ("annotation", "Annotation"),
     ("qc", "QC"),
+    ("arbitration", "Arbitration"),
     ("merge", "Merge"),
     ("failed", "Failed"),
     ("accepted", "Accepted"),
@@ -29,6 +31,8 @@ def operator_stage(task: Task) -> str:
         return "pending"
     if task.status is TaskStatus.ANNOTATING:
         return "annotation"
+    if task.status is TaskStatus.ARBITRATING:
+        return "arbitration"
     if task.status in {TaskStatus.QC, TaskStatus.HUMAN_REVIEW}:
         return "qc"
     if task.status is TaskStatus.ACCEPTED:

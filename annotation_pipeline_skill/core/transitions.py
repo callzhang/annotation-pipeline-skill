@@ -12,6 +12,7 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.ANNOTATING: {
         TaskStatus.QC,
         TaskStatus.PENDING,
+        TaskStatus.ARBITRATING,
         TaskStatus.HUMAN_REVIEW,
         TaskStatus.ACCEPTED,
         TaskStatus.REJECTED,
@@ -21,9 +22,18 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.QC: {
         TaskStatus.PENDING,
         TaskStatus.ACCEPTED,
+        TaskStatus.ARBITRATING,
         TaskStatus.HUMAN_REVIEW,
         TaskStatus.ANNOTATING,
         TaskStatus.REJECTED,
+        TaskStatus.BLOCKED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.ARBITRATING: {
+        TaskStatus.PENDING,
+        TaskStatus.ACCEPTED,
+        TaskStatus.REJECTED,
+        TaskStatus.HUMAN_REVIEW,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },

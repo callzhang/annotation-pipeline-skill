@@ -819,6 +819,15 @@ class SubagentRuntime:
             arbiter_client = self.client_factory("arbiter")
         except Exception:
             return empty
+        # Promote the task into ARBITRATING — this is a real pipeline stage now,
+        # visible in the kanban while the arbiter LLM is running.
+        self._transition(
+            task,
+            TaskStatus.ARBITRATING,
+            reason="invoking arbiter to resolve QC / annotator disputes",
+            stage="arbitration",
+            attempt_id=attempt_id,
+        )
         items = []
         for f in open_feedbacks:
             reply = replies_by_feedback[f.feedback_id]

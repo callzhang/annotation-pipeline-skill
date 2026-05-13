@@ -34,15 +34,16 @@ def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
         "pending",
         "annotating",
         "qc",
+        "arbitrating",
         "human_review",
         "accepted",
         "rejected",
     ]
     assert snapshot["columns"][0]["title"] == "Pending"
     assert snapshot["columns"][0]["cards"][0]["task_id"] == "task-pending"
-    assert snapshot["columns"][3]["cards"][0]["feedback_count"] == 1
-    assert snapshot["columns"][3]["cards"][0]["modality"] == "image"
-    assert snapshot["columns"][3]["cards"][0]["operator_stage"] == "qc"
+    assert snapshot["columns"][4]["cards"][0]["feedback_count"] == 1
+    assert snapshot["columns"][4]["cards"][0]["modality"] == "image"
+    assert snapshot["columns"][4]["cards"][0]["operator_stage"] == "qc"
 
 
 def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
@@ -127,13 +128,14 @@ def test_dashboard_snapshot_can_return_operator_stage_columns(tmp_path):
         "pending",
         "annotation",
         "qc",
+        "arbitration",
         "merge",
         "failed",
         "accepted",
     ]
     assert [card["task_id"] for card in snapshot["columns"][1]["cards"]] == ["task-annotation"]
     assert [card["task_id"] for card in snapshot["columns"][2]["cards"]] == ["task-qc"]
-    assert [card["task_id"] for card in snapshot["columns"][4]["cards"]] == ["task-failed"]
+    assert [card["task_id"] for card in snapshot["columns"][5]["cards"]] == ["task-failed"]
 
 
 def test_dashboard_snapshot_filters_tasks_by_project_id(tmp_path):

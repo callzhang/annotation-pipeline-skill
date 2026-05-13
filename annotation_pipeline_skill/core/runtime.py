@@ -163,6 +163,7 @@ class QueueCounts:
     accepted: int
     rejected: int
     draft: int = 0
+    arbitrating: int = 0
     blocked: int = 0
     cancelled: int = 0
 
@@ -172,6 +173,7 @@ class QueueCounts:
             "pending": self.pending,
             "annotating": self.annotating,
             "qc": self.qc,
+            "arbitrating": self.arbitrating,
             "human_review": self.human_review,
             "accepted": self.accepted,
             "rejected": self.rejected,
@@ -186,6 +188,7 @@ class QueueCounts:
             pending=data["pending"],
             annotating=data["annotating"],
             qc=data["qc"],
+            arbitrating=data.get("arbitrating", 0),
             human_review=data["human_review"],
             accepted=data["accepted"],
             rejected=data["rejected"],

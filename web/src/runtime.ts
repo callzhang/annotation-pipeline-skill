@@ -4,6 +4,7 @@ const queueOrder = [
   "pending",
   "annotating",
   "qc",
+  "arbitrating",
   "human_review",
   "accepted",
   "rejected",

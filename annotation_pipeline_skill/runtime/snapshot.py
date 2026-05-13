@@ -94,6 +94,7 @@ def _build_queue_counts(tasks) -> QueueCounts:
         pending=status_counts[TaskStatus.PENDING],
         annotating=status_counts[TaskStatus.ANNOTATING],
         qc=status_counts[TaskStatus.QC],
+        arbitrating=status_counts[TaskStatus.ARBITRATING],
         human_review=status_counts[TaskStatus.HUMAN_REVIEW],
         accepted=status_counts[TaskStatus.ACCEPTED],
         rejected=status_counts[TaskStatus.REJECTED],

@@ -148,6 +148,7 @@ export interface QueueCounts {
   pending: number;
   annotating: number;
   qc: number;
+  arbitrating: number;
   human_review: number;
   accepted: number;
   rejected: number;
