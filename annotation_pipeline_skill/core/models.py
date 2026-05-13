@@ -26,6 +26,30 @@ def _dt_from_str(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+# Legacy → current TaskStatus values. Used when loading historical audit events
+# whose status names were renamed/removed by later refactors.
+_LEGACY_STATUS_MAP = {
+    "validating": "qc",
+}
+
+
+def _coerce_status(value: str) -> TaskStatus:
+    """Tolerant TaskStatus parser for historical audit events.
+
+    Falls back to a known legacy mapping when a value was retired in a refactor
+    (e.g. 'validating' → 'qc' after the worker-pool scheduler removed the
+    separate validation stage). Returns the raw enum for current values.
+    """
+    try:
+        return TaskStatus(value)
+    except ValueError:
+        mapped = _LEGACY_STATUS_MAP.get(value)
+        if mapped is not None:
+            return TaskStatus(mapped)
+        # Last-resort placeholder so the dashboard can still load events.
+        return TaskStatus.PENDING
+
+
 @dataclass
 class ExternalTaskRef:
     system_id: str
@@ -507,8 +531,8 @@ class AuditEvent:
         return cls(
             event_id=data["event_id"],
             task_id=data["task_id"],
-            previous_status=TaskStatus(data["previous_status"]),
-            next_status=TaskStatus(data["next_status"]),
+            previous_status=_coerce_status(data["previous_status"]),
+            next_status=_coerce_status(data["next_status"]),
             actor=data["actor"],
             reason=data["reason"],
             stage=data["stage"],
