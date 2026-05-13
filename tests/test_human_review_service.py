@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from annotation_pipeline_skill.core.models import Task
@@ -16,7 +14,7 @@ def _human_review_task(store: SqliteStore) -> Task:
     return task
 
 
-def test_human_review_accepts_task_and_records_decision_artifact(tmp_path):
+def test_human_review_accept_records_decision_in_event_metadata(tmp_path):
     store = SqliteStore.open(tmp_path)
     _human_review_task(store)
 
@@ -28,18 +26,18 @@ def test_human_review_accepts_task_and_records_decision_artifact(tmp_path):
         correction_mode="manual_annotation",
     )
 
-    artifacts = store.list_artifacts("task-1")
-    payload = json.loads((store.root / artifacts[0].path).read_text(encoding="utf-8"))
     event = store.list_events("task-1")[0]
     assert result.task.status is TaskStatus.ACCEPTED
-    assert artifacts[0].kind == "human_review_decision"
-    assert payload["action"] == "accept"
-    assert payload["feedback"] == "Labels are usable for training."
     assert event.reason == "human review accepted task"
-    assert event.metadata["decision_artifact_id"] == artifacts[0].artifact_id
+    assert event.metadata["action"] == "accept"
+    assert event.metadata["feedback"] == "Labels are usable for training."
+    # accept does not create a feedback record (only request_changes/reject do)
+    assert store.list_feedback("task-1") == []
+    # No separate decision artifact is written
+    assert [a for a in store.list_artifacts("task-1") if a.kind == "human_review_decision"] == []
 
 
-def test_human_review_request_changes_returns_task_to_annotator_with_feedback(tmp_path):
+def test_human_review_request_changes_creates_feedback_record(tmp_path):
     store = SqliteStore.open(tmp_path)
     _human_review_task(store)
 
@@ -51,12 +49,15 @@ def test_human_review_request_changes_returns_task_to_annotator_with_feedback(tm
         correction_mode="batch_code_update",
     )
 
-    payload = json.loads((store.root / store.list_artifacts("task-1")[0].path).read_text(encoding="utf-8"))
     event = store.list_events("task-1")[0]
     assert result.task.status is TaskStatus.ANNOTATING
-    assert payload["correction_mode"] == "batch_code_update"
     assert event.reason == "human review requested annotator changes"
     assert event.metadata["correction_mode"] == "batch_code_update"
+    feedback_items = store.list_feedback("task-1")
+    assert len(feedback_items) == 1
+    assert feedback_items[0].source_stage.value == "human_review"
+    assert feedback_items[0].message == "Apply the new boundary rule to all rows."
+    assert feedback_items[0].suggested_action == "request_changes"
 
 
 def test_human_review_rejects_task(tmp_path):
