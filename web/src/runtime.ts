@@ -3,7 +3,6 @@ import type { RuntimeMonitorReport, RuntimeSnapshot } from "./types";
 const queueOrder = [
   "pending",
   "annotating",
-  "validating",
   "qc",
   "human_review",
   "accepted",

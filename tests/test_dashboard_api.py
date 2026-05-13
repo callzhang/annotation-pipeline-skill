@@ -56,7 +56,7 @@ def test_dashboard_api_returns_projects_and_filters_kanban_by_project(tmp_path):
 def test_dashboard_api_returns_operator_stage_kanban_view(tmp_path):
     store = SqliteStore.open(tmp_path)
     task = Task.new(task_id="task-1", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-    task.status = TaskStatus.VALIDATING
+    task.status = TaskStatus.ANNOTATING
     store.save_task(task)
     api = DashboardApi(store)
 

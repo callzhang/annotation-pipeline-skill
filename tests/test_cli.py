@@ -433,7 +433,7 @@ def test_cli_import_annotation_manager_v2_queues_imported_annotations_for_qc(tmp
     assert "qc_policy" not in task.metadata
     assert task.source_ref["kind"] == "annotation_manager_v2"
     assert task.source_ref["payload"]["rows"][0]["text"].startswith("Repo: nodejs/node")
-    assert [event.next_status.value for event in events] == ["pending", "annotating", "validating", "qc"]
+    assert [event.next_status.value for event in events] == ["pending", "annotating", "qc"]
     assert attempts[0].provider_id == "annotation_manager_v2"
     assert artifacts[0].kind == "annotation_result"
     assert artifact_payload["imported_annotation"]["rows"][0]["output"]["entities"]["person"] == ["Ada Lovelace"]

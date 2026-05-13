@@ -132,14 +132,6 @@ class SubagentRuntime:
                     attempt_id=annotation_attempt_id,
                     metadata={"prelabeled": True},
                 )
-                self._transition(
-                    task,
-                    TaskStatus.VALIDATING,
-                    reason="prelabeled annotation ready for schema validation",
-                    stage="validation",
-                    attempt_id=annotation_attempt_id,
-                    metadata={"prelabeled": True},
-                )
                 await self._run_validation_and_qc(
                     task,
                     annotation_artifact,
@@ -235,13 +227,6 @@ class SubagentRuntime:
                 )
                 return
 
-        self._transition(
-            task,
-            TaskStatus.VALIDATING,
-            reason="subagent annotation produced result",
-            stage="validation",
-            attempt_id=annotation_attempt_id,
-        )
         task.metadata["continuity_handle"] = annotation_result.continuity_handle
         await self._run_validation_and_qc(
             task,

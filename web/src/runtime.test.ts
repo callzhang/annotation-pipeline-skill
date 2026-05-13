@@ -15,7 +15,6 @@ const snapshot: RuntimeSnapshot = {
     draft: 0,
     pending: 2,
     annotating: 0,
-    validating: 0,
     qc: 0,
     human_review: 0,
     accepted: 1,
@@ -43,7 +42,6 @@ describe("runtime helpers", () => {
     expect(orderedQueueCounts(snapshot).map((item) => item.key)).toEqual([
       "pending",
       "annotating",
-      "validating",
       "qc",
       "human_review",
       "accepted",

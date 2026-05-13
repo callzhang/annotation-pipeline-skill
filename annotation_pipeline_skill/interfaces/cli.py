@@ -783,14 +783,6 @@ def _save_annotation_manager_v2_task(
         stage="annotation",
         attempt_id=attempt_id,
     )
-    validating_event = transition_task(
-        task,
-        TaskStatus.VALIDATING,
-        actor="cli",
-        reason="imported annotation artifact ready for qc",
-        stage="validation",
-        attempt_id=attempt_id,
-    )
     qc_event = transition_task(
         task,
         TaskStatus.QC,
@@ -801,7 +793,7 @@ def _save_annotation_manager_v2_task(
     )
     task.current_attempt = 1
     store.save_task(task)
-    for event in (prepare_event, annotating_event, validating_event, qc_event):
+    for event in (prepare_event, annotating_event, qc_event):
         store.append_event(event)
 
     relative_path = f"artifact_payloads/{task_id}/{attempt_id}_annotation_result.json"

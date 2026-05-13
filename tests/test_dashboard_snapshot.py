@@ -33,7 +33,6 @@ def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
     assert [column["id"] for column in snapshot["columns"]] == [
         "pending",
         "annotating",
-        "validating",
         "qc",
         "human_review",
         "accepted",
@@ -41,9 +40,9 @@ def test_dashboard_snapshot_groups_tasks_into_operational_columns(tmp_path):
     ]
     assert snapshot["columns"][0]["title"] == "Pending"
     assert snapshot["columns"][0]["cards"][0]["task_id"] == "task-pending"
-    assert snapshot["columns"][4]["cards"][0]["feedback_count"] == 1
-    assert snapshot["columns"][4]["cards"][0]["modality"] == "image"
-    assert snapshot["columns"][4]["cards"][0]["operator_stage"] == "qc"
+    assert snapshot["columns"][3]["cards"][0]["feedback_count"] == 1
+    assert snapshot["columns"][3]["cards"][0]["modality"] == "image"
+    assert snapshot["columns"][3]["cards"][0]["operator_stage"] == "qc"
 
 
 def test_dashboard_snapshot_indexes_attempts_feedback_and_outbox_once(tmp_path):
@@ -112,7 +111,7 @@ def test_dashboard_snapshot_card_row_count_is_none_when_absent(tmp_path):
 def test_dashboard_snapshot_can_return_operator_stage_columns(tmp_path):
     store = SqliteStore.open(tmp_path)
     annotating = Task.new(task_id="task-annotation", pipeline_id="pipe", source_ref={"kind": "jsonl"})
-    annotating.status = TaskStatus.VALIDATING
+    annotating.status = TaskStatus.ANNOTATING
     review = Task.new(task_id="task-qc", pipeline_id="pipe", source_ref={"kind": "jsonl"})
     review.status = TaskStatus.HUMAN_REVIEW
     failed = Task.new(task_id="task-failed", pipeline_id="pipe", source_ref={"kind": "jsonl"})

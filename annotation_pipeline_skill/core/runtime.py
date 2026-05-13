@@ -158,7 +158,6 @@ class RuntimeStatus:
 class QueueCounts:
     pending: int
     annotating: int
-    validating: int
     qc: int
     human_review: int
     accepted: int
@@ -172,7 +171,6 @@ class QueueCounts:
             "draft": self.draft,
             "pending": self.pending,
             "annotating": self.annotating,
-            "validating": self.validating,
             "qc": self.qc,
             "human_review": self.human_review,
             "accepted": self.accepted,
@@ -187,7 +185,6 @@ class QueueCounts:
             draft=data["draft"],
             pending=data["pending"],
             annotating=data["annotating"],
-            validating=data["validating"],
             qc=data["qc"],
             human_review=data["human_review"],
             accepted=data["accepted"],

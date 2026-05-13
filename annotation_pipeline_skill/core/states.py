@@ -5,7 +5,6 @@ class TaskStatus(str, Enum):
     DRAFT = "draft"
     PENDING = "pending"
     ANNOTATING = "annotating"
-    VALIDATING = "validating"
     QC = "qc"
     HUMAN_REVIEW = "human_review"
     ACCEPTED = "accepted"

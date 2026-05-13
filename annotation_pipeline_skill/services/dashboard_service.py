@@ -8,7 +8,6 @@ from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 KANBAN_COLUMNS: list[tuple[str, str, TaskStatus]] = [
     ("pending", "Pending", TaskStatus.PENDING),
     ("annotating", "Annotating", TaskStatus.ANNOTATING),
-    ("validating", "Validating", TaskStatus.VALIDATING),
     ("qc", "QC", TaskStatus.QC),
     ("human_review", "Human Review", TaskStatus.HUMAN_REVIEW),
     ("accepted", "Accepted", TaskStatus.ACCEPTED),
@@ -28,7 +27,7 @@ OPERATOR_COLUMNS: list[tuple[str, str]] = [
 def operator_stage(task: Task) -> str:
     if task.status is TaskStatus.PENDING:
         return "pending"
-    if task.status in {TaskStatus.ANNOTATING, TaskStatus.VALIDATING}:
+    if task.status is TaskStatus.ANNOTATING:
         return "annotation"
     if task.status in {TaskStatus.QC, TaskStatus.HUMAN_REVIEW}:
         return "qc"

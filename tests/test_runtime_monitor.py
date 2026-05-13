@@ -33,7 +33,6 @@ def runtime_snapshot(
             draft=0,
             pending=pending,
             annotating=0,
-            validating=0,
             qc=0,
             human_review=0,
             accepted=0,

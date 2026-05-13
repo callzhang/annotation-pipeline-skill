@@ -48,7 +48,7 @@ def test_runtime_snapshot_round_trips_through_dict():
             active=True,
             errors=[],
         ),
-        queue_counts=QueueCounts(pending=2, annotating=1, validating=0, qc=0, human_review=0, accepted=3, rejected=0),
+        queue_counts=QueueCounts(pending=2, annotating=1, qc=0, human_review=0, accepted=3, rejected=0),
         active_runs=[
             ActiveRun(
                 run_id="run-1",
@@ -76,7 +76,6 @@ def test_queue_counts_surfaces_all_task_status_counts():
         draft=1,
         pending=2,
         annotating=3,
-        validating=4,
         qc=5,
         human_review=6,
         accepted=7,
@@ -89,7 +88,6 @@ def test_queue_counts_surfaces_all_task_status_counts():
         "draft": 1,
         "pending": 2,
         "annotating": 3,
-        "validating": 4,
         "qc": 5,
         "human_review": 6,
         "accepted": 7,
@@ -153,7 +151,6 @@ def test_runtime_snapshot_loads_with_omitted_empty_list_fields():
             "queue_counts": QueueCounts(
                 pending=0,
                 annotating=0,
-                validating=0,
                 qc=0,
                 human_review=0,
                 accepted=0,

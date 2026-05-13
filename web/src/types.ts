@@ -147,7 +147,6 @@ export interface QueueCounts {
   draft: number;
   pending: number;
   annotating: number;
-  validating: number;
   qc: number;
   human_review: number;
   accepted: number;

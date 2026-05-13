@@ -343,7 +343,7 @@ def test_runtime_snapshot_save_and_load(tmp_path):
         generated_at=datetime.now(timezone.utc),
         runtime_status=RuntimeStatus(healthy=True, heartbeat_at=None, heartbeat_age_seconds=None, active=False),
         queue_counts=QueueCounts(
-            pending=0, annotating=0, validating=0, qc=0, human_review=0, accepted=0, rejected=0,
+            pending=0, annotating=0, qc=0, human_review=0, accepted=0, rejected=0,
         ),
         active_runs=[], capacity=CapacitySnapshot(
             max_concurrent_tasks=4, active_count=0, available_slots=4,
