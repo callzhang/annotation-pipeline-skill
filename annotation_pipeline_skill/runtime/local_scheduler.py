@@ -39,6 +39,7 @@ class LocalRuntimeScheduler:
         self.config = config
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self._clear_stale_records()
+        self._recover_zombie_tasks()
 
     def _clear_stale_records(self) -> None:
         """Drop leases / active_runs whose heartbeat is older than the stale window.
@@ -65,6 +66,56 @@ class LocalRuntimeScheduler:
                 f"{cleared_runs} stale active_runs",
                 file=sys.stderr,
             )
+
+    def _recover_zombie_tasks(self) -> None:
+        """Recover tasks stuck in in-flight statuses (ANNOTATING / QC /
+        ARBITRATING) without an active lease and with no recent updated_at.
+
+        These zombies appear when the worker crashed or the process was
+        killed mid-pipeline before the task's status could be finalized.
+        The worker pool only picks PENDING / QC-resume / ARBITRATING tasks,
+        so a zombie ANNOTATING task would otherwise sit forever.
+
+        Recovery target:
+          ANNOTATING / QC zombie  → PENDING  (let a worker retry from scratch)
+          ARBITRATING zombie      → HUMAN_REVIEW (arbiter already had its shot;
+                                                  punt to a human)
+        """
+        from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
+
+        threshold = self._now_fn() - timedelta(seconds=self.config.stale_after_seconds)
+        leased_task_ids = {lease.task_id for lease in self.store.list_runtime_leases()}
+        active_run_task_ids = {run.task_id for run in self.store.list_active_runs()}
+        in_flight = {TaskStatus.ANNOTATING, TaskStatus.QC, TaskStatus.ARBITRATING}
+        recovered = 0
+        for task in self.store.list_tasks_by_status(in_flight):
+            if task.task_id in leased_task_ids or task.task_id in active_run_task_ids:
+                continue
+            if task.updated_at and task.updated_at > threshold:
+                continue
+            if task.status is TaskStatus.ARBITRATING:
+                target = TaskStatus.HUMAN_REVIEW
+                reason = "zombie recovery: stuck in arbitrating without lease; routing to human review"
+            else:
+                target = TaskStatus.PENDING
+                reason = f"zombie recovery: stuck in {task.status.value} without lease; resetting to pending"
+            try:
+                event = transition_task(
+                    task,
+                    target,
+                    actor="scheduler",
+                    reason=reason,
+                    stage="recovery",
+                    metadata={"recovery": "zombie", "previous_status": task.status.value},
+                )
+            except InvalidTransition:
+                continue
+            self.store.save_task(task)
+            self.store.append_event(event)
+            recovered += 1
+        if recovered:
+            import sys
+            print(f"[scheduler] recovered {recovered} zombie tasks", file=sys.stderr)
 
     async def run_forever(
         self,
