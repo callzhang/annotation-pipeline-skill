@@ -1044,17 +1044,30 @@ class SubagentRuntime:
             "There is no 'rejected' outcome.\n\n"
             "Shape of corrected_annotation when non-null: a {\"rows\": [{\"row_index\": int, "
             "\"output\": {entities, classifications, relations, json_structures}}, ...]} object that "
-            "preserves every row from current_annotation. All entity / phrase strings are VERBATIM "
-            "substrings of the corresponding row's input.text — no character offsets, just the text "
-            "itself. Preserve fields the annotator already had right; only change what your verdicts "
-            "say needs changing.\n\n"
+            "preserves every row from current_annotation.\n"
+            "MUST CONFORM TO output_schema (provided in the prompt). In particular: entity types are "
+            "limited to the enum in $defs.entityType — do NOT invent new entity types like 'attribute' "
+            "or 'system'. json_structures keys are limited to the enum in $defs.jsonStructureType. "
+            "Each entity / phrase is a bare VERBATIM string copied from the corresponding row's "
+            "input.text (no character offsets, just the text itself). Pipeline validates: every span "
+            "must appear in input.text via substring match.\n"
+            "Preserve fields the annotator already had right; only change what your verdicts say "
+            "needs changing.\n\n"
             "Return raw JSON only, no markdown fences."
         )
+        # Include the resolved output_schema so the arbiter doesn't invent
+        # entity types, phrase types, or field shapes when constructing
+        # corrected_annotation. Without this constraint, gpt-5.5 was emitting
+        # entity names like "attribute" / "system" that the schema validator
+        # rejected, causing the fix to silently fall back to HR.
+        from annotation_pipeline_skill.core.schema_validation import resolve_output_schema
+        output_schema = resolve_output_schema(task, self.store)
         prompt = json.dumps(
             {
                 "task_id": task.task_id,
                 "input": task.source_ref.get("payload", {}),
                 "current_annotation": current_annotation,
+                "output_schema": output_schema,
                 "disputed_items": items,
             },
             indent=2,
