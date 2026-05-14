@@ -1275,6 +1275,58 @@ def test_cli_import_refuses_on_collision_without_force_rewrite(tmp_path, capsys)
     assert "--force-rewrite" in payload["hint"]
 
 
+def test_cli_import_jsonl_prelabeled_start_batch_offset_appends_without_collision(tmp_path, capsys):
+    """With --start-batch-offset N, the import skips N batches of input rows
+    and numbers task_ids starting at N — letting a follow-up import append
+    without colliding with previously-imported tasks.
+
+    Concretely: first import gets task_id ...-000000 from rows 0-9. Second
+    import with --start-batch-offset 1 skips rows 0-9 and writes task_id
+    ...-000001 from rows 10-19. No --force-rewrite needed."""
+    main(["init", "--project-root", str(tmp_path)])
+    source = _write_prelabeled_fixture(tmp_path, row_count=20)
+    schema_file = _write_minimal_schema_file(tmp_path)
+
+    # First import: rows 0-9 → task -000000 only (limit=10).
+    rc = main(
+        [
+            "import", "jsonl-prelabeled",
+            "--project-root", str(tmp_path),
+            "--source", str(source),
+            "--pipeline-id", "offset_pipeline",
+            "--batch-size", "10",
+            "--limit", "10",
+            "--output-schema-file", str(schema_file),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload == {"imported": 1, "pipeline_id": "offset_pipeline", "skipped": 0}
+
+    # Second import: skip first batch (rows 0-9), then take the next batch.
+    rc = main(
+        [
+            "import", "jsonl-prelabeled",
+            "--project-root", str(tmp_path),
+            "--source", str(source),
+            "--pipeline-id", "offset_pipeline",
+            "--batch-size", "10",
+            "--start-batch-offset", "1",
+            "--output-schema-file", str(schema_file),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload == {"imported": 1, "pipeline_id": "offset_pipeline", "skipped": 0}
+
+    store = SqliteStore.open(tmp_path / ".annotation-pipeline")
+    # Both tasks exist with non-colliding task_ids derived from the absolute index.
+    t0 = store.load_task("offset_pipeline-000000")
+    t1 = store.load_task("offset_pipeline-000001")
+    assert t0.metadata["row_ids"][0] == "row-000"  # first batch starts at row 0
+    assert t1.metadata["row_ids"][0] == "row-010"  # second batch starts at row 10 (offset*size)
+
+
 def test_cli_import_force_rewrite_cascade_deletes_then_imports(tmp_path, capsys):
     """With --force-rewrite, colliding tasks (plus children + on-disk payload
     files) must be cascade-deleted before the import re-creates them."""

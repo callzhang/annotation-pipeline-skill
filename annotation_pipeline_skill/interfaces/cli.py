@@ -336,6 +336,19 @@ def build_parser() -> argparse.ArgumentParser:
     jsonl_prelabeled.add_argument("--modality", default="text")
     jsonl_prelabeled.add_argument("--limit", type=int, default=None)
     jsonl_prelabeled.add_argument(
+        "--start-batch-offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip the first N batches of input rows (N * batch_size rows) and "
+            "begin task_id numbering at N. Lets you append a new task slice to a "
+            "project that already contains tasks numbered 0..N-1 without "
+            "force-rewriting them. Example: existing tasks 000000..000099, "
+            "--start-batch-offset 100 --limit 9000 imports rows 1000..9999 as "
+            "tasks 000100..000999."
+        ),
+    )
+    jsonl_prelabeled.add_argument(
         "--force-rewrite",
         action="store_true",
         default=False,
@@ -873,6 +886,9 @@ def _expected_prelabel_task_id(pipeline_id: str, batch_idx: int) -> str:
 def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
     store = SqliteStore.open(args.project_root / ".annotation-pipeline")
     rows = read_jsonl(args.source)
+    offset = max(0, getattr(args, "start_batch_offset", 0) or 0)
+    if offset > 0:
+        rows = rows[offset * args.batch_size:]
     if args.limit is not None:
         rows = rows[: args.limit]
 
@@ -880,7 +896,7 @@ def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
     # silent overwrites of existing tasks (see Bug 1 in 50-task testing).
     batches = list(chunked(rows, args.batch_size))
     planned_task_ids: list[str] = [
-        _expected_prelabel_task_id(args.pipeline_id, batch_idx)
+        _expected_prelabel_task_id(args.pipeline_id, batch_idx + offset)
         for batch_idx, _ in enumerate(batches)
     ]
     existing_task_ids = {t.task_id for t in store.list_tasks()}
@@ -927,16 +943,17 @@ def handle_import_jsonl_prelabeled(args: argparse.Namespace) -> int:
     imported = 0
     skipped = 0
     for batch_idx, batch in enumerate(batches):
+        absolute_idx = batch_idx + offset
         usable = [row for row in batch if isinstance(row.get("input"), str) and isinstance(row.get("output"), dict)]
         if not usable:
             skipped += len(batch)
             continue
-        task_id = _expected_prelabel_task_id(args.pipeline_id, batch_idx)
+        task_id = _expected_prelabel_task_id(args.pipeline_id, absolute_idx)
         _save_jsonl_prelabeled_task(
             store=store,
             task_id=task_id,
             pipeline_id=args.pipeline_id,
-            batch_idx=batch_idx,
+            batch_idx=absolute_idx,
             batch=usable,
             source_file=args.source,
             annotation_types=annotation_types,
