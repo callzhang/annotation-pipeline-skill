@@ -1562,3 +1562,82 @@ def test_verbatim_check_flags_hallucinated_span(tmp_path):
     # failure must be the entities.technology entry.
     span_feedbacks = [f for f in feedbacks if f.category == "non_verbatim_span"]
     assert "GPT-J" in span_feedbacks[0].message
+
+
+def test_rearbitration_invokes_arbiter_without_annotator_rebuttal(tmp_path):
+    """Human-dragged HR → Arbitration tasks usually have NO annotator rebuttal
+    (they escalated precisely because the annotator gave up). The rearbitrate
+    path must override the rebuttal gate and call the arbiter anyway — the
+    arbiter judges QC's complaint directly against the latest annotation.
+
+    Regression for: round-4 bulk rearbitrate ran on 32 HR tasks and produced
+    zero arbiter calls because `_arbitrate_and_apply` short-circuited on
+    `not replies_by_feedback`.
+    """
+    from annotation_pipeline_skill.core.models import ArtifactRef, FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-rearb",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {"text": "alpha 42"}},
+    )
+    task.status = TaskStatus.ARBITRATING  # human dragged the card
+    store.save_task(task)
+    # Seed a prior annotation artifact (the annotator's last word).
+    artifact_path = "artifact_payloads/t-rearb/annotation.json"
+    (store.root / artifact_path).parent.mkdir(parents=True, exist_ok=True)
+    (store.root / artifact_path).write_text(
+        json.dumps({"text": json.dumps({"entities": ["alpha"]})}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-rearb",
+        kind="annotation_result",
+        path=artifact_path,
+        content_type="application/json",
+        metadata={"provider": "annotator"},
+    ))
+    # Single QC complaint, no annotator discussion reply at all.
+    store.append_feedback(
+        FeedbackRecord.new(
+            task_id="t-rearb",
+            attempt_id="t-rearb-attempt-1",
+            source_stage=FeedbackSource.QC,
+            severity=FeedbackSeverity.WARNING,
+            category="missing_entity",
+            message="Missing entity 'alpha'",
+            target={},
+            suggested_action="annotator_rerun",
+            created_by="qc-agent",
+            metadata={"confidence": 0.9},
+        )
+    )
+    arbiter_response = json.dumps({
+        "verdicts": [
+            {"feedback_id": store.list_feedback("t-rearb")[0].feedback_id,
+             "verdict": "annotator", "confidence": 0.9,
+             "reasoning": "annotation actually contained alpha"}
+        ],
+        "corrected_annotation": None,
+    })
+    arbiter_client = StubLLMClient(final_text=arbiter_response, provider="arbiter")
+
+    def factory(target: str):
+        if target == "arbiter":
+            return arbiter_client
+        return StubLLMClient(provider=target)
+
+    runtime = SubagentRuntime(store=store, client_factory=factory, max_qc_rounds=3)
+    import asyncio
+    asyncio.run(runtime.run_task_async(task, stage_target="annotation"))
+
+    # The arbiter was actually invoked — exactly one prompt landed on the stub.
+    assert len(arbiter_client.requests) == 1, (
+        f"arbiter should have been invoked despite no annotator rebuttal, "
+        f"got {len(arbiter_client.requests)} requests"
+    )
+    # Annotator-wins conf 0.9 → ACCEPTED.
+    loaded = store.load_task("t-rearb")
+    assert loaded.status is TaskStatus.ACCEPTED

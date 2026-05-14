@@ -916,6 +916,7 @@ class SubagentRuntime:
             attempt_id,
             stage="arbitration",
             include_closed_feedbacks=True,
+            require_rebuttal=False,
         )
         terminal = self._terminal_from_arbiter(task, attempt_id, "arbitration", arb)
         if terminal is None:
@@ -942,6 +943,7 @@ class SubagentRuntime:
         stage: str,
         *,
         include_closed_feedbacks: bool = False,
+        require_rebuttal: bool = True,
     ) -> dict[str, Any]:
         """Run the external arbiter as judge + fixer over open disputes.
 
@@ -955,22 +957,29 @@ class SubagentRuntime:
             }
         Callers decide the terminal transition based on these counts (with help
         from _terminal_from_arbiter, which applies the correction).
+
+        ``require_rebuttal`` (default True): the auto pipeline gates the arbiter
+        on the annotator having posted a discussion rebuttal — no rebuttal means
+        the annotator gave up, no dispute to arbitrate. The human-dragged
+        ``rearbitrate`` path overrides this to False: the human is explicitly
+        asking the arbiter to look at the task again, even if the annotator
+        never produced a coherent rebuttal. In that case the arbiter judges
+        QC's complaint directly against the latest annotation artifact and may
+        still produce a corrected annotation.
         """
         empty = {"ran": False, "closed": 0, "fixed": 0, "unresolved": 0, "corrected_annotation": None}
-        # Only arbitrate when an annotator rebuttal exists — no rebuttal means
-        # nothing to dispute, just an annotator who couldn't satisfy QC.
         discussions = self.store.list_feedback_discussions(task.task_id)
         replies_by_feedback = {
             d.feedback_id: d for d in discussions
             if d.role == "annotator"
         }
-        if not replies_by_feedback:
+        if require_rebuttal and not replies_by_feedback:
             return empty
         consensus_ids = {d.feedback_id for d in discussions if d.consensus}
         open_feedbacks = [
             f for f in self.store.list_feedback(task.task_id)
             if (include_closed_feedbacks or f.feedback_id not in consensus_ids)
-            and f.feedback_id in replies_by_feedback
+            and (not require_rebuttal or f.feedback_id in replies_by_feedback)
             and (f.source_stage is FeedbackSource.QC or f.source_stage is FeedbackSource.VALIDATION)
         ]
         if not open_feedbacks:
@@ -992,7 +1001,24 @@ class SubagentRuntime:
             )
         items = []
         for f in open_feedbacks:
-            reply = replies_by_feedback[f.feedback_id]
+            reply = replies_by_feedback.get(f.feedback_id)
+            if reply is not None:
+                annotator_view = {
+                    "message": reply.message,
+                    "confidence": reply.metadata.get("confidence"),
+                    "disputed_points": reply.disputed_points,
+                    "agreed_points": reply.agreed_points,
+                }
+            else:
+                # Rearbitrate-without-rebuttal: annotator never posted an
+                # explicit reply. Tell the arbiter to judge QC's complaint
+                # against the current annotation directly.
+                annotator_view = {
+                    "message": "(no explicit rebuttal posted; refer to current_annotation for the annotator's position)",
+                    "confidence": None,
+                    "disputed_points": [],
+                    "agreed_points": [],
+                }
             items.append({
                 "feedback_id": f.feedback_id,
                 "category": f.category,
@@ -1001,12 +1027,7 @@ class SubagentRuntime:
                     "confidence": f.metadata.get("confidence"),
                     "target": f.target,
                 },
-                "annotator": {
-                    "message": reply.message,
-                    "confidence": reply.metadata.get("confidence"),
-                    "disputed_points": reply.disputed_points,
-                    "agreed_points": reply.agreed_points,
-                },
+                "annotator": annotator_view,
             })
         # Build the full task context for arbiter-as-fixer: the input text and
         # the annotator's latest annotation. Arbiter can both judge AND produce
