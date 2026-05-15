@@ -8,7 +8,7 @@ import {
   postTaskMove,
 } from "./api";
 import { ConfigPanel } from "./components/ConfigPanel";
-import { CoordinatorPanel } from "./components/CoordinatorPanel";
+import { DashboardStatsBar } from "./components/DashboardStatsBar";
 import { DocumentsPanel } from "./components/DocumentsPanel";
 import { SchemaPanel } from "./components/SchemaPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
@@ -22,7 +22,7 @@ import type { KanbanSnapshot, ProjectSummary, StoreInfo, TaskCard, TaskDetail } 
 import { useUrlState, type UrlState } from "./url_state";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "output" | "providers" | "coordinator" | "config" | "events" | "documents" | "schema";
+type ViewMode = "kanban" | "runtime" | "output" | "providers" | "config" | "events" | "documents" | "schema";
 
 const urlDefaults: UrlState = { view: "kanban", store: null, project: null, task: null };
 
@@ -208,9 +208,15 @@ export default function App() {
               ))}
             </select>
           </label>
-          <div className="status-pill">{loading ? "Loading" : error ? "API error" : "Live snapshot"}</div>
+          {loading || error ? (
+            <div className={`status-pill ${error ? "error" : ""}`}>
+              {loading ? "Loading" : "API error"}
+            </div>
+          ) : null}
         </div>
       </header>
+
+      <DashboardStatsBar projectId={selectedProjectId} storeKey={selectedStoreKey} />
 
       <nav className="view-tabs" aria-label="Dashboard views">
         <button className={viewMode === "kanban" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("kanban")}>
@@ -224,13 +230,6 @@ export default function App() {
         </button>
         <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("providers")}>
           Providers
-        </button>
-        <button
-          className={viewMode === "coordinator" ? "view-tab selected" : "view-tab"}
-          type="button"
-          onClick={() => setView("coordinator")}
-        >
-          Coordinator
         </button>
         <button className={viewMode === "config" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("config")}>
           Configuration
@@ -261,7 +260,6 @@ export default function App() {
       {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "output" ? <OutputPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "providers" ? <ProvidersPanel /> : null}
-      {viewMode === "coordinator" ? <CoordinatorPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "config" ? <ConfigPanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "documents" ? <DocumentsPanel storeKey={selectedStoreKey} /> : null}

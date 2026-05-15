@@ -2,7 +2,6 @@ import type {
   AnnotationDocument,
   AnnotationDocumentVersion,
   ConfigSnapshot,
-  CoordinatorReport,
   DocumentDetail,
   DocumentsSnapshot,
   EventLog,
@@ -46,6 +45,28 @@ export async function fetchProjects(storeKey: string | null = null): Promise<Pro
     throw new Error(`Projects API returned ${response.status}`);
   }
   return response.json() as Promise<ProjectSnapshot>;
+}
+
+export interface DashboardStats {
+  project_id: string | null;
+  task_count: number;
+  status_counts: Record<string, number>;
+  open_feedback_count: number;
+  outbox_pending_count: number;
+  throughput_per_window: Record<string, number>;
+  throughput_window_minutes: number;
+}
+
+export async function fetchDashboardStats(
+  projectId: string | null = null,
+  storeKey: string | null = null,
+): Promise<DashboardStats> {
+  const base = `/api/dashboard-stats${projectQuery(projectId)}`;
+  const response = await fetch(withStore(base, storeKey));
+  if (!response.ok) {
+    throw new Error(`Dashboard stats API returned ${response.status}`);
+  }
+  return response.json() as Promise<DashboardStats>;
 }
 
 export async function fetchKanbanSnapshot(projectId: string | null = null, storeKey: string | null = null): Promise<KanbanSnapshot> {
@@ -232,15 +253,6 @@ export async function saveProviderConfig(payload: {
     throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Provider save returned ${response.status}`);
   }
   return response.json() as Promise<ProviderConfigSnapshot>;
-}
-
-export async function fetchCoordinatorReport(projectId: string | null = null, storeKey: string | null = null): Promise<CoordinatorReport> {
-  const base = `/api/coordinator${projectQuery(projectId)}`;
-  const response = await fetch(withStore(base, storeKey));
-  if (!response.ok) {
-    throw new Error(`Coordinator API returned ${response.status}`);
-  }
-  return response.json() as Promise<CoordinatorReport>;
 }
 
 export async function fetchDocuments(storeKey: string | null = null): Promise<DocumentsSnapshot> {

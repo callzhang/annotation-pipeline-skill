@@ -18,7 +18,11 @@ from annotation_pipeline_skill.core.states import TaskStatus
 from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
 from annotation_pipeline_skill.services.coordinator_service import CoordinatorService
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
-from annotation_pipeline_skill.services.dashboard_service import build_kanban_snapshot, build_project_summaries
+from annotation_pipeline_skill.services.dashboard_service import (
+    build_dashboard_stats,
+    build_kanban_snapshot,
+    build_project_summaries,
+)
 from annotation_pipeline_skill.services.human_review_service import HumanReviewService
 from annotation_pipeline_skill.services.outbox_dispatch_service import build_outbox_summary
 from annotation_pipeline_skill.runtime.monitor import validate_runtime_snapshot
@@ -91,6 +95,8 @@ class DashboardApi:
             return self._json_response(200, build_project_summaries(store))
         if route == "/api/kanban":
             return self._json_response(200, build_kanban_snapshot(store, project_id=project_id, stage_view=stage_view))
+        if route == "/api/dashboard-stats":
+            return self._json_response(200, build_dashboard_stats(store, project_id=project_id))
         if route == "/api/schema":
             schema = load_project_output_schema(store.root) if store else None
             return self._json_response(200, {"schema": schema})

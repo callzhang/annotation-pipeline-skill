@@ -75,6 +75,12 @@ button {
   white-space: nowrap;
 }
 
+.status-pill.error {
+  background: #fbe5df;
+  border-color: #e5b29c;
+  color: #7a2b12;
+}
+
 .topbar-actions {
   align-items: center;
   display: flex;
@@ -118,6 +124,64 @@ button {
 
 .notice.compact {
   margin: 0 0 12px;
+}
+
+.dashboard-stats-bar {
+  align-items: stretch;
+  background: #ffffff;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  margin: 0 auto 12px;
+  max-width: 1680px;
+  overflow: hidden;
+  background-color: #d7e0e5;
+}
+
+.dashboard-stats-bar.dashboard-stats-bar-loading,
+.dashboard-stats-bar.dashboard-stats-bar-error {
+  background: #f5f8fa;
+  color: #52616b;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+
+.dashboard-stat {
+  background: #ffffff;
+  display: flex;
+  flex: 1 1 110px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 110px;
+  padding: 8px 12px;
+}
+
+.dashboard-stat span {
+  color: #52616b;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.dashboard-stat strong {
+  color: #172026;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.dashboard-stat.warning strong {
+  color: #b8631d;
+}
+
+.dashboard-stat.critical strong {
+  color: #a92e1f;
+}
+
+.dashboard-stat.success strong {
+  color: #1a5244;
 }
 
 .view-tabs {

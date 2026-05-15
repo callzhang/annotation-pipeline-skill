@@ -372,6 +372,35 @@ class SqliteStore:
             ),
         )
 
+    def count_succeeded_attempts_since(
+        self,
+        since_iso: str,
+        *,
+        pipeline_id: str | None = None,
+    ) -> dict[str, int]:
+        """Return {stage: count} for attempts with status='succeeded' and
+        finished_at >= since_iso. Optionally filtered to one pipeline.
+
+        Used by the dashboard stats bar to compute per-stage throughput.
+        """
+        if pipeline_id is None:
+            rows = self._conn.execute(
+                "SELECT stage, COUNT(*) AS c FROM attempts "
+                "WHERE status = 'succeeded' AND finished_at >= ? "
+                "GROUP BY stage",
+                (since_iso,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT a.stage, COUNT(*) AS c FROM attempts a "
+                "JOIN tasks t ON a.task_id = t.task_id "
+                "WHERE a.status = 'succeeded' AND a.finished_at >= ? "
+                "AND t.pipeline_id = ? "
+                "GROUP BY a.stage",
+                (since_iso, pipeline_id),
+            ).fetchall()
+        return {r["stage"]: r["c"] for r in rows}
+
     def list_attempts(self, task_id: str):
         rows = self._conn.execute(
             "SELECT * FROM attempts WHERE task_id = ? ORDER BY seq",
