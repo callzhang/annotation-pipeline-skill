@@ -1641,3 +1641,83 @@ def test_rearbitration_invokes_arbiter_without_annotator_rebuttal(tmp_path):
     # Annotator-wins conf 0.9 → ACCEPTED.
     loaded = store.load_task("t-rearb")
     assert loaded.status is TaskStatus.ACCEPTED
+
+
+def test_apply_arbiter_correction_rejects_non_verbatim_spans(tmp_path):
+    """The arbiter can write a corrected_annotation whose entity / phrase
+    strings aren't substrings of input.text (e.g., paraphrased or normalized
+    Chinese characters). Schema-valid corrections must STILL pass the
+    verbatim check; otherwise the corrected_annotation is discarded and the
+    task routes to HUMAN_REVIEW instead of being silently ACCEPTED.
+
+    Regression for: 5% audit on a 1882-task run found ~11% verbatim
+    violations in accepted tasks where the arbiter wrote a corrected
+    annotation containing hallucinated/normalized spans.
+    """
+    from annotation_pipeline_skill.core.models import ArtifactRef, FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["entities"],
+        "properties": {"entities": {"type": "object"}},
+    }
+    # Input text contains "alpha" verbatim; the arbiter will (wrongly) emit
+    # "beta" which is not in the input — verbatim check must catch it.
+    task = Task.new(
+        task_id="t-arb-verbatim",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {
+            "text": "alpha is mentioned here",
+            "rows": [{"row_index": 0, "input": "alpha is mentioned here"}],
+            "annotation_guidance": {"output_schema": schema},
+        }},
+    )
+    task.status = TaskStatus.ARBITRATING
+    store.save_task(task)
+    # Seed an annotation artifact so _latest_annotation_artifact has something.
+    artifact_path = "artifact_payloads/t-arb-verbatim/annotation.json"
+    (store.root / artifact_path).parent.mkdir(parents=True, exist_ok=True)
+    (store.root / artifact_path).write_text(
+        json.dumps({"text": json.dumps({"rows": [{"row_index": 0, "output": {"entities": {}}}]})}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-arb-verbatim", kind="annotation_result", path=artifact_path,
+        content_type="application/json",
+    ))
+    store.append_feedback(FeedbackRecord.new(
+        task_id="t-arb-verbatim", attempt_id="t-arb-verbatim-attempt-1",
+        source_stage=FeedbackSource.QC, severity=FeedbackSeverity.WARNING,
+        category="missing_entity", message="missing beta",
+        target={}, suggested_action="annotator_rerun",
+        created_by="qc-agent", metadata={"confidence": 0.9},
+    ))
+    # Arbiter rules qc-wins with conf 0.9 and emits "beta" as the entity —
+    # but "beta" is not in the input text.
+    arbiter_response = json.dumps({
+        "verdicts": [
+            {"feedback_id": store.list_feedback("t-arb-verbatim")[0].feedback_id,
+             "verdict": "qc", "confidence": 0.9, "reasoning": "missing"},
+        ],
+        "corrected_annotation": {"rows": [
+            {"row_index": 0, "output": {"entities": {"name": ["beta"]}}},
+        ]},
+    })
+    arbiter_client = StubLLMClient(final_text=arbiter_response, provider="arbiter")
+
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda t: arbiter_client if t == "arbiter" else StubLLMClient(provider=t),
+        max_qc_rounds=3,
+    )
+    import asyncio
+    asyncio.run(runtime.run_task_async(task, stage_target="annotation"))
+
+    # Non-verbatim corrected_annotation must NOT be accepted; falls to HR.
+    loaded = store.load_task("t-arb-verbatim")
+    assert loaded.status is TaskStatus.HUMAN_REVIEW, (
+        f"expected HR, got {loaded.status}; the verbatim guard in "
+        f"_apply_arbiter_correction should reject the 'beta' correction "
+        f"because 'beta' is not in the input text 'alpha is mentioned here'"
+    )

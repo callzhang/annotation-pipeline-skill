@@ -882,6 +882,16 @@ class SubagentRuntime:
             validate_payload_against_task_schema(task, corrected, store=self.store)
         except SchemaValidationError:
             return None
+        # Verbatim check — arbiter sometimes paraphrases / normalizes spans
+        # (e.g., traditional→simplified Chinese, dropped articles) that pass
+        # schema but break the input.text substring guarantee. Without this
+        # check, hallucinated/normalized spans landed in ACCEPTED tasks
+        # (5% audit found ~11% violation rate). On failure, return None so
+        # _terminal_from_arbiter falls through to HUMAN_REVIEW instead of
+        # saving a bad corrected_annotation as the final artifact.
+        verbatim_failure = self._check_verbatim_spans(task, corrected)
+        if verbatim_failure is not None:
+            return None
 
         cleaned_text = json.dumps(corrected, sort_keys=True, indent=2)
         relative_path = f"artifact_payloads/{task.task_id}/{attempt_id}_arbiter_correction.json"

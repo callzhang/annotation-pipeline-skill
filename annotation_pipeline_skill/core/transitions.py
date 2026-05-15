@@ -45,7 +45,12 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },
-    TaskStatus.ACCEPTED: set(),
+    # ACCEPTED is the normal terminal state. The single allowed outgoing
+    # transition (ARBITRATING) covers operator audits — e.g., scanning
+    # already-accepted tasks for a quality regression and routing the
+    # violators back through the arbiter for re-judgment. Without this,
+    # discovered defects in accepted data require destructive workarounds.
+    TaskStatus.ACCEPTED: {TaskStatus.ARBITRATING},
     TaskStatus.REJECTED: {TaskStatus.ARBITRATING},
     TaskStatus.BLOCKED: {TaskStatus.PENDING},
     TaskStatus.CANCELLED: set(),
