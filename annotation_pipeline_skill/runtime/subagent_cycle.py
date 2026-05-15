@@ -1150,6 +1150,32 @@ class SubagentRuntime:
                     # the outcome falls through to HR instead of silently
                     # accepting a hallucinated span.
                     payload["corrected_annotation"] = None
+            else:
+                # Detect "high-conf qc/neither verdict but corrected_annotation
+                # is null/missing" — the arbiter described a fix in reasoning
+                # but forgot to emit the JSON object. Without retrying, every
+                # such verdict falls into ``unresolved`` → HR. Observed in
+                # production: gpt-5.5 sometimes writes "the corrected
+                # annotation uses the verbatim sentence" in reasoning while
+                # leaving the field null.
+                needs_correction = any(
+                    isinstance(v, dict)
+                    and str(v.get("verdict") or "").lower() in {"qc", "neither"}
+                    and (_clamp_confidence(v.get("confidence")) or 0) >= 0.7
+                    for v in verdicts
+                )
+                if needs_correction and attempt_idx < max_retries:
+                    retry_note = (
+                        "\n\nPREVIOUS ATTEMPT FORGOT TO INCLUDE corrected_annotation: "
+                        "you ruled 'qc' or 'neither' at confidence >= 0.7 on at least "
+                        "one feedback, but set corrected_annotation to null. The "
+                        "runtime DROPS your verdicts when there is no "
+                        "corrected_annotation to apply, and the task escalates to "
+                        "HUMAN_REVIEW. Re-emit your full response with a non-null "
+                        "corrected_annotation: {\"rows\": [...]} containing the FULL "
+                        "corrected annotation. Your reasoning is wasted without it."
+                    )
+                    continue
             break
         finished_at = utc_now()
         # Record an Attempt for audit traceability.

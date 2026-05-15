@@ -1743,6 +1743,97 @@ def test_arbiter_retries_on_non_verbatim_correction_and_accepts_if_second_attemp
     assert "'beta'" in arbiter_client.requests[1].instructions
 
 
+def test_arbiter_retries_when_verdict_qc_but_corrected_annotation_missing(tmp_path):
+    """Arbiter sometimes writes 'qc wins, here's the fix' in reasoning but
+    leaves corrected_annotation = null. Without retry, every such verdict
+    became unresolved → HR. The runtime now retries with a note pointing
+    out the missing field. If the retry produces a usable correction, the
+    task ACCEPTs."""
+    from annotation_pipeline_skill.core.models import ArtifactRef, FeedbackRecord
+    from annotation_pipeline_skill.core.states import FeedbackSeverity
+
+    store = SqliteStore.open(tmp_path)
+    row_schema = {
+        "type": "object", "additionalProperties": False, "required": ["row_index", "output"],
+        "properties": {"row_index": {"type": "integer"},
+                       "output": {"type": "object", "properties": {"entities": {"type": "object"}}}},
+    }
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["rows"],
+        "properties": {"rows": {"type": "array", "items": row_schema}},
+    }
+    task = Task.new(
+        task_id="t-arb-null-fix",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {
+            "text": "alpha is mentioned",
+            "rows": [{"row_index": 0, "input": "alpha is mentioned"}],
+            "annotation_guidance": {"output_schema": schema},
+        }},
+    )
+    task.status = TaskStatus.ARBITRATING
+    store.save_task(task)
+    artifact_path = "artifact_payloads/t-arb-null-fix/annotation.json"
+    (store.root / artifact_path).parent.mkdir(parents=True, exist_ok=True)
+    (store.root / artifact_path).write_text(
+        json.dumps({"text": json.dumps({"rows": [{"row_index": 0, "output": {"entities": {}}}]})}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-arb-null-fix", kind="annotation_result", path=artifact_path,
+        content_type="application/json",
+    ))
+    store.append_feedback(FeedbackRecord.new(
+        task_id="t-arb-null-fix", attempt_id="t-arb-null-fix-attempt-1",
+        source_stage=FeedbackSource.QC, severity=FeedbackSeverity.WARNING,
+        category="missing_entity", message="missing alpha",
+        target={}, suggested_action="annotator_rerun",
+        created_by="qc-agent", metadata={"confidence": 0.9},
+    ))
+    fid = store.list_feedback("t-arb-null-fix")[0].feedback_id
+
+    # First arbiter call: high-conf qc verdict but corrected_annotation = null
+    bad = json.dumps({
+        "verdicts": [{"feedback_id": fid, "verdict": "qc", "confidence": 0.9,
+                      "reasoning": "the corrected annotation uses the verbatim sentence"}],
+        "corrected_annotation": None,  # forgot to actually emit
+    })
+    # Second arbiter call: properly emits corrected_annotation
+    good = json.dumps({
+        "verdicts": [{"feedback_id": fid, "verdict": "qc", "confidence": 0.9, "reasoning": "fix included now"}],
+        "corrected_annotation": {"rows": [{"row_index": 0, "output": {"entities": {"name": ["alpha"]}}}]},
+    })
+    responses = [bad, good]
+
+    class CyclingArbiter:
+        def __init__(self): self.requests = []
+        async def generate(self, request):
+            self.requests.append(request)
+            return LLMGenerateResult(
+                runtime="test", provider="arbiter", model="test-model",
+                continuity_handle=None, final_text=responses[min(len(self.requests)-1, len(responses)-1)],
+                usage={"total_tokens": 1}, raw_response={"id": "test"}, diagnostics={},
+            )
+
+    arb = CyclingArbiter()
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda t: arb if t == "arbiter" else StubLLMClient(provider=t),
+        max_qc_rounds=3,
+    )
+    import asyncio
+    asyncio.run(runtime.run_task_async(task, stage_target="annotation"))
+
+    loaded = store.load_task("t-arb-null-fix")
+    assert loaded.status is TaskStatus.ACCEPTED, (
+        f"expected ACCEPTED after arbiter delivered the missing fix on retry, got {loaded.status}"
+    )
+    assert len(arb.requests) == 2, (
+        f"expected exactly 2 arbiter calls (initial + 1 retry); got {len(arb.requests)}"
+    )
+    assert "FORGOT TO INCLUDE corrected_annotation" in arb.requests[1].instructions
+
+
 def test_apply_arbiter_correction_rejects_non_verbatim_spans(tmp_path):
     """The arbiter can write a corrected_annotation whose entity / phrase
     strings aren't substrings of input.text (e.g., paraphrased or normalized
