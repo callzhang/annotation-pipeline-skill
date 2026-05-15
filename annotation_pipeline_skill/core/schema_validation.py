@@ -60,6 +60,65 @@ def resolve_output_schema(task: Task, store: "SqliteStore | None") -> dict | Non
     return load_project_output_schema(store.root)
 
 
+def find_verbatim_violations(
+    task: "Task",
+    payload: Any,
+) -> "list[dict[str, Any]]":
+    """Walk every entity and json_structures phrase in ``payload`` and return
+    violations: spans that aren't a verbatim substring of the corresponding
+    row's input.text. Returns an empty list when everything is verbatim.
+
+    Mirrors the runtime's pipeline-side verbatim check; lifted here so HR /
+    audit / arbiter paths can use the same logic without touching the
+    SubagentRuntime instance.
+    """
+    if not isinstance(payload, dict):
+        return []
+    rows_out = payload.get("rows")
+    if not isinstance(rows_out, list):
+        return []
+    source_payload = task.source_ref.get("payload") if isinstance(task.source_ref, dict) else None
+    if not isinstance(source_payload, dict):
+        return []
+    source_rows = source_payload.get("rows")
+    if not isinstance(source_rows, list):
+        return []
+    input_by_index: dict[int, str] = {}
+    for i, r in enumerate(source_rows):
+        if not isinstance(r, dict):
+            continue
+        idx = r.get("row_index") if isinstance(r.get("row_index"), int) else i
+        text = r.get("input")
+        if isinstance(text, str):
+            input_by_index[idx] = text
+    violations: list[dict[str, Any]] = []
+    for r in rows_out:
+        if not isinstance(r, dict):
+            continue
+        row_index = r.get("row_index") if isinstance(r.get("row_index"), int) else 0
+        input_text = input_by_index.get(row_index)
+        if not input_text:
+            continue
+        output = r.get("output")
+        if not isinstance(output, dict):
+            continue
+        for typ_dict_key in ("entities", "json_structures"):
+            type_dict = output.get(typ_dict_key)
+            if not isinstance(type_dict, dict):
+                continue
+            for type_name, items in type_dict.items():
+                if not isinstance(items, list):
+                    continue
+                for span in items:
+                    if isinstance(span, str) and span and span not in input_text:
+                        violations.append({
+                            "row_index": row_index,
+                            "field": f"{typ_dict_key}.{type_name}",
+                            "span": span,
+                        })
+    return violations
+
+
 def validate_payload_against_task_schema(
     task: Task,
     payload: Any,

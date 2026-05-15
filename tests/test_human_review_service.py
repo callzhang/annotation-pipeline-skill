@@ -218,3 +218,87 @@ def test_submit_correction_rejects_when_task_not_in_human_review(tmp_path):
     svc = HumanReviewService(store)
     with pytest.raises(InvalidTransition):
         svc.submit_correction(task_id="t-pending", answer={}, actor="r", note=None)
+
+
+def test_submit_correction_rejects_non_verbatim_spans(tmp_path):
+    """Operator-submitted corrections must use spans that are verbatim
+    substrings of the row's input.text — same guarantee enforced on the
+    annotator and arbiter paths. Otherwise an operator could paste a
+    paraphrased / normalized span and ACCEPT a task with bad data.
+    """
+    from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+
+    store = SqliteStore.open(tmp_path)
+    row_schema = {
+        "type": "object", "additionalProperties": False, "required": ["row_index", "output"],
+        "properties": {
+            "row_index": {"type": "integer"},
+            "output": {"type": "object",
+                       "properties": {"entities": {"type": "object"}}},
+        },
+    }
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["rows"],
+        "properties": {"rows": {"type": "array", "items": row_schema}},
+    }
+    task = Task.new(
+        task_id="t-hr-vb",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {
+            "text": "alpha is mentioned",
+            "rows": [{"row_index": 0, "input": "alpha is mentioned"}],
+            "annotation_guidance": {"output_schema": schema},
+        }},
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    svc = HumanReviewService(store)
+    # "beta" is not in input "alpha is mentioned"
+    with pytest.raises(SchemaValidationError) as exc:
+        svc.submit_correction(
+            task_id="t-hr-vb",
+            answer={"rows": [{"row_index": 0, "output": {"entities": {"name": ["beta"]}}}]},
+            actor="r", note=None,
+        )
+    assert any("non_verbatim_span" in e["kind"] for e in exc.value.errors)
+
+
+def test_decide_accept_blocks_when_underlying_annotation_has_violations(tmp_path):
+    """``decide(action='accept')`` refuses to ACCEPT a HR task whose latest
+    annotation_result contains non-verbatim spans. Operator must fix via
+    submit_correction or request_changes."""
+    from annotation_pipeline_skill.core.models import ArtifactRef
+    from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(
+        task_id="t-hr-accept-bad",
+        pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {
+            "text": "alpha is mentioned",
+            "rows": [{"row_index": 0, "input": "alpha is mentioned"}],
+        }},
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+    # Seed a bad annotation_result on disk: contains "beta" not in input.
+    import json as _json
+    artifact_path = "artifact_payloads/t-hr-accept-bad/annotation.json"
+    (store.root / artifact_path).parent.mkdir(parents=True, exist_ok=True)
+    (store.root / artifact_path).write_text(
+        _json.dumps({"text": _json.dumps({"rows": [{"row_index": 0, "output": {"entities": {"name": ["beta"]}}}]})}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-hr-accept-bad", kind="annotation_result", path=artifact_path,
+        content_type="application/json",
+    ))
+
+    svc = HumanReviewService(store)
+    with pytest.raises(SchemaValidationError) as exc:
+        svc.decide(task_id="t-hr-accept-bad", action="accept",
+                   actor="r", feedback="lgtm", correction_mode="manual_annotation")
+    assert any("non_verbatim_span" in e["kind"] for e in exc.value.errors)
+    # Task status unchanged
+    assert store.load_task("t-hr-accept-bad").status is TaskStatus.HUMAN_REVIEW

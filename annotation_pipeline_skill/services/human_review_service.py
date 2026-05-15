@@ -8,6 +8,7 @@ from uuid import uuid4
 from annotation_pipeline_skill.core.models import ArtifactRef, FeedbackRecord, Task
 from annotation_pipeline_skill.core.schema_validation import (
     SchemaValidationError,
+    find_verbatim_violations,
     validate_payload_against_task_schema,
 )
 from annotation_pipeline_skill.core.states import FeedbackSeverity, FeedbackSource, TaskStatus
@@ -59,6 +60,26 @@ class HumanReviewService:
             raise InvalidTransition(f"task {task_id} is not in human_review")
 
         next_status, reason = self._transition_for_action(action)
+        # Verbatim guard on the "accept underlying annotation as-is" path.
+        # The task likely landed in HR because the arbiter's verbatim retries
+        # exhausted on a hallucinated span — accepting blindly would commit
+        # known-bad data. Operator must use submit_correction with verbatim
+        # spans, or request_changes.
+        if next_status is TaskStatus.ACCEPTED:
+            latest_annotation = self._latest_annotation_payload(task_id)
+            if latest_annotation is not None:
+                violations = find_verbatim_violations(task, latest_annotation)
+                if violations:
+                    raise SchemaValidationError(
+                        f"underlying annotation has {len(violations)} non-verbatim span(s); "
+                        f"use submit_correction (with verbatim spans) or request_changes",
+                        [
+                            {"kind": "non_verbatim_span",
+                             "path": f"rows[{v['row_index']}].output.{v['field']}",
+                             "message": f"span {v['span']!r} is not a verbatim substring of the row's input.text"}
+                            for v in violations
+                        ],
+                    )
         decision = {
             "task_id": task_id,
             "action": action,
@@ -117,6 +138,21 @@ class HumanReviewService:
 
         # Schema-validate. Raises SchemaValidationError on failure (missing schema OR mismatch).
         validate_payload_against_task_schema(task, answer, store=self.store)
+        # Verbatim check — operator-submitted corrections must use exact spans
+        # from the input, same as annotator/arbiter outputs. Without this, an
+        # operator could paste a normalized / paraphrased span and ACCEPT a
+        # task with a non-verbatim span (the same defect we just fixed in
+        # the arbiter path).
+        violations = find_verbatim_violations(task, answer)
+        if violations:
+            raise SchemaValidationError(
+                f"corrected answer has {len(violations)} non-verbatim span(s)",
+                [
+                    {"kind": "non_verbatim_span", "path": f"rows[{v['row_index']}].output.{v['field']}",
+                     "message": f"span {v['span']!r} is not a verbatim substring of the row's input.text"}
+                    for v in violations
+                ],
+            )
 
         artifact = self._write_correction_artifact(task_id, answer, actor=actor, note=note)
         event = transition_task(
@@ -136,6 +172,37 @@ class HumanReviewService:
         self.store.append_event(event)
         self.store.save_task(task)
         return HumanCorrectionResult(task=task, artifact=artifact, answer=answer)
+
+    def _latest_annotation_payload(self, task_id: str) -> dict | None:
+        """Load and parse the most recent annotation_result artifact's inner
+        annotation JSON. Returns None when there's no annotation_result yet
+        or when the inner text isn't parseable JSON.
+
+        Strips ``<think>...</think>`` reasoning blocks and a single leading
+        markdown fence — same wrapper handling the runtime uses.
+        """
+        import re
+        artifacts = [a for a in self.store.list_artifacts(task_id) if a.kind == "annotation_result"]
+        if not artifacts:
+            return None
+        path = self.store.root / artifacts[-1].path
+        if not path.exists():
+            return None
+        outer = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(outer, dict):
+            return None
+        text = outer.get("text")
+        if not isinstance(text, str):
+            return None
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+                text = "\n".join(lines[1:-1]).strip()
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     def _write_correction_artifact(self, task_id: str, answer: dict, *, actor: str, note: str | None) -> ArtifactRef:
         relative_path = Path("artifact_payloads") / task_id / f"human_review_answer-{uuid4().hex}.json"

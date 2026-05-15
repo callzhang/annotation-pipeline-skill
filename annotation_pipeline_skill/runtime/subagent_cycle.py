@@ -651,54 +651,24 @@ class SubagentRuntime:
         return None
 
     def _check_verbatim_spans(self, task: Task, payload: Any) -> dict | None:
-        """Verify every entity / json_structures phrase is a verbatim substring
-        of the corresponding row's input text. Returns a validation-failure
-        dict on the first mismatch (so retry feedback stays focused), or None
-        when every span checks out.
+        """Wrap the shared ``find_verbatim_violations`` helper in the
+        validation-failure dict shape the pipeline uses (first mismatch only,
+        so retry feedback stays focused on one issue at a time).
         """
-        if not isinstance(payload, dict):
+        from annotation_pipeline_skill.core.schema_validation import find_verbatim_violations
+        violations = find_verbatim_violations(task, payload)
+        if not violations:
             return None
-        rows_out = payload.get("rows")
-        if not isinstance(rows_out, list):
-            return None
-        # Build an index of row inputs from the task's source_ref.
-        source_payload = task.source_ref.get("payload") if isinstance(task.source_ref, dict) else None
-        if not isinstance(source_payload, dict):
-            return None
-        source_rows = source_payload.get("rows")
-        if not isinstance(source_rows, list):
-            return None
-        input_by_index: dict[int, str] = {}
-        for i, r in enumerate(source_rows):
-            if not isinstance(r, dict):
-                continue
-            idx = r.get("row_index") if isinstance(r.get("row_index"), int) else i
-            text = r.get("input")
-            if isinstance(text, str):
-                input_by_index[idx] = text
-        for r in rows_out:
-            if not isinstance(r, dict):
-                continue
-            row_index = r.get("row_index") if isinstance(r.get("row_index"), int) else 0
-            input_text = input_by_index.get(row_index)
-            if not input_text:
-                continue
-            output = r.get("output")
-            if not isinstance(output, dict):
-                continue
-            for span, where in _iter_verbatim_spans(output):
-                if not isinstance(span, str) or not span:
-                    continue
-                if span not in input_text:
-                    return {
-                        "category": "non_verbatim_span",
-                        "message": (
-                            f"Row {row_index} {where}: span {span!r} is not a verbatim substring of the input text."
-                        ),
-                        "reason": "verbatim check failed",
-                        "target": {"row_index": row_index, "field": where, "span": span},
-                    }
-        return None
+        first = violations[0]
+        return {
+            "category": "non_verbatim_span",
+            "message": (
+                f"Row {first['row_index']} {first['field']}: span {first['span']!r} "
+                f"is not a verbatim substring of the input text."
+            ),
+            "reason": "verbatim check failed",
+            "target": first,
+        }
 
     def _record_annotator_replies(self, task: Task, attempt_id: str, final_text: str) -> int:
         try:
