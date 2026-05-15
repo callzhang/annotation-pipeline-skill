@@ -1337,6 +1337,13 @@ class SubagentRuntime:
         Prevents the annotator prompt from growing unbounded when a task loops
         through repeated annotation/QC retries (the 73-attempt case we hit in
         production blew past the LLM context window).
+
+        Each artifact's payload is slimmed: the provider's ``raw_response`` is
+        dropped (it's the LLM HTTP response wrapper — annotator/QC/arbiter
+        never read it but it dominates the prompt size; observed ~28 KB per
+        qc_result, ~9 KB per annotation_result). Empirically the annotation
+        prompt drops from ~173 KB to ~63 KB after this trim on a task with
+        the maximum 3+3+1 artifacts.
         """
         by_kind: dict[str, list[ArtifactRef]] = {}
         for artifact in self.store.list_artifacts(task_id):
@@ -1345,10 +1352,13 @@ class SubagentRuntime:
         for arts in by_kind.values():
             # Artifacts are returned in insertion (seq) order — keep tail N
             selected.extend(arts[-per_kind_limit:])
-        return [
-            {**artifact.to_dict(), "payload": self._read_artifact_payload(artifact)}
-            for artifact in selected
-        ]
+        results: list[dict[str, Any]] = []
+        for artifact in selected:
+            payload = self._read_artifact_payload(artifact)
+            if isinstance(payload, dict):
+                payload = {k: v for k, v in payload.items() if k != "raw_response"}
+            results.append({**artifact.to_dict(), "payload": payload})
+        return results
 
     def _read_artifact_payload(self, artifact: ArtifactRef) -> Any:
         path = self.store.root / artifact.path
