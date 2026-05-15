@@ -38,8 +38,17 @@ class LocalRuntimeScheduler:
         self.client_factory = client_factory
         self.config = config
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        # Pre-flight cleanup at init:
+        # 1. Clear stale leases/active_runs from a previous (dead) scheduler.
+        # 2. ARBITRATING zombies → HUMAN_REVIEW (arbiter already had a turn;
+        #    re-running automatically isn't useful).
+        # ANNOTATING / QC orphans are NOT reset here — _try_claim_task now
+        # picks them up directly and either resumes from QC (if an
+        # annotation_result exists) or transitions to PENDING (to re-run
+        # annotation). A delayed sweep in the observer coroutine catches
+        # anything that no worker has claimed after a settle window.
         self._clear_stale_records()
-        self._recover_zombie_tasks()
+        self._recover_arbitrating_zombies()
 
     def _clear_stale_records(self) -> None:
         """Drop leases / active_runs whose heartbeat is older than the stale window.
@@ -67,46 +76,33 @@ class LocalRuntimeScheduler:
                 file=sys.stderr,
             )
 
-    def _recover_zombie_tasks(self) -> None:
-        """Recover tasks stuck in in-flight statuses (ANNOTATING / QC /
-        ARBITRATING) without an active lease and with no recent updated_at.
+    def _recover_arbitrating_zombies(self) -> None:
+        """Send orphaned ARBITRATING tasks to HUMAN_REVIEW.
 
-        These zombies appear when the worker crashed or the process was
-        killed mid-pipeline before the task's status could be finalized.
-        The worker pool only picks PENDING / QC-resume / ARBITRATING tasks,
-        so a zombie ANNOTATING task would otherwise sit forever.
+        Called at scheduler init. ARBITRATING means the arbiter already had
+        a turn — auto-re-arbitrating without operator intent isn't useful, so
+        we route to HR instead. The operator can drag back to Arbitration
+        manually (re-arbitrate flow) when they want another pass.
 
-        Recovery target:
-          ANNOTATING / QC zombie  → PENDING  (let a worker retry from scratch)
-          ARBITRATING zombie      → HUMAN_REVIEW (arbiter already had its shot;
-                                                  punt to a human)
+        ANNOTATING / QC orphans are handled by ``_try_claim_task`` (resume
+        path) and the delayed-sweep observer (in ``run_forever``) — those
+        keep partial work instead of pre-emptively resetting.
         """
         from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
 
-        threshold = self._now_fn() - timedelta(seconds=self.config.stale_after_seconds)
         leased_task_ids = {lease.task_id for lease in self.store.list_runtime_leases()}
         active_run_task_ids = {run.task_id for run in self.store.list_active_runs()}
-        in_flight = {TaskStatus.ANNOTATING, TaskStatus.QC, TaskStatus.ARBITRATING}
         recovered = 0
-        for task in self.store.list_tasks_by_status(in_flight):
+        for task in self.store.list_tasks_by_status({TaskStatus.ARBITRATING}):
             if task.task_id in leased_task_ids or task.task_id in active_run_task_ids:
                 continue
-            if task.updated_at and task.updated_at > threshold:
-                continue
-            if task.status is TaskStatus.ARBITRATING:
-                target = TaskStatus.HUMAN_REVIEW
-                reason = "zombie recovery: stuck in arbitrating without lease; routing to human review"
-            else:
-                target = TaskStatus.PENDING
-                reason = f"zombie recovery: stuck in {task.status.value} without lease; resetting to pending"
             try:
                 event = transition_task(
-                    task,
-                    target,
+                    task, TaskStatus.HUMAN_REVIEW,
                     actor="scheduler",
-                    reason=reason,
+                    reason="zombie recovery: stuck in arbitrating without lease; routing to human review",
                     stage="recovery",
-                    metadata={"recovery": "zombie", "previous_status": task.status.value},
+                    metadata={"recovery": "zombie", "previous_status": "arbitrating"},
                 )
             except InvalidTransition:
                 continue
@@ -115,7 +111,45 @@ class LocalRuntimeScheduler:
             recovered += 1
         if recovered:
             import sys
-            print(f"[scheduler] recovered {recovered} zombie tasks", file=sys.stderr)
+            print(f"[scheduler] recovered {recovered} ARBITRATING zombies → HR", file=sys.stderr)
+
+    def _delayed_sweep_unclaimed_orphans(self) -> None:
+        """Catch ANNOTATING / QC tasks that no worker claimed during the
+        settle window. Called periodically by the observer coroutine.
+
+        A task is an "unclaimed orphan" if:
+          - status is ANNOTATING or QC
+          - has NO runtime_lease pointing at it
+          - has NO active_run pointing at it
+
+        Such a task slipped past ``_try_claim_task`` (e.g., because its
+        artifacts were in a weird state, or it lost a race) — reset to
+        PENDING so the natural pipeline retries it from the top.
+        """
+        from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
+
+        leased = {l.task_id for l in self.store.list_runtime_leases()}
+        active = {r.task_id for r in self.store.list_active_runs()}
+        recovered = 0
+        for task in self.store.list_tasks_by_status({TaskStatus.ANNOTATING, TaskStatus.QC}):
+            if task.task_id in leased or task.task_id in active:
+                continue
+            try:
+                event = transition_task(
+                    task, TaskStatus.PENDING,
+                    actor="scheduler",
+                    reason=f"delayed sweep: still unclaimed in {task.status.value} after settle window; resetting to pending",
+                    stage="recovery",
+                    metadata={"recovery": "delayed_sweep", "previous_status": task.status.value},
+                )
+            except InvalidTransition:
+                continue
+            self.store.save_task(task)
+            self.store.append_event(event)
+            recovered += 1
+        if recovered:
+            import sys
+            print(f"[scheduler] delayed-sweep reset {recovered} unclaimed orphans → pending", file=sys.stderr)
 
     async def run_forever(
         self,
@@ -191,6 +225,18 @@ class LocalRuntimeScheduler:
 
         async def observer() -> None:
             self._write_snapshot()
+            # Settle window: give workers time to claim ANNOTATING / QC
+            # orphans (via _try_claim_task's resume logic) before sweeping
+            # any leftovers back to PENDING. Tasks the workers DO claim get
+            # natural pipeline progression; tasks they DON'T (artifact
+            # weirdness, lost races) get reset by the sweep.
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=self.config.resume_settle_seconds)
+            except asyncio.TimeoutError:
+                pass
+            if not stop.is_set():
+                self._delayed_sweep_unclaimed_orphans()
+            self._write_snapshot()
             while not stop.is_set():
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=self.config.snapshot_interval_seconds)
@@ -228,19 +274,34 @@ class LocalRuntimeScheduler:
         method does not need a lock — only one worker runs at a time
         between awaits.
 
-        Queries only PENDING / QC / ARBITRATING tasks (covered by
-        ``idx_tasks_status_created``) so the worker pool stays cheap to poll
-        even at 41k+ task volumes. ARBITRATING tasks are queued by humans
-        dragging REJECTED / HR cards into the Arbitration column (re-arbitrate
-        flow) — the worker calls into SubagentRuntime to run the arbiter on
-        them.
+        Claimable statuses:
+          PENDING        — fresh tasks; worker runs the full pipeline
+          QC (resume)    — tasks whose annotation is done; metadata flag
+                           ``runtime_next_stage=qc`` directs the runtime to
+                           skip back to QC. Set either by the auto pipeline
+                           when transitioning ANNOTATING→QC, or by this
+                           function as part of resume-on-restart.
+          ANNOTATING     — orphaned mid-pipeline (after a runtime restart).
+                           If the task has an annotation_result artifact, we
+                           promote it back to QC with runtime_next_stage=qc
+                           so the worker resumes from QC instead of re-running
+                           annotation. If there's no annotation_result yet, we
+                           reset to PENDING so a worker re-runs annotation.
+          ARBITRATING    — human-dragged HR / REJECTED cards (re-arbitrate
+                           flow) — the worker calls the arbiter on them.
         """
         candidates = self.store.list_tasks_by_status(
-            {TaskStatus.PENDING, TaskStatus.QC, TaskStatus.ARBITRATING}
+            {TaskStatus.PENDING, TaskStatus.QC, TaskStatus.ARBITRATING, TaskStatus.ANNOTATING}
         )
         for candidate in candidates:
             if candidate.status is TaskStatus.QC and candidate.metadata.get("runtime_next_stage") != "qc":
                 continue
+            if candidate.status is TaskStatus.ANNOTATING:
+                # Resume-on-restart: inspect artifacts to choose entry stage.
+                self._prepare_annotating_for_resume(candidate)
+                # _prepare_annotating_for_resume may have transitioned the
+                # task — reload to get current status.
+                candidate = self.store.load_task(candidate.task_id)
             acquired_at = self._now_fn()
             lease = self._lease_for(candidate, acquired_at)
             if not self.store.save_runtime_lease(lease):
@@ -249,6 +310,58 @@ class LocalRuntimeScheduler:
             self.store.save_active_run(run)
             return candidate, lease, run
         return None
+
+    def _prepare_annotating_for_resume(self, task: Task) -> None:
+        """Decide whether an orphaned ANNOTATING task resumes from QC or
+        restarts from annotation, based on which artifacts already exist.
+
+        - Has annotation_result + no qc_result for the same attempt → set
+          ``runtime_next_stage=qc`` and transition status to QC. The worker
+          will pick the QC-only resume path in SubagentRuntime.
+        - Otherwise → transition to PENDING so a worker re-runs annotation
+          (and the prelabel-reuse fast path picks up any pre-existing
+          annotation_result on attempt 0).
+        """
+        from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
+
+        artifacts = self.store.list_artifacts(task.task_id)
+        # An annotation artifact exists AND no qc_result follows it in
+        # insertion order → resume at QC. ``list_artifacts`` returns
+        # artifacts in insertion (seq) order, so a positional walk
+        # captures the temporal relationship without a dedicated seq field.
+        last_annotation_idx = None
+        for idx, art in enumerate(artifacts):
+            if art.kind == "annotation_result":
+                last_annotation_idx = idx
+        resume_qc = False
+        if last_annotation_idx is not None:
+            seen_qc_after = any(
+                a.kind == "qc_result"
+                for a in artifacts[last_annotation_idx + 1:]
+            )
+            resume_qc = not seen_qc_after
+        try:
+            if resume_qc:
+                task.metadata["runtime_next_stage"] = "qc"
+                event = transition_task(
+                    task, TaskStatus.QC,
+                    actor="scheduler",
+                    reason="resume on restart: annotation artifact already present, skipping to QC",
+                    stage="recovery",
+                    metadata={"resume": "annotating_to_qc"},
+                )
+            else:
+                event = transition_task(
+                    task, TaskStatus.PENDING,
+                    actor="scheduler",
+                    reason="resume on restart: no annotation artifact yet, restart from annotation",
+                    stage="recovery",
+                    metadata={"resume": "annotating_to_pending"},
+                )
+        except InvalidTransition:
+            return
+        self.store.save_task(task)
+        self.store.append_event(event)
 
     def _write_snapshot(self) -> RuntimeSnapshot:
         now = self._now_fn()

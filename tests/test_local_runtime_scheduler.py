@@ -265,31 +265,24 @@ def test_workers_drain_many_tasks_with_small_pool(tmp_path):
     assert snapshot.queue_counts.pending == 0
 
 
-def test_scheduler_recovers_zombie_tasks_on_construction(tmp_path):
-    """Tasks left in ANNOTATING / QC / ARBITRATING by a crashed scheduler
-    (no active lease, no recent update) should be recovered on the next
-    scheduler init: in-flight statuses to PENDING, ARBITRATING to HR."""
-    from datetime import datetime, timedelta, timezone
+def test_scheduler_arbitrating_zombies_to_hr_on_init(tmp_path):
+    """ARBITRATING tasks without an active lease are routed to HUMAN_REVIEW
+    at scheduler init — the arbiter already had a turn, auto-re-running
+    without operator intent isn't useful. ANNOTATING / QC orphans are NOT
+    touched here (see resume tests below); they're handled by
+    _try_claim_task's resume path or the delayed sweep."""
+    from datetime import datetime, timezone
     from annotation_pipeline_skill.core.models import Task as _Task
     from annotation_pipeline_skill.core.states import TaskStatus as _TS
 
     store = SqliteStore.open(tmp_path)
     now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
-    stale = now - timedelta(seconds=601)
-    # Two zombie tasks across in-flight statuses.
     annot = _Task.new(task_id="zombie-annot", pipeline_id="p", source_ref={"kind": "jsonl"})
     annot.status = _TS.ANNOTATING
-    annot.updated_at = stale
     arb = _Task.new(task_id="zombie-arb", pipeline_id="p", source_ref={"kind": "jsonl"})
     arb.status = _TS.ARBITRATING
-    arb.updated_at = stale
-    # Recently-updated task (should NOT be recovered).
-    fresh = _Task.new(task_id="fresh-annot", pipeline_id="p", source_ref={"kind": "jsonl"})
-    fresh.status = _TS.ANNOTATING
-    fresh.updated_at = now
     store.save_task(annot)
     store.save_task(arb)
-    store.save_task(fresh)
 
     LocalRuntimeScheduler(
         store=store,
@@ -298,9 +291,78 @@ def test_scheduler_recovers_zombie_tasks_on_construction(tmp_path):
         now_fn=lambda: now,
     )
 
-    assert store.load_task("zombie-annot").status is _TS.PENDING
     assert store.load_task("zombie-arb").status is _TS.HUMAN_REVIEW
-    assert store.load_task("fresh-annot").status is _TS.ANNOTATING
+    # ANNOTATING is preserved at init; resume / delayed-sweep handles it.
+    assert store.load_task("zombie-annot").status is _TS.ANNOTATING
+
+
+def test_try_claim_resumes_annotating_to_qc_when_annotation_artifact_exists(tmp_path):
+    """An ANNOTATING task with an annotation_result artifact but no qc_result
+    after it should be resumed at the QC stage on next claim: status → QC,
+    metadata.runtime_next_stage = "qc"."""
+    from annotation_pipeline_skill.core.models import ArtifactRef
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="resume-qc", pipeline_id="p", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ANNOTATING
+    store.save_task(task)
+    # Seed an annotation_result artifact — would normally exist from a
+    # half-finished pipeline cycle before a restart.
+    artifact_path = "artifact_payloads/resume-qc/annotation.json"
+    (store.root / artifact_path).parent.mkdir(parents=True, exist_ok=True)
+    (store.root / artifact_path).write_text('{"text": "{}"}', encoding="utf-8")
+    store.append_artifact(ArtifactRef.new(
+        task_id="resume-qc", kind="annotation_result", path=artifact_path,
+        content_type="application/json",
+    ))
+
+    scheduler = LocalRuntimeScheduler(
+        store=store, client_factory=passing_client_factory,
+        config=RuntimeConfig(max_concurrent_tasks=1),
+    )
+    claim = scheduler._try_claim_task("annotation")
+    assert claim is not None
+    claimed_task, _, _ = claim
+    assert claimed_task.status is TaskStatus.QC
+    assert claimed_task.metadata.get("runtime_next_stage") == "qc"
+
+
+def test_try_claim_resets_annotating_to_pending_when_no_annotation_artifact(tmp_path):
+    """An ANNOTATING task with NO annotation_result yet must restart from
+    annotation — _try_claim_task transitions it to PENDING so a worker picks
+    it up via the normal entry path."""
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="resume-pending", pipeline_id="p", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ANNOTATING
+    store.save_task(task)
+
+    scheduler = LocalRuntimeScheduler(
+        store=store, client_factory=passing_client_factory,
+        config=RuntimeConfig(max_concurrent_tasks=1),
+    )
+    claim = scheduler._try_claim_task("annotation")
+    assert claim is not None
+    claimed_task, _, _ = claim
+    assert claimed_task.status is TaskStatus.PENDING
+
+
+def test_delayed_sweep_resets_truly_orphaned_in_flight_tasks(tmp_path):
+    """_delayed_sweep_unclaimed_orphans is the safety net: any ANNOTATING /
+    QC task with no lease and no active_run gets reset to PENDING.
+    """
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="sweep-me", pipeline_id="p", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.ANNOTATING
+    store.save_task(task)
+
+    scheduler = LocalRuntimeScheduler(
+        store=store, client_factory=passing_client_factory,
+        config=RuntimeConfig(max_concurrent_tasks=1),
+    )
+    # Don't go through _try_claim_task — exercise the sweep directly.
+    scheduler._delayed_sweep_unclaimed_orphans()
+
+    assert store.load_task("sweep-me").status is TaskStatus.PENDING
 
 
 def test_worker_task_timeout_releases_lease_on_hung_llm_call(tmp_path):

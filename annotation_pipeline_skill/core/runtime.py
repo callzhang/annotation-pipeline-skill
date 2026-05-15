@@ -26,6 +26,11 @@ class RuntimeConfig:
     # codex-arbitration round; any LLM call that takes longer than that is
     # almost certainly a stuck HTTP/CLI subprocess, not real work.
     worker_task_timeout_seconds: int = 900
+    # On scheduler restart, give worker pool this long to naturally claim
+    # ANNOTATING / QC orphans (resuming them from existing artifacts) before
+    # the observer sweeps any leftovers back to PENDING. 60s is enough for
+    # 24 workers to cycle through ~hundreds of in-flight tasks.
+    resume_settle_seconds: int = 60
     # Project-level QC sampling policy. Applies to all tasks in this project
     # unless an individual task carries a legacy ``metadata.qc_policy`` override
     # (kept only for backward-compat with tasks imported before this lift).
@@ -41,6 +46,7 @@ class RuntimeConfig:
             "snapshot_interval_seconds": self.snapshot_interval_seconds,
             "max_qc_rounds": self.max_qc_rounds,
             "worker_task_timeout_seconds": self.worker_task_timeout_seconds,
+            "resume_settle_seconds": self.resume_settle_seconds,
             "qc_sample_mode": self.qc_sample_mode,
             "qc_sample_ratio": self.qc_sample_ratio,
             "qc_sample_count": self.qc_sample_count,
@@ -55,6 +61,7 @@ class RuntimeConfig:
             snapshot_interval_seconds=int(data.get("snapshot_interval_seconds", 30)),
             max_qc_rounds=data.get("max_qc_rounds", 3),
             worker_task_timeout_seconds=int(data.get("worker_task_timeout_seconds", 900)),
+            resume_settle_seconds=int(data.get("resume_settle_seconds", 60)),
             qc_sample_mode=data.get("qc_sample_mode", "sample_ratio"),
             qc_sample_ratio=float(data.get("qc_sample_ratio", 1.0)),
             qc_sample_count=data.get("qc_sample_count"),
