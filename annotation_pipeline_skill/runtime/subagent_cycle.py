@@ -1338,12 +1338,20 @@ class SubagentRuntime:
         through repeated annotation/QC retries (the 73-attempt case we hit in
         production blew past the LLM context window).
 
-        Each artifact's payload is slimmed: the provider's ``raw_response`` is
-        dropped (it's the LLM HTTP response wrapper — annotator/QC/arbiter
-        never read it but it dominates the prompt size; observed ~28 KB per
-        qc_result, ~9 KB per annotation_result). Empirically the annotation
-        prompt drops from ~173 KB to ~63 KB after this trim on a task with
-        the maximum 3+3+1 artifacts.
+        Each artifact is slimmed down to the fields the annotator/QC/arbiter
+        actually read. Things dropped:
+          • wrapper.path, wrapper.content_type — filesystem detail
+          • payload.raw_response — provider HTTP wrapper, single biggest bloat
+          • payload.usage, payload.diagnostics, payload.task_id — runtime
+            telemetry the LLM doesn't read (task_id is already on the wrapper)
+          • payload.decision.raw_response (qc_result, arbiter_result) — the
+            qc/arbiter parser stores its parsed JSON back under
+            ``decision.raw_response`` in addition to lifting fields to the top
+            level. Pure duplicate of decision.{failures,feedback_resolution,
+            message,passed}; dropping saves ~900 chars per qc_result.
+
+        Empirically the annotation prompt drops from 173 KB → ~50 KB after
+        all of these trims on a task with the max 3+3+1 artifacts.
         """
         by_kind: dict[str, list[ArtifactRef]] = {}
         for artifact in self.store.list_artifacts(task_id):
@@ -1356,8 +1364,18 @@ class SubagentRuntime:
         for artifact in selected:
             payload = self._read_artifact_payload(artifact)
             if isinstance(payload, dict):
-                payload = {k: v for k, v in payload.items() if k != "raw_response"}
-            results.append({**artifact.to_dict(), "payload": payload})
+                payload = {
+                    k: v for k, v in payload.items()
+                    if k not in {"raw_response", "usage", "diagnostics", "task_id"}
+                }
+                decision = payload.get("decision")
+                if isinstance(decision, dict) and "raw_response" in decision:
+                    payload = {
+                        **payload,
+                        "decision": {k: v for k, v in decision.items() if k != "raw_response"},
+                    }
+            wrapper = {k: v for k, v in artifact.to_dict().items() if k not in {"path", "content_type"}}
+            results.append({**wrapper, "payload": payload})
         return results
 
     def _read_artifact_payload(self, artifact: ArtifactRef) -> Any:
