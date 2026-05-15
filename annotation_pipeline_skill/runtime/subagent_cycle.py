@@ -1330,9 +1330,18 @@ class SubagentRuntime:
             return {"text": text}
 
     def _artifact_context(
-        self, task_id: str, *, per_kind_limit: int = 3
+        self, task_id: str, *, per_kind_limit: int = 1
     ) -> list[dict[str, Any]]:
         """Return artifacts grouped by kind, keeping only the most recent N per kind.
+
+        Default ``per_kind_limit=1``: just the single latest artifact of each
+        kind. The previous 3-per-kind cap was a conservative cushion from
+        early development; in practice the annotator only needs the most
+        recent annotation (to see its own last attempt) and the most recent
+        qc_result (the latest reviewer output). Earlier attempts are stale —
+        the active QC complaints come through feedback_bundle anyway, which
+        names the specific row/target to fix. Cutting 3→1 saves another
+        ~14 KB per prompt on a loop-heavy task.
 
         Prevents the annotator prompt from growing unbounded when a task loops
         through repeated annotation/QC retries (the 73-attempt case we hit in
