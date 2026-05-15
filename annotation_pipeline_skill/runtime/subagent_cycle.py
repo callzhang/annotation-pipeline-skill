@@ -623,7 +623,15 @@ class SubagentRuntime:
                 "reason": "schema validation failed",
             }
         if isinstance(payload, dict):
+            # Strip discussion_replies before schema validation: it's a
+            # side-channel for QC dialogue, not part of the output schema.
+            # May appear at top level or nested inside each row.
             payload.pop("discussion_replies", None)
+            rows = payload.get("rows")
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict):
+                        row.pop("discussion_replies", None)
         try:
             validate_payload_against_task_schema(task, payload, store=self.store)
         except SchemaValidationError as exc:
@@ -699,8 +707,22 @@ class SubagentRuntime:
             return 0
         if not isinstance(payload, dict):
             return 0
-        replies = payload.get("discussion_replies")
-        if not isinstance(replies, list) or not replies:
+        # Annotator may emit discussion_replies at the top level OR nested
+        # inside each row (rows[i].discussion_replies). The prompt doesn't
+        # mandate a location and live outputs use the per-row form.
+        replies: list = []
+        top_level = payload.get("discussion_replies")
+        if isinstance(top_level, list):
+            replies.extend(top_level)
+        rows = payload.get("rows")
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_replies = row.get("discussion_replies")
+                if isinstance(row_replies, list):
+                    replies.extend(row_replies)
+        if not replies:
             return 0
         feedback_index = {f.feedback_id: f for f in self.store.list_feedback(task.task_id)}
         written = 0
