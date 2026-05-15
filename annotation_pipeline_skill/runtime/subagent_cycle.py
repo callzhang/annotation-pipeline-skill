@@ -1033,7 +1033,7 @@ class SubagentRuntime:
         # the annotator's latest annotation. Arbiter can both judge AND produce
         # a corrected annotation that we'll apply on its behalf.
         latest_annotation_artifact = self._latest_annotation_artifact(task.task_id)
-        current_annotation = self._read_artifact_payload(latest_annotation_artifact)
+        current_annotation = self._slim_annotation_payload(latest_annotation_artifact)
         instructions = (
             "You are a senior arbiter AND fixer for an annotation pipeline. You receive the input task, "
             "the annotator's latest annotation, and a list of disputes between the automated QC "
@@ -1302,13 +1302,32 @@ class SubagentRuntime:
                 "task": _task_payload(task),
                 "annotation_artifact": {
                     **annotation_artifact.to_dict(),
-                    "payload": self._read_artifact_payload(annotation_artifact),
+                    "payload": self._slim_annotation_payload(annotation_artifact),
                 },
                 "feedback_bundle": build_feedback_bundle(self.store, task.task_id),
                 "output_schema": resolve_output_schema(task, self.store),
             },
             sort_keys=True,
         )
+
+    def _slim_annotation_payload(self, artifact: ArtifactRef) -> Any:
+        """Return only the parsed annotation rows, dropping ``raw_response`` and
+        other provider-side metadata that downstream consumers (QC, arbiter)
+        don't read. The minimax HTTP response can be 20 KB on its own — 75% of
+        the QC prompt — and contributes nothing to QC's actual job. The
+        pre-parsed inner JSON also saves QC/arbiter from re-parsing the
+        ``<think>``/markdown-fence wrapper."""
+        raw = self._read_artifact_payload(artifact)
+        if not isinstance(raw, dict):
+            return raw
+        text = raw.get("text")
+        if not isinstance(text, str):
+            # Fallback: keep the dict but drop the bulky raw_response.
+            return {k: v for k, v in raw.items() if k != "raw_response"}
+        try:
+            return json.loads(_strip_markdown_json_fence(text))
+        except (json.JSONDecodeError, ValueError):
+            return {"text": text}
 
     def _artifact_context(
         self, task_id: str, *, per_kind_limit: int = 3
