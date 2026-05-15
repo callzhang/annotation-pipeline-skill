@@ -285,30 +285,3 @@ export interface ProviderConfigSnapshot {
   diagnostics: Record<string, ProviderDiagnostic>;
 }
 
-export interface CoordinatorProviderDiagnostics {
-  config_valid: boolean;
-  error?: string;
-  targets?: Record<string, string>;
-  diagnostics: Record<string, ProviderDiagnostic>;
-}
-
-export interface CoordinatorReport {
-  project_id: string | null;
-  generated_at: string;
-  task_count: number;
-  status_counts: Record<string, number>;
-  human_review_task_ids: string[];
-  blocked_task_ids: string[];
-  open_feedback_count: number;
-  open_feedback_ids: string[];
-  feedback_by_category: Record<string, number>;
-  blocking_feedback_count: number;
-  outbox_counts: {
-    pending: number;
-    sent: number;
-    dead_letter: number;
-  };
-  readiness: ReadinessReport | null;
-  provider_diagnostics: CoordinatorProviderDiagnostics;
-  recommended_actions: string[];
-}

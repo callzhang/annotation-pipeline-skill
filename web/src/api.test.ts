@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  fetchCoordinatorReport,
   fetchOutboxSummary,
   postHumanReviewDecision,
   saveTaskQcPolicy,
@@ -89,25 +88,6 @@ describe("dashboard API client", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("/api/outbox?project=pipe");
     expect(summary.counts.pending).toBe(1);
-  });
-
-  it("fetches project-scoped coordinator reports", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          project_id: "pipe",
-          task_count: 2,
-          recommended_actions: ["resolve_annotator_qc_feedback"],
-        }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const report = await fetchCoordinatorReport("pipe");
-
-    expect(fetchMock).toHaveBeenCalledWith("/api/coordinator?project=pipe");
-    expect(report.project_id).toBe("pipe");
-    expect(report.recommended_actions).toEqual(["resolve_annotator_qc_feedback"]);
   });
 
 });
