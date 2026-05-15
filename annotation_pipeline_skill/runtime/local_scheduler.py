@@ -293,11 +293,21 @@ class LocalRuntimeScheduler:
         candidates = self.store.list_tasks_by_status(
             {TaskStatus.PENDING, TaskStatus.QC, TaskStatus.ARBITRATING, TaskStatus.ANNOTATING}
         )
+        # Skip tasks that another worker is already running. Without this,
+        # the ANNOTATING resume branch below would bounce a live in-flight
+        # task back to PENDING on every claim attempt, producing a flood of
+        # spurious annotating→pending→annotating audit events and inflating
+        # apparent throughput. Match what _delayed_sweep_unclaimed_orphans
+        # already does for the same reason.
+        leased = {l.task_id for l in self.store.list_runtime_leases()}
+        active = {r.task_id for r in self.store.list_active_runs()}
         for candidate in candidates:
+            if candidate.task_id in leased or candidate.task_id in active:
+                continue
             if candidate.status is TaskStatus.QC and candidate.metadata.get("runtime_next_stage") != "qc":
                 continue
             if candidate.status is TaskStatus.ANNOTATING:
-                # Resume-on-restart: inspect artifacts to choose entry stage.
+                # Genuine restart-orphan path: inspect artifacts to choose entry stage.
                 self._prepare_annotating_for_resume(candidate)
                 # _prepare_annotating_for_resume may have transitioned the
                 # task — reload to get current status.
