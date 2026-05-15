@@ -31,6 +31,12 @@ class RuntimeConfig:
     # the observer sweeps any leftovers back to PENDING. 60s is enough for
     # 24 workers to cycle through ~hundreds of in-flight tasks.
     resume_settle_seconds: int = 60
+    # Max times to retry the arbiter LLM call when its corrected_annotation
+    # contains a non-verbatim span. Each retry tells the model exactly which
+    # span failed so it can fix the specific issue. After this many retries
+    # all fail, the task falls through to HUMAN_REVIEW. Default 2 → up to 3
+    # arbiter calls per dispute (initial + 2 retries).
+    arbiter_verbatim_retries: int = 2
     # Project-level QC sampling policy. Applies to all tasks in this project
     # unless an individual task carries a legacy ``metadata.qc_policy`` override
     # (kept only for backward-compat with tasks imported before this lift).
@@ -47,6 +53,7 @@ class RuntimeConfig:
             "max_qc_rounds": self.max_qc_rounds,
             "worker_task_timeout_seconds": self.worker_task_timeout_seconds,
             "resume_settle_seconds": self.resume_settle_seconds,
+            "arbiter_verbatim_retries": self.arbiter_verbatim_retries,
             "qc_sample_mode": self.qc_sample_mode,
             "qc_sample_ratio": self.qc_sample_ratio,
             "qc_sample_count": self.qc_sample_count,
@@ -62,6 +69,7 @@ class RuntimeConfig:
             max_qc_rounds=data.get("max_qc_rounds", 3),
             worker_task_timeout_seconds=int(data.get("worker_task_timeout_seconds", 900)),
             resume_settle_seconds=int(data.get("resume_settle_seconds", 60)),
+            arbiter_verbatim_retries=int(data.get("arbiter_verbatim_retries", 2)),
             qc_sample_mode=data.get("qc_sample_mode", "sample_ratio"),
             qc_sample_ratio=float(data.get("qc_sample_ratio", 1.0)),
             qc_sample_count=data.get("qc_sample_count"),

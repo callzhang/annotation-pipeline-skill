@@ -1126,24 +1126,62 @@ class SubagentRuntime:
             indent=2,
             sort_keys=True,
         )
+        # Up to ``arbiter_verbatim_retries`` retry rounds if the arbiter's
+        # corrected_annotation contains a non-verbatim span (the model
+        # paraphrased / normalized something that isn't in input.text). Each
+        # retry tells the model exactly which span failed and asks for a
+        # fresh attempt. After retries exhausted, abandon the correction —
+        # the caller falls through to HR.
+        max_retries = getattr(self.config, "arbiter_verbatim_retries", 2)
+        retry_note = ""
+        result = None
+        payload = None
+        verdicts = None
         started_at = utc_now()
-        try:
-            result = await arbiter_client.generate(LLMGenerateRequest(
-                instructions=instructions,
-                prompt=prompt,
-                continuity_handle=None,
-            ))
-        except Exception:
-            return empty
+        for attempt_idx in range(max_retries + 1):
+            attempt_instructions = instructions + retry_note
+            try:
+                result = await arbiter_client.generate(LLMGenerateRequest(
+                    instructions=attempt_instructions,
+                    prompt=prompt,
+                    continuity_handle=None,
+                ))
+            except Exception:
+                return empty
+            try:
+                payload = json.loads(_strip_markdown_json_fence(result.final_text))
+            except (json.JSONDecodeError, ValueError):
+                return empty
+            verdicts = payload.get("verdicts") if isinstance(payload, dict) else None
+            if not isinstance(verdicts, list):
+                return empty
+            # If arbiter produced a corrected_annotation, pre-validate verbatim
+            # before accepting the response. Schema check is repeated later in
+            # _apply_arbiter_correction; here we only gate on verbatim because
+            # that's the empirical failure mode (~18% of accepted tasks
+            # contained hallucinated spans from this path before the guard).
+            corrected_check = payload.get("corrected_annotation") if isinstance(payload, dict) else None
+            if isinstance(corrected_check, dict):
+                verbatim_failure = self._check_verbatim_spans(task, corrected_check)
+                if verbatim_failure is not None:
+                    if attempt_idx < max_retries:
+                        target = verbatim_failure.get("target", {})
+                        retry_note = (
+                            f"\n\nPREVIOUS ATTEMPT FAILED VERBATIM CHECK: "
+                            f"span {target.get('span')!r} at {target.get('field')!r} "
+                            f"is not a verbatim substring of the row's input.text. "
+                            f"Re-emit corrected_annotation using only spans that appear "
+                            f"VERBATIM (exact character match including punctuation, "
+                            f"whitespace, traditional vs simplified Chinese, case) in "
+                            f"input.text. Do not paraphrase, normalize, or invent spans."
+                        )
+                        continue
+                    # Retries exhausted — drop the bad corrected_annotation so
+                    # the outcome falls through to HR instead of silently
+                    # accepting a hallucinated span.
+                    payload["corrected_annotation"] = None
+            break
         finished_at = utc_now()
-        # Parse response
-        try:
-            payload = json.loads(_strip_markdown_json_fence(result.final_text))
-        except (json.JSONDecodeError, ValueError):
-            return empty
-        verdicts = payload.get("verdicts") if isinstance(payload, dict) else None
-        if not isinstance(verdicts, list):
-            return empty
         # Record an Attempt for audit traceability.
         arbiter_attempt_id = self._next_attempt_id(task)
         task.current_attempt += 1
