@@ -329,6 +329,7 @@ export interface AnnotatorsSnapshot {
   annotators: AnnotatorConfig[];
   sampling: Record<string, Record<string, unknown>>;
   available_profiles: string[];
+  stage_targets: Record<string, string>;
 }
 
 export async function fetchAnnotatorsConfig(storeKey: string | null = null): Promise<AnnotatorsSnapshot> {
@@ -338,7 +339,11 @@ export async function fetchAnnotatorsConfig(storeKey: string | null = null): Pro
 }
 
 export async function saveAnnotatorsConfig(
-  payload: { annotators: AnnotatorConfig[]; sampling: Record<string, Record<string, unknown>> },
+  payload: {
+    annotators?: AnnotatorConfig[];
+    sampling: Record<string, Record<string, unknown>>;
+    stage_targets?: Record<string, string>;
+  },
   storeKey: string | null = null,
 ): Promise<void> {
   const response = await fetch(withStore("/api/annotators", storeKey), {

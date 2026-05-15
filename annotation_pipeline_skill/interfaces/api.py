@@ -591,18 +591,23 @@ class DashboardApi:
             })
         sampling = data.get("sampling", {}) if isinstance(data.get("sampling"), dict) else {}
         available_profiles: list[str] = []
+        targets: dict[str, str] = {}
         try:
             snap = build_provider_config_snapshot(
                 store.root,
                 workspace_root=self.workspace_root,
             )
             available_profiles = [str(p.get("name")) for p in snap.get("profiles", []) if p.get("name")]
+            raw_targets = snap.get("targets") or {}
+            if isinstance(raw_targets, dict):
+                targets = {str(k): str(v) for k, v in raw_targets.items()}
         except (FileNotFoundError, ProfileValidationError):
             available_profiles = []
         return self._json_response(200, {
             "annotators": annotators,
             "sampling": sampling,
             "available_profiles": available_profiles,
+            "stage_targets": targets,
         })
 
     def _update_annotators_response(self, store: SqliteStore, body: bytes) -> tuple[int, dict[str, str], bytes]:
@@ -612,32 +617,53 @@ class DashboardApi:
             return self._json_response(400, {"error": "invalid_json", "detail": str(exc)})
         if not isinstance(payload, dict):
             return self._json_response(400, {"error": "invalid_payload"})
-        annotators_input = payload.get("annotators", [])
-        if not isinstance(annotators_input, list):
-            return self._json_response(400, {"error": "invalid_annotators"})
-        annotators_dict: dict[str, Any] = {}
-        for item in annotators_input:
-            if not isinstance(item, dict):
-                continue
-            annotator_id = str(item.get("id", "")).strip()
-            if not annotator_id:
-                continue
-            entry: dict[str, Any] = {
-                "display_name": item.get("display_name", ""),
-                "modalities": list(item.get("modalities", []) or []),
-                "annotation_types": list(item.get("annotation_types", []) or []),
-                "input_artifact_kinds": list(item.get("input_artifact_kinds", []) or []),
-                "output_artifact_kinds": list(item.get("output_artifact_kinds", []) or []),
-                "provider_target": item.get("provider_target", ""),
-                "enabled": bool(item.get("enabled", True)),
-            }
-            llm_profile = item.get("llm_profile")
-            if llm_profile:
-                entry["llm_profile"] = llm_profile
-            preview_renderer_id = item.get("preview_renderer_id")
-            if preview_renderer_id:
-                entry["preview_renderer_id"] = preview_renderer_id
-            annotators_dict[annotator_id] = entry
+
+        # Load existing annotators.yaml so we can preserve the annotators block
+        # when the form only sends sampling / stage_targets edits. The selector
+        # still needs the annotators dict on disk to route tasks.
+        path = store.root / "annotators.yaml"
+        existing: dict[str, Any] = {}
+        if path.exists():
+            try:
+                loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except yaml.YAMLError:
+                existing = {}
+
+        # Annotators are optional in the payload. When omitted, keep whatever
+        # is already on disk (the form no longer surfaces them for editing).
+        if "annotators" in payload:
+            annotators_input = payload["annotators"]
+            if not isinstance(annotators_input, list):
+                return self._json_response(400, {"error": "invalid_annotators"})
+            annotators_dict: dict[str, Any] = {}
+            for item in annotators_input:
+                if not isinstance(item, dict):
+                    continue
+                annotator_id = str(item.get("id", "")).strip()
+                if not annotator_id:
+                    continue
+                entry: dict[str, Any] = {
+                    "display_name": item.get("display_name", ""),
+                    "modalities": list(item.get("modalities", []) or []),
+                    "annotation_types": list(item.get("annotation_types", []) or []),
+                    "input_artifact_kinds": list(item.get("input_artifact_kinds", []) or []),
+                    "output_artifact_kinds": list(item.get("output_artifact_kinds", []) or []),
+                    "provider_target": item.get("provider_target", ""),
+                    "enabled": bool(item.get("enabled", True)),
+                }
+                llm_profile = item.get("llm_profile")
+                if llm_profile:
+                    entry["llm_profile"] = llm_profile
+                preview_renderer_id = item.get("preview_renderer_id")
+                if preview_renderer_id:
+                    entry["preview_renderer_id"] = preview_renderer_id
+                annotators_dict[annotator_id] = entry
+        else:
+            existing_annotators = existing.get("annotators")
+            annotators_dict = existing_annotators if isinstance(existing_annotators, dict) else {}
+
         sampling = payload.get("sampling", {})
         if not isinstance(sampling, dict):
             sampling = {}
@@ -645,9 +671,60 @@ class DashboardApi:
         if sampling:
             out["sampling"] = sampling
         text = yaml.safe_dump(out, sort_keys=False, default_flow_style=False, allow_unicode=True)
-        path = store.root / "annotators.yaml"
         path.write_text(text, encoding="utf-8")
+
+        # Optional: update workspace llm_profiles.yaml `targets` mapping when
+        # the form sends stage_targets. This is the actual stage → profile
+        # binding the runtime resolves at dispatch time (annotation/qc/arbiter/
+        # coordinator). The per-annotator `llm_profile` field above is metadata
+        # only; runtime ignores it.
+        stage_targets = payload.get("stage_targets")
+        if isinstance(stage_targets, dict) and stage_targets:
+            try:
+                self._update_stage_targets(stage_targets)
+            except (OSError, yaml.YAMLError, ProfileValidationError) as exc:
+                return self._json_response(
+                    400,
+                    {"error": "stage_targets_save_failed", "detail": str(exc)},
+                )
         return self._json_response(200, {"ok": True})
+
+    def _update_stage_targets(self, stage_targets: dict[str, Any]) -> None:
+        """Merge stage→profile updates into the workspace llm_profiles.yaml.
+
+        Loads the current file, validates each profile name exists, replaces
+        the targets block, writes back. Other top-level keys (profiles, limits)
+        are preserved verbatim.
+        """
+        from annotation_pipeline_skill.llm.profiles import LLM_PROFILES_FILENAME, resolve_llm_profiles_path
+
+        existing_path = resolve_llm_profiles_path(workspace_root=self.workspace_root)
+        if existing_path is None:
+            existing_path = self.workspace_root / LLM_PROFILES_FILENAME
+        raw: dict[str, Any] = {}
+        if existing_path.exists():
+            loaded = yaml.safe_load(existing_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                raw = loaded
+        profiles = raw.get("profiles") or {}
+        valid_names = set(profiles.keys()) if isinstance(profiles, dict) else set()
+        clean_targets: dict[str, str] = {}
+        for stage, profile_name in stage_targets.items():
+            if not isinstance(stage, str) or not isinstance(profile_name, str):
+                continue
+            stage = stage.strip()
+            profile_name = profile_name.strip()
+            if not stage or not profile_name:
+                continue
+            if profile_name not in valid_names:
+                raise ProfileValidationError(
+                    f"stage target {stage} → {profile_name} references missing profile"
+                )
+            clean_targets[stage] = profile_name
+        raw["targets"] = clean_targets
+        target_path = self.workspace_root / LLM_PROFILES_FILENAME
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
 
     def _guidelines_response(self, store: SqliteStore | None) -> dict[str, Any]:
         if store is None:
