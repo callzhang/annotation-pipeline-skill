@@ -161,7 +161,22 @@ class LocalRuntimeScheduler:
                 task, lease, run = claim
                 busy_workers += 1
                 try:
-                    await runtime.run_task_async(task, stage_target=stage_target)
+                    # Hard upper bound on a single task's run. If an LLM call
+                    # (codex subprocess, HTTP stream) hangs past this, we cancel
+                    # so the finally clause releases the lease/active_run and
+                    # the task gets recycled instead of zombifying the worker.
+                    await asyncio.wait_for(
+                        runtime.run_task_async(task, stage_target=stage_target),
+                        timeout=self.config.worker_task_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    import sys
+                    print(
+                        f"[scheduler] worker_task_timeout: task={task.task_id} "
+                        f"after {self.config.worker_task_timeout_seconds}s; "
+                        f"releasing lease and recycling",
+                        file=sys.stderr,
+                    )
                 except Exception:
                     # SubagentRuntime captures errors on the attempt record; the
                     # worker only needs to release records and keep going.

@@ -301,3 +301,37 @@ def test_scheduler_recovers_zombie_tasks_on_construction(tmp_path):
     assert store.load_task("zombie-annot").status is _TS.PENDING
     assert store.load_task("zombie-arb").status is _TS.HUMAN_REVIEW
     assert store.load_task("fresh-annot").status is _TS.ANNOTATING
+
+
+def test_worker_task_timeout_releases_lease_on_hung_llm_call(tmp_path):
+    """If an LLM call hangs forever, the worker's asyncio.wait_for kicks in,
+    cancels the task, and the finally clause releases the lease/active_run.
+    The task stays claimable for the next worker run."""
+    import asyncio
+
+    class HangingLLMClient:
+        async def generate(self, request):
+            # Simulate an HTTP/CLI call that never returns.
+            await asyncio.sleep(60)
+            return None  # never reached
+
+    store = SqliteStore.open(tmp_path)
+    task = Task.new(task_id="hang-task", pipeline_id="p", source_ref={"kind": "jsonl"})
+    task.status = TaskStatus.PENDING
+    store.save_task(task)
+
+    scheduler = LocalRuntimeScheduler(
+        store=store,
+        client_factory=lambda target: HangingLLMClient(),
+        config=RuntimeConfig(
+            max_concurrent_tasks=1,
+            worker_task_timeout_seconds=1,  # 1s — wait_for fires fast
+        ),
+    )
+
+    # max_tasks=1 stops the pool after one completion (timeout counts as one)
+    scheduler.run_until_idle(stage_target="annotation", max_tasks=1)
+
+    # Lease/active_run released even though the LLM never returned
+    assert store.list_runtime_leases() == []
+    assert store.list_active_runs() == []

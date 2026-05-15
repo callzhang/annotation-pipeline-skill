@@ -19,6 +19,13 @@ class RuntimeConfig:
     # while the worker pool is running.
     snapshot_interval_seconds: int = 30
     max_qc_rounds: int = 3
+    # Hard upper bound on a single task's full pipeline run (annot+QC+arbiter+
+    # any retries). If a worker's run_task_async hangs past this, the worker
+    # cancels the call so the finally clause can release the lease/active_run
+    # and the task gets recycled. Default 900s (15 min) covers even the slowest
+    # codex-arbitration round; any LLM call that takes longer than that is
+    # almost certainly a stuck HTTP/CLI subprocess, not real work.
+    worker_task_timeout_seconds: int = 900
     # Project-level QC sampling policy. Applies to all tasks in this project
     # unless an individual task carries a legacy ``metadata.qc_policy`` override
     # (kept only for backward-compat with tasks imported before this lift).
@@ -33,6 +40,7 @@ class RuntimeConfig:
             "retry_delay_seconds": self.retry_delay_seconds,
             "snapshot_interval_seconds": self.snapshot_interval_seconds,
             "max_qc_rounds": self.max_qc_rounds,
+            "worker_task_timeout_seconds": self.worker_task_timeout_seconds,
             "qc_sample_mode": self.qc_sample_mode,
             "qc_sample_ratio": self.qc_sample_ratio,
             "qc_sample_count": self.qc_sample_count,
@@ -46,6 +54,7 @@ class RuntimeConfig:
             retry_delay_seconds=data.get("retry_delay_seconds", 3600),
             snapshot_interval_seconds=int(data.get("snapshot_interval_seconds", 30)),
             max_qc_rounds=data.get("max_qc_rounds", 3),
+            worker_task_timeout_seconds=int(data.get("worker_task_timeout_seconds", 900)),
             qc_sample_mode=data.get("qc_sample_mode", "sample_ratio"),
             qc_sample_ratio=float(data.get("qc_sample_ratio", 1.0)),
             qc_sample_count=data.get("qc_sample_count"),
