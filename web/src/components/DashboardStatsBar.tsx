@@ -48,7 +48,13 @@ export function DashboardStatsBar({ projectId, storeKey }: DashboardStatsBarProp
   }
 
   const counts = stats.status_counts;
-  const window = stats.throughput_window_minutes;
+  const window = stats.throughput_window_minutes || 1;
+  const perMin = (stage: string): string => {
+    const raw = stats.throughput_per_window[stage] ?? 0;
+    const rate = raw / window;
+    return rate >= 10 ? rate.toFixed(0) : rate.toFixed(1);
+  };
+  const hint = `attempts/min, averaged over last ${window} min`;
   const items: Stat[] = [
     { label: "Pending", value: counts.pending ?? 0, tone: "neutral" },
     { label: "Annotating", value: counts.annotating ?? 0, tone: "neutral" },
@@ -58,24 +64,9 @@ export function DashboardStatsBar({ projectId, storeKey }: DashboardStatsBarProp
     { label: "Blocked", value: counts.blocked ?? 0, tone: "critical" },
     { label: "Accepted", value: counts.accepted ?? 0, tone: "success" },
     { label: "Open feedback", value: stats.open_feedback_count, tone: "warning" },
-    {
-      label: `Annotation/${window}m`,
-      value: stats.throughput_per_window.annotation ?? 0,
-      tone: "neutral",
-      hint: `attempts succeeded in last ${window} min`,
-    },
-    {
-      label: `QC/${window}m`,
-      value: stats.throughput_per_window.qc ?? 0,
-      tone: "neutral",
-      hint: `attempts succeeded in last ${window} min`,
-    },
-    {
-      label: `Arbitration/${window}m`,
-      value: stats.throughput_per_window.arbitration ?? 0,
-      tone: "neutral",
-      hint: `attempts succeeded in last ${window} min`,
-    },
+    { label: "Annotation/min", value: perMin("annotation"), tone: "neutral", hint },
+    { label: "QC/min", value: perMin("qc"), tone: "neutral", hint },
+    { label: "Arbitration/min", value: perMin("arbitration"), tone: "neutral", hint },
   ];
 
   return (
