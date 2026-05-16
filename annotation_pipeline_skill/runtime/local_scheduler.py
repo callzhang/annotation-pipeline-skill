@@ -218,6 +218,42 @@ class LocalRuntimeScheduler:
                 finally:
                     self.store.delete_active_run(run.run_id)
                     self.store.delete_runtime_lease(lease.lease_id)
+                    # If run_task_async bailed before reaching a terminal
+                    # transition (LLM error, timeout, parse failure), the
+                    # task is left in whatever in-flight state it last hit
+                    # (typically ANNOTATING from the early annotator
+                    # transition). Without resetting, the next claim cycle
+                    # sees ANNOTATING-without-lease and triggers
+                    # _prepare_annotating_for_resume → PENDING → re-claim →
+                    # PENDING→ANNOTATING → LLM fails again, infinite loop
+                    # at ~700 spurious audit events/min. Reset here closes
+                    # the loop: next claim sees a clean PENDING task.
+                    try:
+                        latest = self.store.load_task(task.task_id)
+                        # Only reset ANNOTATING. QC with runtime_next_stage=qc
+                        # is a legitimate "wait for QC re-claim" exit state
+                        # used by the QC parse-error retry path; leaving it
+                        # alone lets the next worker run QC-only as designed.
+                        if latest.status is TaskStatus.ANNOTATING:
+                            from annotation_pipeline_skill.core.transitions import (
+                                InvalidTransition,
+                                transition_task,
+                            )
+                            try:
+                                event = transition_task(
+                                    latest, TaskStatus.PENDING,
+                                    actor="scheduler",
+                                    reason="worker bailed mid-annotation; resetting to pending",
+                                    stage="recovery",
+                                    metadata={"recovery": "worker_bail",
+                                              "previous_status": "annotating"},
+                                )
+                                self.store.save_task(latest)
+                                self.store.append_event(event)
+                            except InvalidTransition:
+                                pass
+                    except (FileNotFoundError, KeyError):
+                        pass
                     busy_workers -= 1
                     completed += 1
                     if max_tasks is not None and completed >= max_tasks:
