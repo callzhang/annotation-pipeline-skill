@@ -218,7 +218,9 @@ def test_subagent_runtime_rerun_prompt_includes_feedback_context(tmp_path):
     assert discussions[0].stance == "resolved"
     assert discussions[0].metadata["resolution_source"] == "subsequent_qc_pass"
     assert build_feedback_consensus_summary(store, "task-1")["open_feedback"] == []
-    assert json.loads((tmp_path / artifacts[2].path).read_text(encoding="utf-8"))["text"] == '{"labels":[{"text":"alpha","type":"ENTITY"}]}'
+    # The persisted text is canonical-serialized JSON via _serialize_llm_json.
+    # Compare semantically, not byte-for-byte (whitespace differs).
+    assert json.loads(json.loads((tmp_path / artifacts[2].path).read_text(encoding="utf-8"))["text"]) == {"labels": [{"text": "alpha", "type": "ENTITY"}]}
 
 
 def test_annotator_output_failing_schema_records_blocking_feedback_and_loops(tmp_path):

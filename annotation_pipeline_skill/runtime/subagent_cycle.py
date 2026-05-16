@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
+from robust_json import loads as _robust_json_loads
+
 from annotation_pipeline_skill.core.models import ArtifactRef, Attempt, FeedbackDiscussionEntry, FeedbackRecord, Task, utc_now
 from annotation_pipeline_skill.core.runtime import RuntimeConfig
 from annotation_pipeline_skill.core.schema_validation import (
@@ -186,7 +188,7 @@ class SubagentRuntime:
         )
         annotation_finished_at = utc_now()
         task.current_attempt += 1
-        cleaned_annotation_text = _strip_markdown_json_fence(annotation_result.final_text)
+        cleaned_annotation_text = _serialize_llm_json(annotation_result.final_text)
         annotation_artifact = self._write_stage_artifact(
             task,
             annotation_result,
@@ -711,7 +713,7 @@ class SubagentRuntime:
         if not isinstance(text, str):
             return False
         try:
-            json.loads(_strip_markdown_json_fence(text))
+            _parse_llm_json(text)
         except (json.JSONDecodeError, ValueError):
             return False
         return True
@@ -727,8 +729,8 @@ class SubagentRuntime:
         if schema is None:
             return None
         try:
-            payload = json.loads(_strip_markdown_json_fence(final_text))
-        except json.JSONDecodeError as exc:
+            payload = _parse_llm_json(final_text)
+        except (json.JSONDecodeError, ValueError) as exc:
             return {
                 "category": "schema_invalid",
                 "message": f"Annotation result is not valid JSON: {exc}",
@@ -784,7 +786,7 @@ class SubagentRuntime:
 
     def _record_annotator_replies(self, task: Task, attempt_id: str, final_text: str) -> int:
         try:
-            payload = json.loads(_strip_markdown_json_fence(final_text))
+            payload = _parse_llm_json(final_text)
         except (json.JSONDecodeError, ValueError):
             return 0
         if not isinstance(payload, dict):
@@ -1234,7 +1236,7 @@ class SubagentRuntime:
             except Exception:
                 return empty
             try:
-                payload = json.loads(_strip_markdown_json_fence(result.final_text))
+                payload = _parse_llm_json(result.final_text)
             except (json.JSONDecodeError, ValueError):
                 return empty
             verdicts = payload.get("verdicts") if isinstance(payload, dict) else None
@@ -1513,7 +1515,7 @@ class SubagentRuntime:
             # Fallback: keep the dict but drop the bulky raw_response.
             return {k: v for k, v in raw.items() if k != "raw_response"}
         try:
-            return json.loads(_strip_markdown_json_fence(text))
+            return _parse_llm_json(text)
         except (json.JSONDecodeError, ValueError):
             return {"text": text}
 
@@ -1778,10 +1780,9 @@ def _task_payload(task: Task) -> dict[str, Any]:
 
 
 def _parse_qc_decision(text: str) -> dict[str, Any]:
-    normalized_text = _strip_markdown_json_fence(text)
     try:
-        payload = json.loads(normalized_text)
-    except json.JSONDecodeError as exc:
+        payload = _parse_llm_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise QCParseError("QC response was not valid JSON.", raw_text=text) from exc
     if not isinstance(payload, dict):
         raise QCParseError("QC response JSON must be an object.", raw_text=text)
@@ -1812,41 +1813,32 @@ def _parse_qc_decision(text: str) -> dict[str, Any]:
     }
 
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+def _parse_llm_json(text: str) -> Any:
+    """Robust JSON parser for LLM-emitted text.
+
+    Backed by the ``robust-json-parser`` library, which handles:
+      - <think>...</think> reasoning blocks (minimax / deepseek-reasoner / qwen-r1)
+      - markdown code fences (```json ... ```)
+      - prose preambles ("I'm rebuilding the annotations..." from codex CLI)
+      - single quotes instead of doubles, trailing commas, inline comments
+      - truncated / partial JSON (auto-closes braces)
+
+    Raises ``ValueError`` (the base class of ``json.JSONDecodeError``) on
+    unrecoverable input — call sites already catching ``json.JSONDecodeError``
+    keep working because ``JSONDecodeError`` is a subclass.
+    """
+    return _robust_json_loads(text)
 
 
-def _strip_markdown_json_fence(text: str) -> str:
-    # Many recent open-weight models (minimax, deepseek-reasoner, qwen-r1, etc.)
-    # emit a leading <think>...</think> reasoning block before the JSON payload.
-    # Strip those blocks first, then handle the markdown fence.
-    stripped = _THINK_BLOCK_RE.sub("", text).strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
-            opening = lines[0].strip().lower()
-            if opening in {"```", "```json"}:
-                return "\n".join(lines[1:-1]).strip()
-    # Some models (e.g., codex CLI used as fallback annotator) prefix the JSON
-    # with prose narration like "I'm rebuilding the annotations...". Try a
-    # direct parse first; if that fails, scan for the first `{`/`[` that
-    # raw_decodes successfully and return only the JSON substring. Falls
-    # through to original text so the caller's parse surfaces a useful error
-    # when no JSON is recoverable.
+def _serialize_llm_json(text: str) -> str:
+    """Parse LLM output and re-serialize as canonical JSON. Returns the
+    original text if no JSON can be recovered (caller surfaces the error
+    downstream).
+    """
     try:
-        json.loads(stripped)
-        return stripped
-    except (json.JSONDecodeError, ValueError):
-        pass
-    decoder = json.JSONDecoder()
-    for i, ch in enumerate(stripped):
-        if ch not in "{[":
-            continue
-        try:
-            _, end = decoder.raw_decode(stripped[i:])
-        except (json.JSONDecodeError, ValueError):
-            continue
-        return stripped[i : i + end]
-    return stripped
+        return json.dumps(_parse_llm_json(text), ensure_ascii=False)
+    except (ValueError, TypeError):
+        return text
 
 
 def _iter_verbatim_spans(output: dict) -> "list[tuple[str, str]]":

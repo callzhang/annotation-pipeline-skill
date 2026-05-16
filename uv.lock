@@ -20,6 +20,7 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "robust-json-parser" },
 ]
 
 [package.dev-dependencies]
@@ -34,6 +35,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "robust-json-parser", specifier = ">=0.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -522,6 +524,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2c/58/ca301544e1fa93ed4f80d724bf5b194f6e4b945841c5bfd555878eea9fcb/referencing-0.37.0-py3-none-any.whl", hash = "sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231", size = 26766, upload-time = "2025-10-13T15:30:47.625Z" },
+]
+
+[[package]]
+name = "robust-json-parser"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/46/17/a11bf7e84d7af30b2c12a269129066f68cdceba1328581864a8430ceb26a/robust_json_parser-0.1.6.tar.gz", hash = "sha256:6881bf59177f62567dda91a76a6f12a6bb8e58c45ac78722cd523e35c1282a85", size = 32953, upload-time = "2025-10-16T06:19:03.424Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/ed/ef686393d9384447f3203b8220fde85c75467e79154be8e83cd70115e930/robust_json_parser-0.1.6-py3-none-any.whl", hash = "sha256:2e4d0d3fffb788cf16c36057a17ae7f70701bb81e60e7448abc21aec927db9b2", size = 13479, upload-time = "2025-10-16T06:19:02.26Z" },
 ]
 
 [[package]]
