@@ -260,6 +260,45 @@ class SubagentRuntime:
             annotation_result.final_text,
         )
 
+    # Hard cap on consecutive arbiter mechanical retries. After this many
+    # arbiter pickups produce no actionable verdict (codex error / no fix /
+    # bad correction), give up and route to HR. Prevents a stuck task from
+    # looping forever when the LLM consistently fails on it.
+    ARBITER_MECHANICAL_RETRY_CAP = 3
+
+    def _handle_arbiter_mechanical_fail(
+        self,
+        task: Task,
+        attempt_id: str,
+        arb: dict,
+        stage: str,
+        hr_extra_metadata: dict,
+    ) -> None:
+        """Bump the per-task mechanical-retry counter. If the cap is reached,
+        transition to HR. Otherwise leave the task in ARBITRATING for re-pickup.
+        """
+        count = int(task.metadata.get("arbiter_mechanical_retries", 0)) + 1
+        task.metadata["arbiter_mechanical_retries"] = count
+        if count >= self.ARBITER_MECHANICAL_RETRY_CAP:
+            metadata = {
+                **hr_extra_metadata,
+                "arbiter_mechanical_retries": count,
+                "arbiter_ran": arb["ran"],
+                "arbiter_unresolved": arb["unresolved"],
+                "arbiter_mechanical_fail": arb["mechanical_fail"],
+            }
+            self._transition(
+                task,
+                TaskStatus.HUMAN_REVIEW,
+                reason=(
+                    f"arbiter exhausted {count} mechanical retries without an "
+                    "actionable verdict; routing to human review"
+                ),
+                stage=stage,
+                attempt_id=attempt_id,
+                metadata=metadata,
+            )
+
     def _retry_round_count(self, task_id: str) -> int:
         """Count how many *open* retry rounds have happened for this task.
 
@@ -309,19 +348,16 @@ class SubagentRuntime:
                 if terminal is not None:
                     self.store.save_task(task)
                     return
-                if arb["closed"] > 0 and self._retry_round_count(task.task_id) < self.max_qc_rounds:
-                    self._transition(
-                        task,
-                        TaskStatus.PENDING,
-                        reason="arbiter resolved enough disputes; resuming retry loop",
-                        stage="validation",
-                        attempt_id=annotation_attempt_id,
-                    )
-                else:
+                # HR only when arbiter said tentative/unsure on at least one
+                # verdict. Mechanical failures (codex error, missing fix,
+                # bad correction) keep the task in ARBITRATING so the next
+                # worker pickup re-runs the arbiter — no point sending back
+                # to the annotator, the annotation didn't change.
+                if arb["unresolved"] > 0:
                     self._transition(
                         task,
                         TaskStatus.HUMAN_REVIEW,
-                        reason="auto-escalated after repeated annotation/QC failures",
+                        reason="arbiter unresolved verdicts; needs human judgment",
                         stage="validation",
                         attempt_id=annotation_attempt_id,
                         metadata={
@@ -330,7 +366,13 @@ class SubagentRuntime:
                             "max_qc_rounds": self.max_qc_rounds,
                             "arbiter_ran": arb["ran"],
                             "arbiter_unresolved": arb["unresolved"],
+                            "arbiter_mechanical_fail": arb["mechanical_fail"],
                         },
+                    )
+                else:
+                    self._handle_arbiter_mechanical_fail(
+                        task, annotation_attempt_id, arb, stage="validation",
+                        hr_extra_metadata={"round_count": round_count, "max_qc_rounds": self.max_qc_rounds},
                     )
             else:
                 self._transition(
@@ -436,20 +478,14 @@ class SubagentRuntime:
                 if terminal is not None:
                     self.store.save_task(task)
                     return
-                if arb["closed"] > 0 and self._retry_round_count(task.task_id) < self.max_qc_rounds:
-                    self._transition(
-                        task,
-                        TaskStatus.PENDING,
-                        reason="arbiter resolved enough disputes; resuming retry loop",
-                        stage="qc",
-                        attempt_id=qc_attempt_id,
-                        metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
-                    )
-                else:
+                # HR only on genuine arbiter uncertainty. Mechanical failures
+                # leave the task in ARBITRATING for re-pickup; the arbiter
+                # gets another shot on the same annotation.
+                if arb["unresolved"] > 0:
                     self._transition(
                         task,
                         TaskStatus.HUMAN_REVIEW,
-                        reason="auto-escalated after repeated annotation/QC failures",
+                        reason="arbiter unresolved verdicts; needs human judgment",
                         stage="qc",
                         attempt_id=qc_attempt_id,
                         metadata={
@@ -460,6 +496,17 @@ class SubagentRuntime:
                             "qc_artifact_id": qc_artifact.artifact_id,
                             "arbiter_ran": arb["ran"],
                             "arbiter_unresolved": arb["unresolved"],
+                            "arbiter_mechanical_fail": arb["mechanical_fail"],
+                        },
+                    )
+                else:
+                    self._handle_arbiter_mechanical_fail(
+                        task, qc_attempt_id, arb, stage="qc",
+                        hr_extra_metadata={
+                            "round_count": round_count,
+                            "max_qc_rounds": self.max_qc_rounds,
+                            "feedback_id": feedback.feedback_id,
+                            "qc_artifact_id": qc_artifact.artifact_id,
                         },
                     )
             else:
@@ -941,20 +988,31 @@ class SubagentRuntime:
         )
         terminal = self._terminal_from_arbiter(task, attempt_id, "arbitration", arb)
         if terminal is None:
-            self._transition(
-                task,
-                TaskStatus.HUMAN_REVIEW,
-                reason="rearbitration produced no fix; routing back to human review",
-                stage="arbitration",
-                attempt_id=attempt_id,
-                metadata={
-                    "rearbitrate": True,
-                    "arbiter_ran": arb["ran"],
-                    "arbiter_unresolved": arb["unresolved"],
-                    "arbiter_closed": arb["closed"],
-                    "arbiter_fixed": arb["fixed"],
-                },
-            )
+            # HR only on tentative/unsure arbiter verdicts. Mechanical
+            # failures leave the task in ARBITRATING for re-pickup — no
+            # point re-running the annotator since the annotation is fine,
+            # we just need the arbiter to produce a coherent verdict.
+            if arb["unresolved"] > 0:
+                self._transition(
+                    task,
+                    TaskStatus.HUMAN_REVIEW,
+                    reason="arbiter unresolved verdicts; needs human judgment",
+                    stage="arbitration",
+                    attempt_id=attempt_id,
+                    metadata={
+                        "rearbitrate": True,
+                        "arbiter_ran": arb["ran"],
+                        "arbiter_unresolved": arb["unresolved"],
+                        "arbiter_closed": arb["closed"],
+                        "arbiter_fixed": arb["fixed"],
+                        "arbiter_mechanical_fail": arb["mechanical_fail"],
+                    },
+                )
+            else:
+                self._handle_arbiter_mechanical_fail(
+                    task, attempt_id, arb, stage="arbitration",
+                    hr_extra_metadata={"rearbitrate": True},
+                )
         self.store.save_task(task)
 
     async def _arbitrate_and_apply(
@@ -988,7 +1046,7 @@ class SubagentRuntime:
         QC's complaint directly against the latest annotation artifact and may
         still produce a corrected annotation.
         """
-        empty = {"ran": False, "closed": 0, "fixed": 0, "unresolved": 0, "corrected_annotation": None}
+        empty = {"ran": False, "closed": 0, "fixed": 0, "unresolved": 0, "mechanical_fail": 0, "corrected_annotation": None}
         discussions = self.store.list_feedback_discussions(task.task_id)
         replies_by_feedback = {
             d.feedback_id: d for d in discussions
@@ -1228,6 +1286,7 @@ class SubagentRuntime:
             "closed": 0,
             "fixed": 0,
             "unresolved": 0,
+            "mechanical_fail": 0,
             "corrected_annotation": None,
         }
         corrected = payload.get("corrected_annotation") if isinstance(payload, dict) else None
@@ -1305,8 +1364,13 @@ class SubagentRuntime:
                         )
                     )
                 else:
-                    # No fix provided — punt to HR.
-                    outcome["unresolved"] += 1
+                    # Arbiter ruled qc/neither at high confidence but didn't
+                    # emit corrected_annotation. This is a mechanical failure
+                    # (LLM forgot the JSON, internal retry exhausted) — not
+                    # genuine uncertainty. Caller routes to PENDING retry,
+                    # not HR. unresolved is reserved for tentative/unsure
+                    # verdicts only.
+                    outcome["mechanical_fail"] += 1
                     self.store.append_feedback_discussion(
                         FeedbackDiscussionEntry.new(
                             task_id=task.task_id,
@@ -1323,8 +1387,9 @@ class SubagentRuntime:
                         )
                     )
             else:
-                # Unknown verdict value at high confidence — treat as uncertain.
-                outcome["unresolved"] += 1
+                # Unknown verdict value at high confidence — also mechanical
+                # (model emitted garbage in the verdict field). Retry.
+                outcome["mechanical_fail"] += 1
         return outcome
 
     def _record_confidence_sample(self, role: str, value: float) -> None:

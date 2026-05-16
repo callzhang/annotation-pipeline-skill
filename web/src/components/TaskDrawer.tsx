@@ -339,7 +339,7 @@ function HumanReviewReasonBanner({ events }: { events: Array<Record<string, unkn
   const maxRounds = typeof meta.max_qc_rounds === "number" ? meta.max_qc_rounds : null;
   const autoEscalated = meta.auto_escalated === true;
 
-  let detail: string;
+  let detail: string | null = null;
   let tone: "warning" | "critical" = "warning";
   if (autoEscalated && !arbiterRan) {
     tone = "critical";
@@ -351,15 +351,13 @@ function HumanReviewReasonBanner({ events }: { events: Array<Record<string, unkn
     detail = `Arbiter ran but ${arbiterUnresolved} disputes remained unresolved after the retry loop exhausted.`;
   } else if (autoEscalated) {
     detail = "Auto-escalated after the retry loop exhausted.";
-  } else {
-    detail = "Routed to human review.";
   }
 
   return (
     <div className={`hr-reason-banner ${tone}`}>
       <strong>Why this is in Human Review</strong>
       <p className="hr-reason-quote">{reason}</p>
-      <p className="hr-reason-detail">{detail}</p>
+      {detail ? <p className="hr-reason-detail">{detail}</p> : null}
       {roundCount !== null && maxRounds !== null ? (
         <p className="hr-reason-meta">
           Rounds: {roundCount} / {maxRounds} · Arbiter ran: {arbiterRan ? "yes" : "no"}

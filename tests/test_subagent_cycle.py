@@ -353,7 +353,10 @@ def test_annotator_output_without_schema_is_passed_through(tmp_path):
 
 
 def test_qc_rejection_escalates_to_human_review_after_n_rounds(tmp_path):
-    """After 3 QC rejections, task transitions to HUMAN_REVIEW instead of PENDING."""
+    """After max_qc_rounds, arbiter is invoked. When arbiter returns a
+    tentative/unsure verdict (genuine uncertainty), the task transitions to
+    HUMAN_REVIEW. Mechanical arbiter failures route back to PENDING; only
+    genuine uncertainty (unresolved>0) escalates."""
     from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
     from annotation_pipeline_skill.store.sqlite_store import SqliteStore
     from annotation_pipeline_skill.core.models import Task
@@ -377,12 +380,28 @@ def test_qc_rejection_escalates_to_human_review_after_n_rounds(tmp_path):
     task.status = TaskStatus.PENDING
     store.save_task(task)
 
-    # Stub: every annotation passes schema; every QC rejects.
+    # Stub: annotations pass schema; QC rejects every round; arbiter (when
+    # invoked at max_qc_rounds) returns a "tentative" verdict so HR triggers.
+    def _build_arbiter_response():
+        feedbacks = store.list_feedback("t-loop")
+        if not feedbacks:
+            return '{"verdicts": [], "corrected_annotation": null}'
+        return json.dumps({
+            "verdicts": [
+                {"feedback_id": feedbacks[-1].feedback_id,
+                 "verdict": "neither", "confidence": "tentative",
+                 "reasoning": "judgment call"},
+            ],
+            "corrected_annotation": None,
+        })
+
     class _StubClient:
         async def generate(self, request):
             instructions = request.instructions
-            if "qc subagent" in instructions.lower():
-                final = '{"passed": false, "message": "still bad", "failures": [{"category": "x", "message": "still bad"}]}'
+            if "senior arbiter" in instructions.lower():
+                final = _build_arbiter_response()
+            elif "qc subagent" in instructions.lower():
+                final = '{"passed": false, "message": "still bad", "failures": [{"category": "x", "message": "still bad", "confidence": "certain"}]}'
             else:
                 final = '{"entities": []}'
             return LLMGenerateResult(
@@ -448,7 +467,9 @@ def test_subagent_runtime_defaults_max_qc_rounds_to_3(tmp_path):
 
 
 def test_validation_failures_count_toward_escalation_threshold(tmp_path):
-    """3 schema_invalid failures (no QC failures) should still escalate to HUMAN_REVIEW."""
+    """Validation failures (schema invalid) count toward max_qc_rounds. After
+    that threshold, arbiter runs; if it returns a tentative verdict, the task
+    goes to HUMAN_REVIEW."""
     from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
     from annotation_pipeline_skill.store.sqlite_store import SqliteStore
     from annotation_pipeline_skill.core.models import Task
@@ -472,17 +493,35 @@ def test_validation_failures_count_toward_escalation_threshold(tmp_path):
     task.status = TaskStatus.PENDING
     store.save_task(task)
 
-    # Annotator always produces JSON that fails schema (missing "entities").
+    # Annotator always produces JSON that fails schema. Arbiter responds with
+    # a tentative verdict so the post-threshold path lands in HR.
+    def _build_arbiter_response():
+        feedbacks = store.list_feedback("t-stuck")
+        if not feedbacks:
+            return '{"verdicts": [], "corrected_annotation": null}'
+        return json.dumps({
+            "verdicts": [
+                {"feedback_id": feedbacks[-1].feedback_id,
+                 "verdict": "neither", "confidence": "tentative",
+                 "reasoning": "schema ambiguous"},
+            ],
+            "corrected_annotation": None,
+        })
+
     class _StubClient:
         async def generate(self, request):
+            if "senior arbiter" in request.instructions.lower():
+                final = _build_arbiter_response()
+            else:
+                final = '{"wrong_field": []}'
             return LLMGenerateResult(
-                final_text='{"wrong_field": []}',
+                final_text=final,
                 raw_response={}, usage={}, diagnostics={}, runtime="stub",
                 provider="stub", model="stub", continuity_handle=None,
             )
 
     runtime = SubagentRuntime(store=store, client_factory=lambda _t: _StubClient(), max_qc_rounds=3)
-    # 3 rounds, each ends in validation failure -> 3rd should escalate
+    # 3 rounds, each ends in validation failure -> 3rd triggers arbiter -> HR
     for _ in range(3):
         runtime.run_once()
 
@@ -491,7 +530,8 @@ def test_validation_failures_count_toward_escalation_threshold(tmp_path):
 
 
 def test_mixed_qc_and_validation_failures_escalate_together(tmp_path):
-    """1 QC failure + 2 validation failures = 3 rounds -> escalate."""
+    """QC + validation failures both count toward max_qc_rounds. After the
+    threshold, arbiter is invoked; tentative verdicts escalate to HR."""
     from annotation_pipeline_skill.runtime.subagent_cycle import SubagentRuntime
     from annotation_pipeline_skill.store.sqlite_store import SqliteStore
     from annotation_pipeline_skill.core.models import Task
@@ -517,13 +557,26 @@ def test_mixed_qc_and_validation_failures_escalate_together(tmp_path):
 
     state = {"annotation_round": 0}
 
+    def _build_arbiter_response():
+        feedbacks = store.list_feedback("t-mixed")
+        if not feedbacks:
+            return '{"verdicts": [], "corrected_annotation": null}'
+        return json.dumps({
+            "verdicts": [
+                {"feedback_id": feedbacks[-1].feedback_id,
+                 "verdict": "neither", "confidence": "tentative",
+                 "reasoning": "mixed signals"},
+            ],
+            "corrected_annotation": None,
+        })
+
     class _StubClient:
         async def generate(self, request):
             instructions = request.instructions.lower()
-            is_qc = "qc subagent" in instructions
-            if is_qc:
-                # QC rejects whenever it runs
-                final = '{"passed": false, "message": "bad", "failures": [{"category": "x", "message": "bad"}]}'
+            if "senior arbiter" in instructions:
+                final = _build_arbiter_response()
+            elif "qc subagent" in instructions:
+                final = '{"passed": false, "message": "bad", "failures": [{"category": "x", "message": "bad", "confidence": "certain"}]}'
             else:
                 state["annotation_round"] += 1
                 if state["annotation_round"] == 1:
@@ -548,9 +601,9 @@ def test_mixed_qc_and_validation_failures_escalate_together(tmp_path):
     assert task_after.status is TaskStatus.HUMAN_REVIEW
     # The metadata on the final transition event should record round_count
     events = store.list_events("t-mixed")
-    escalation = [e for e in events if "auto-escalated" in (e.reason or "")]
-    assert escalation, "expected an auto-escalation event"
-    assert escalation[-1].metadata.get("round_count", 0) >= 3
+    hr_events = [e for e in events if e.next_status is TaskStatus.HUMAN_REVIEW]
+    assert hr_events, "expected an HR transition event"
+    assert hr_events[-1].metadata.get("round_count", 0) >= 3
 
 
 def _seed_prelabeled_task(store, *, task_id, annotation_text, output_schema=None):
@@ -1739,7 +1792,9 @@ def test_apply_arbiter_correction_rejects_non_verbatim_spans(tmp_path):
     strings aren't substrings of input.text (e.g., paraphrased or normalized
     Chinese characters). Schema-valid corrections must STILL pass the
     verbatim check; otherwise the corrected_annotation is discarded and the
-    task routes to HUMAN_REVIEW instead of being silently ACCEPTED.
+    task routes to PENDING for a mechanical retry (was HUMAN_REVIEW; the
+    new policy reserves HR strictly for arbiter tentative/unsure verdicts —
+    verbatim failures are mechanical, not genuine uncertainty).
 
     Regression for: 5% audit on a 1882-task run found ~11% verbatim
     violations in accepted tasks where the arbiter wrote a corrected
@@ -1805,10 +1860,13 @@ def test_apply_arbiter_correction_rejects_non_verbatim_spans(tmp_path):
     import asyncio
     asyncio.run(runtime.run_task_async(task, stage_target="annotation"))
 
-    # Non-verbatim corrected_annotation must NOT be accepted; falls to HR.
+    # Non-verbatim corrected_annotation must NOT be accepted. Under the new
+    # HR-only-for-unresolved policy, mechanical failures leave the task in
+    # ARBITRATING for re-pickup (let the arbiter try again on the same
+    # annotation), not in PENDING.
     loaded = store.load_task("t-arb-verbatim")
-    assert loaded.status is TaskStatus.HUMAN_REVIEW, (
-        f"expected HR, got {loaded.status}; the verbatim guard in "
-        f"_apply_arbiter_correction should reject the 'beta' correction "
+    assert loaded.status is TaskStatus.ARBITRATING, (
+        f"expected ARBITRATING (re-pickup), got {loaded.status}; the verbatim "
+        f"guard in _apply_arbiter_correction should reject the 'beta' correction "
         f"because 'beta' is not in the input text 'alpha is mentioned here'"
     )
