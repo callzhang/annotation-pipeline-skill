@@ -119,6 +119,91 @@ def find_verbatim_violations(
     return violations
 
 
+def find_duplicate_spans(payload: Any) -> "list[dict[str, Any]]":
+    """Return any spans that appear more than once under the same
+    entities/json_structures type within a single row. Always a model
+    quality issue (the type set should be deduped); safe to auto-fix
+    at write time, but worth surfacing as a WARNING so the annotator
+    sees it in the next round's feedback bundle.
+    """
+    if not isinstance(payload, dict):
+        return []
+    rows_out = payload.get("rows")
+    if not isinstance(rows_out, list):
+        return []
+    dups: list[dict[str, Any]] = []
+    for r in rows_out:
+        if not isinstance(r, dict):
+            continue
+        row_index = r.get("row_index") if isinstance(r.get("row_index"), int) else 0
+        output = r.get("output")
+        if not isinstance(output, dict):
+            continue
+        for typ_dict_key in ("entities", "json_structures"):
+            type_dict = output.get(typ_dict_key)
+            if not isinstance(type_dict, dict):
+                continue
+            for type_name, items in type_dict.items():
+                if not isinstance(items, list):
+                    continue
+                seen: set[str] = set()
+                for span in items:
+                    if not isinstance(span, str):
+                        continue
+                    if span in seen:
+                        dups.append({
+                            "row_index": row_index,
+                            "field": f"{typ_dict_key}.{type_name}",
+                            "span": span,
+                        })
+                    else:
+                        seen.add(span)
+    return dups
+
+
+def find_cross_type_collisions(payload: Any) -> "list[dict[str, Any]]":
+    """Return entity spans tagged under two or more entity types in the
+    same row. The schema permits this (different types are separate keys),
+    but in practice a span should resolve to one entity type per
+    occurrence; collisions usually mean the annotator hedged. Treated as
+    BLOCKING at validation time so the annotator picks one. Only checks
+    ``entities`` (json_structures is allowed to overlap by design — a
+    phrase can be both a "goal" and a "constraint").
+    """
+    if not isinstance(payload, dict):
+        return []
+    rows_out = payload.get("rows")
+    if not isinstance(rows_out, list):
+        return []
+    collisions: list[dict[str, Any]] = []
+    for r in rows_out:
+        if not isinstance(r, dict):
+            continue
+        row_index = r.get("row_index") if isinstance(r.get("row_index"), int) else 0
+        output = r.get("output")
+        if not isinstance(output, dict):
+            continue
+        entities = output.get("entities")
+        if not isinstance(entities, dict):
+            continue
+        seen_at: dict[str, str] = {}
+        for type_name, items in entities.items():
+            if not isinstance(items, list):
+                continue
+            for span in items:
+                if not isinstance(span, str):
+                    continue
+                if span in seen_at and seen_at[span] != type_name:
+                    collisions.append({
+                        "row_index": row_index,
+                        "span": span,
+                        "types": [seen_at[span], type_name],
+                    })
+                else:
+                    seen_at[span] = type_name
+    return collisions
+
+
 def validate_payload_against_task_schema(
     task: Task,
     payload: Any,

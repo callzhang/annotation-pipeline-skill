@@ -387,6 +387,11 @@ class SubagentRuntime:
             self.store.save_task(task)
             return
 
+        # Non-blocking quality warnings — record before QC so the next
+        # round's feedback bundle includes them, but don't bounce the task.
+        # Currently: duplicate same-type spans (auto-deduped at serialize,
+        # but worth flagging so the annotator learns).
+        self._record_duplicate_warning_feedback(task, annotation_attempt_id, annotation_final_text)
         self._transition(
             task,
             TaskStatus.QC,
@@ -396,6 +401,39 @@ class SubagentRuntime:
         )
         await self._run_qc_stage(task, annotation_artifact)
         self.store.save_task(task)
+
+    def _record_duplicate_warning_feedback(
+        self, task: Task, attempt_id: str, annotation_text: str
+    ) -> None:
+        from annotation_pipeline_skill.core.schema_validation import find_duplicate_spans
+        try:
+            payload = _parse_llm_json(annotation_text)
+        except (json.JSONDecodeError, ValueError):
+            return
+        dups = find_duplicate_spans(payload)
+        if not dups:
+            return
+        sample = dups[0]
+        # One feedback per attempt; aggregate count + first example in the message
+        # so annotator sees the pattern without N feedbacks per task.
+        self.store.append_feedback(
+            FeedbackRecord.new(
+                task_id=task.task_id,
+                attempt_id=attempt_id,
+                source_stage=FeedbackSource.VALIDATION,
+                severity=FeedbackSeverity.WARNING,
+                category="duplicate_span",
+                message=(
+                    f"Found {len(dups)} duplicate span(s) within entity/json_structures types. "
+                    f"First: row {sample['row_index']} {sample['field']} repeats {sample['span']!r}. "
+                    f"Each (type, span) pair should appear at most once per row. "
+                    f"Auto-deduped at write time; eliminate the duplicate in the next emission."
+                ),
+                target={"duplicates": dups[:5]},
+                suggested_action="annotator_dedupe",
+                created_by="validation",
+            )
+        )
 
     async def _run_qc_only(self, task: Task) -> None:
         annotation_artifact = self._latest_annotation_artifact(task.task_id)
@@ -762,6 +800,25 @@ class SubagentRuntime:
         verbatim_failure = self._check_verbatim_spans(task, payload)
         if verbatim_failure is not None:
             return verbatim_failure
+        # Cross-type entity collision: same span tagged under two entity
+        # types in the same row. Blocking — annotator must pick one.
+        # json_structures collisions are NOT blocked (phrases can legitimately
+        # play multiple roles).
+        from annotation_pipeline_skill.core.schema_validation import find_cross_type_collisions
+        collisions = find_cross_type_collisions(payload)
+        if collisions:
+            first = collisions[0]
+            return {
+                "category": "cross_type_collision",
+                "message": (
+                    f"Row {first['row_index']} entity span {first['span']!r} is tagged as "
+                    f"both {first['types'][0]!r} and {first['types'][1]!r}. Pick one type "
+                    f"per span — the schema allows separate keys but a single occurrence "
+                    f"should resolve to a single entity type."
+                ),
+                "reason": "cross-type entity collision",
+                "target": {"row_index": first["row_index"], "span": first["span"], "types": first["types"]},
+            }
         return None
 
     def _check_verbatim_spans(self, task: Task, payload: Any) -> dict | None:
@@ -968,6 +1025,15 @@ class SubagentRuntime:
         verbatim_failure = self._check_verbatim_spans(task, corrected)
         if verbatim_failure is not None:
             return None
+        # Cross-type collision — same span tagged as two entity types. Block
+        # the correction; arbiter's internal retry loop already ran, so the
+        # outer caller will hit mechanical_fail and either retry or escalate.
+        from annotation_pipeline_skill.core.schema_validation import find_cross_type_collisions
+        if find_cross_type_collisions(corrected):
+            return None
+        # Dedupe within-type spans before persisting (matches the annotator
+        # write path — see _serialize_llm_json).
+        _dedupe_within_type_spans(corrected)
 
         cleaned_text = json.dumps(corrected, sort_keys=True, indent=2)
         relative_path = f"artifact_payloads/{task.task_id}/{attempt_id}_arbiter_correction.json"

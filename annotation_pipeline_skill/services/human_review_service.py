@@ -8,6 +8,7 @@ from uuid import uuid4
 from annotation_pipeline_skill.core.models import ArtifactRef, FeedbackRecord, Task
 from annotation_pipeline_skill.core.schema_validation import (
     SchemaValidationError,
+    find_cross_type_collisions,
     find_verbatim_violations,
     validate_payload_against_task_schema,
 )
@@ -151,6 +152,19 @@ class HumanReviewService:
                     {"kind": "non_verbatim_span", "path": f"rows[{v['row_index']}].output.{v['field']}",
                      "message": f"span {v['span']!r} is not a verbatim substring of the row's input.text"}
                     for v in violations
+                ],
+            )
+        # Cross-type collision — same span tagged as two entity types in one row.
+        # Block, same as annotator/arbiter paths.
+        collisions = find_cross_type_collisions(answer)
+        if collisions:
+            raise SchemaValidationError(
+                f"corrected answer has {len(collisions)} cross-type entity collision(s)",
+                [
+                    {"kind": "cross_type_collision",
+                     "path": f"rows[{c['row_index']}].output.entities",
+                     "message": f"span {c['span']!r} tagged as both {c['types'][0]!r} and {c['types'][1]!r}; pick one"}
+                    for c in collisions
                 ],
             )
 
