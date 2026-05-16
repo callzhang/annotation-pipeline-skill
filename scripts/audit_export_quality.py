@@ -37,61 +37,91 @@ def _scan_row(
     input_text: str,
     task_id: str,
     issues: dict[str, list],
-) -> tuple[int, dict]:
-    """Return (number_of_duplicates_removed, cleaned_row)."""
+    *,
+    fix_non_verbatim: bool = False,
+    fix_cross_type: bool = False,
+) -> tuple[dict[str, int], dict]:
+    """Return (counts, cleaned_row). counts has keys: dup, non_verbatim, cross_type."""
     cleaned_row = json.loads(json.dumps(row))  # deep copy
     output = cleaned_row.get("output", {})
+    counts = {"dup": 0, "non_verbatim_dropped": 0, "cross_type_dropped": 0}
     if not isinstance(output, dict):
-        return 0, cleaned_row
-    duplicates_removed = 0
+        return counts, cleaned_row
     row_idx = cleaned_row.get("row_index")
     for field_key in ("entities", "json_structures"):
         field = output.get(field_key, {})
         if not isinstance(field, dict):
             continue
-        # cross-type tracking only for entities
-        seen_in_type: dict[str, str] = {}
+        # First pass: dedupe within type + flag verbatim violations.
         for typ, items in list(field.items()):
             if not isinstance(items, list):
                 continue
             seen: set[str] = set()
-            deduped: list[Any] = []
+            kept: list[Any] = []
             for s in items:
                 if not isinstance(s, str):
-                    deduped.append(s)
+                    kept.append(s)
                     continue
                 if s in seen:
-                    duplicates_removed += 1
+                    counts["dup"] += 1
                     issues["dup"].append({
                         "task_id": task_id, "row_index": row_idx,
                         "field": f"{field_key}.{typ}", "span": s,
                     })
                     continue
                 seen.add(s)
-                deduped.append(s)
                 if input_text and s and s not in input_text:
                     issues["non_verbatim"].append({
                         "task_id": task_id, "row_index": row_idx,
                         "field": f"{field_key}.{typ}", "span": s,
                     })
-                if field_key == "entities":
+                    if fix_non_verbatim:
+                        counts["non_verbatim_dropped"] += 1
+                        continue
+                kept.append(s)
+            field[typ] = kept
+        # Second pass: cross-type collisions in entities only.
+        if field_key == "entities":
+            seen_in_type: dict[str, str] = {}
+            for typ in list(field.keys()):
+                items = field[typ]
+                if not isinstance(items, list):
+                    continue
+                kept_after_xtype: list[Any] = []
+                for s in items:
+                    if not isinstance(s, str):
+                        kept_after_xtype.append(s)
+                        continue
                     if s in seen_in_type and seen_in_type[s] != typ:
                         issues["cross_type"].append({
                             "task_id": task_id, "row_index": row_idx,
                             "span": s, "types": [seen_in_type[s], typ],
                         })
+                        if fix_cross_type:
+                            # Keep first occurrence's type (seen_in_type[s]);
+                            # drop from this later type.
+                            counts["cross_type_dropped"] += 1
+                            continue
                     else:
                         seen_in_type[s] = typ
-            field[typ] = deduped
-    return duplicates_removed, cleaned_row
+                    kept_after_xtype.append(s)
+                field[typ] = kept_after_xtype
+    return counts, cleaned_row
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("export_dir", type=Path, help="Path to export-* directory containing training_data.jsonl")
     parser.add_argument("--fix-duplicates", action="store_true", help="Rewrite jsonl in place with duplicates removed")
+    parser.add_argument("--fix-non-verbatim", action="store_true", help="Also drop spans that aren't a verbatim substring of input.text")
+    parser.add_argument("--fix-cross-type", action="store_true", help="Also resolve cross-type collisions by keeping the first type's occurrence")
+    parser.add_argument("--fix-all", action="store_true", help="Shortcut for --fix-duplicates --fix-non-verbatim --fix-cross-type")
     parser.add_argument("--out", type=Path, default=None, help="Write detailed issue list to this JSON file (default: stdout summary only)")
     args = parser.parse_args(argv)
+    if args.fix_all:
+        args.fix_duplicates = True
+        args.fix_non_verbatim = True
+        args.fix_cross_type = True
 
     jsonl_path = args.export_dir / "training_data.jsonl"
     if not jsonl_path.exists():
@@ -102,7 +132,7 @@ def main(argv: list[str]) -> int:
     total_tasks = 0
     total_rows = 0
     total_spans = 0
-    total_dup_removed = 0
+    totals = {"dup": 0, "non_verbatim_dropped": 0, "cross_type_dropped": 0}
     rewritten_lines: list[str] = []
 
     with jsonl_path.open() as f:
@@ -129,8 +159,13 @@ def main(argv: list[str]) -> int:
                 total_rows += 1
                 if isinstance(row, dict):
                     input_text = src_rows.get(row.get("row_index"), "")
-                    removed, cleaned_row = _scan_row(row, input_text, rec["task_id"], issues)
-                    total_dup_removed += removed
+                    counts, cleaned_row = _scan_row(
+                        row, input_text, rec["task_id"], issues,
+                        fix_non_verbatim=args.fix_non_verbatim,
+                        fix_cross_type=args.fix_cross_type,
+                    )
+                    for k, v in counts.items():
+                        totals[k] += v
                     new_rows.append(cleaned_row)
                     # count spans
                     for fk in ("entities", "json_structures"):
@@ -167,9 +202,17 @@ def main(argv: list[str]) -> int:
         args.out.write_text(json.dumps(issues, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nwrote detailed issue list to {args.out}", file=sys.stderr)
 
-    if args.fix_duplicates and total_dup_removed > 0:
-        jsonl_path.write_text("\n".join(rewritten_lines) + "\n", encoding="utf-8")
-        print(f"\nrewrote {jsonl_path} with {total_dup_removed} duplicate span(s) removed", file=sys.stderr)
+    any_fix = args.fix_duplicates or args.fix_non_verbatim or args.fix_cross_type
+    if any_fix:
+        total_changes = totals["dup"] + totals["non_verbatim_dropped"] + totals["cross_type_dropped"]
+        if total_changes > 0:
+            jsonl_path.write_text("\n".join(rewritten_lines) + "\n", encoding="utf-8")
+            print(
+                f"\nrewrote {jsonl_path}: "
+                f"dup={totals['dup']}, non_verbatim_dropped={totals['non_verbatim_dropped']}, "
+                f"cross_type_dropped={totals['cross_type_dropped']}",
+                file=sys.stderr,
+            )
     return 0
 
 
