@@ -151,6 +151,64 @@ class LocalRuntimeScheduler:
             import sys
             print(f"[scheduler] delayed-sweep reset {recovered} unclaimed orphans → pending", file=sys.stderr)
 
+    def _reap_stale_leases(self) -> None:
+        """Reclaim leases whose expires_at has passed. Called periodically by
+        the observer coroutine.
+
+        When a worker hangs (subprocess deadlocked, asyncio.wait_for failed
+        to propagate cancellation), its lease stays held forever and the
+        task is invisible to other workers' claim cycles. The reaper
+        deletes the stale lease + active_run and resets ANNOTATING tasks
+        back to PENDING so another worker can pick them up.
+
+        Idempotent with the worker's own finally-block cleanup: if the
+        hung worker eventually returns and tries to delete the lease/run,
+        the delete is a no-op (already gone).
+        """
+        from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
+
+        now = datetime.now(timezone.utc)
+        reaped = 0
+        reset = 0
+        stale_lease_task_ids: set[str] = set()
+        for lease in self.store.list_runtime_leases():
+            if lease.expires_at and lease.expires_at < now:
+                self.store.delete_runtime_lease(lease.lease_id)
+                stale_lease_task_ids.add(lease.task_id)
+                reaped += 1
+        for run in self.store.list_active_runs():
+            if run.task_id in stale_lease_task_ids:
+                self.store.delete_active_run(run.run_id)
+        for task_id in stale_lease_task_ids:
+            try:
+                task = self.store.load_task(task_id)
+            except (FileNotFoundError, KeyError):
+                continue
+            if task.status is not TaskStatus.ANNOTATING:
+                # QC / ARBITRATING tasks are picked up by smart resume on the
+                # next claim cycle without needing a status reset.
+                continue
+            try:
+                event = transition_task(
+                    task, TaskStatus.PENDING,
+                    actor="scheduler",
+                    reason="stale-lease reaper: lease expired with task in annotating; resetting to pending",
+                    stage="recovery",
+                    metadata={"recovery": "stale_lease_reap", "previous_status": "annotating"},
+                )
+            except InvalidTransition:
+                continue
+            self.store.save_task(task)
+            self.store.append_event(event)
+            reset += 1
+        if reaped:
+            import sys
+            print(
+                f"[scheduler] stale-lease reaper: dropped {reaped} expired lease(s), "
+                f"reset {reset} ANNOTATING task(s) to pending",
+                file=sys.stderr,
+            )
+
     async def run_forever(
         self,
         *,
@@ -278,6 +336,11 @@ class LocalRuntimeScheduler:
                     await asyncio.wait_for(stop.wait(), timeout=self.config.snapshot_interval_seconds)
                 except asyncio.TimeoutError:
                     pass
+                # Periodic recovery: reclaim leases held by hung workers, then
+                # sweep any orphaned tasks that ended up lease-less without
+                # a worker picking them up.
+                self._reap_stale_leases()
+                self._delayed_sweep_unclaimed_orphans()
                 self._write_snapshot()
 
         worker_tasks = [

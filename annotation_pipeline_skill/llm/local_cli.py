@@ -270,10 +270,24 @@ class LocalCLIClient:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=self.profile.timeout_seconds,
-                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=self.profile.timeout_seconds,
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # Awaiter is gone but the child subprocess is still
+                    # running. Without an explicit kill the codex/claude CLI
+                    # keeps occupying a slot under the global concurrency
+                    # cap AND ties up file descriptors; the worker comes back
+                    # to claim a new task with the previous subprocess still
+                    # alive in the background. Kill + reap before re-raising.
+                    process.kill()
+                    try:
+                        await process.wait()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise
             lines = stdout.decode("utf-8", errors="replace").splitlines()
             result = parse_codex_json_events(lines, provider=self.profile.name, model=self.profile.model)
             diagnostics = dict(result.diagnostics or {})
@@ -315,10 +329,18 @@ class LocalCLIClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(prompt.encode("utf-8")),
-            timeout=self.profile.timeout_seconds,
-        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(prompt.encode("utf-8")),
+                timeout=self.profile.timeout_seconds,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            try:
+                await process.wait()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         lines = stdout.decode("utf-8", errors="replace").splitlines()
         result = parse_claude_stream_events(lines, provider=self.profile.name, model=self.profile.model)
         diagnostics = dict(result.diagnostics or {})
