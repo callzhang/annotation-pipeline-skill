@@ -722,12 +722,16 @@ audit events/min）。在 finally 显式 reset 把这个环切断：下次 claim
 
 这样 runtime 重启后能从中断处继续，而不是从头跑。
 
-### 10.5 Zombie recovery on init
+### 10.5 启动时不动 in-flight task 状态
 
-scheduler 启动时 `_recover_arbitrating_zombies` 跑一次：把所有 ARBITRATING
-但无 lease 的 task 路由到 HUMAN_REVIEW。理由：ARBITRATING 表示 arbiter 已经
-在前次运行中介入，自动重试不一定有意义（trade-off：会丢失 mechanical retry
-counter 上下文，operator 可手动拖回 Arbitration）。
+scheduler 启动时只清 stale lease（`_clear_stale_records`），**不**改 task
+status。ANNOTATING / QC / ARBITRATING 都保留原状，下次 claim 通过 smart
+resume / rearbitration 路径恢复执行。
+
+之前版本有 `_recover_arbitrating_zombies` 把启动时所有 ARBITRATING 路由到
+HR —— 这跟当前 arbiter 规则冲突（ARBITRATING 是合法的 mechanical retry 状
+态），已移除。per-task 的 `arbiter_mechanical_retries` counter 仍然控制重
+试上限，重启不影响。
 
 ### 10.6 Local CLI 调用约束
 
@@ -968,11 +972,12 @@ worker-bail reset）。
 
 - arbiter `unresolved > 0`（真不确定）
 - arbiter mechanical retry cap（3 次都失败）
-- scheduler init 的 zombie recovery
 - operator 主动 reject
 
 annotator / QC / validation 层的错误**不**直接进 HR，全部走 retry 循环 →
 （达到 max_qc_rounds）→ ARBITRATING → arbiter 决定。
+Scheduler 重启**不**把任何 task 路由到 HR —— in-flight task 由 smart resume
+接管。
 
 
 ## 13. 配置架构

@@ -38,17 +38,18 @@ class LocalRuntimeScheduler:
         self.client_factory = client_factory
         self.config = config
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
-        # Pre-flight cleanup at init:
-        # 1. Clear stale leases/active_runs from a previous (dead) scheduler.
-        # 2. ARBITRATING zombies → HUMAN_REVIEW (arbiter already had a turn;
-        #    re-running automatically isn't useful).
-        # ANNOTATING / QC orphans are NOT reset here — _try_claim_task now
-        # picks them up directly and either resumes from QC (if an
-        # annotation_result exists) or transitions to PENDING (to re-run
-        # annotation). A delayed sweep in the observer coroutine catches
-        # anything that no worker has claimed after a settle window.
+        # Pre-flight cleanup at init: clear stale leases/active_runs from
+        # a previous (dead) scheduler. In-flight tasks (ANNOTATING / QC /
+        # ARBITRATING) are NOT touched here — _try_claim_task picks them up
+        # via smart-resume and either resumes from the right stage or
+        # transitions back to PENDING. ARBITRATING in particular is a
+        # legitimate mechanical-retry state under the current arbiter
+        # rules (subagent_cycle._handle_arbiter_mechanical_fail) and the
+        # per-task arbiter_mechanical_retries counter in task metadata
+        # caps the retries; auto-routing to HR on restart would discard
+        # that budget and contradict the "HR = arbiter uncertain only"
+        # invariant.
         self._clear_stale_records()
-        self._recover_arbitrating_zombies()
 
     def _clear_stale_records(self) -> None:
         """Drop leases / active_runs whose heartbeat is older than the stale window.
@@ -75,43 +76,6 @@ class LocalRuntimeScheduler:
                 f"{cleared_runs} stale active_runs",
                 file=sys.stderr,
             )
-
-    def _recover_arbitrating_zombies(self) -> None:
-        """Send orphaned ARBITRATING tasks to HUMAN_REVIEW.
-
-        Called at scheduler init. ARBITRATING means the arbiter already had
-        a turn — auto-re-arbitrating without operator intent isn't useful, so
-        we route to HR instead. The operator can drag back to Arbitration
-        manually (re-arbitrate flow) when they want another pass.
-
-        ANNOTATING / QC orphans are handled by ``_try_claim_task`` (resume
-        path) and the delayed-sweep observer (in ``run_forever``) — those
-        keep partial work instead of pre-emptively resetting.
-        """
-        from annotation_pipeline_skill.core.transitions import InvalidTransition, transition_task
-
-        leased_task_ids = {lease.task_id for lease in self.store.list_runtime_leases()}
-        active_run_task_ids = {run.task_id for run in self.store.list_active_runs()}
-        recovered = 0
-        for task in self.store.list_tasks_by_status({TaskStatus.ARBITRATING}):
-            if task.task_id in leased_task_ids or task.task_id in active_run_task_ids:
-                continue
-            try:
-                event = transition_task(
-                    task, TaskStatus.HUMAN_REVIEW,
-                    actor="scheduler",
-                    reason="zombie recovery: stuck in arbitrating without lease; routing to human review",
-                    stage="recovery",
-                    metadata={"recovery": "zombie", "previous_status": "arbitrating"},
-                )
-            except InvalidTransition:
-                continue
-            self.store.save_task(task)
-            self.store.append_event(event)
-            recovered += 1
-        if recovered:
-            import sys
-            print(f"[scheduler] recovered {recovered} ARBITRATING zombies → HR", file=sys.stderr)
 
     def _delayed_sweep_unclaimed_orphans(self) -> None:
         """Catch ANNOTATING / QC tasks that no worker claimed during the

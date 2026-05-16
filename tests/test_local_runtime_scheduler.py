@@ -265,12 +265,15 @@ def test_workers_drain_many_tasks_with_small_pool(tmp_path):
     assert snapshot.queue_counts.pending == 0
 
 
-def test_scheduler_arbitrating_zombies_to_hr_on_init(tmp_path):
-    """ARBITRATING tasks without an active lease are routed to HUMAN_REVIEW
-    at scheduler init — the arbiter already had a turn, auto-re-running
-    without operator intent isn't useful. ANNOTATING / QC orphans are NOT
-    touched here (see resume tests below); they're handled by
-    _try_claim_task's resume path or the delayed sweep."""
+def test_scheduler_preserves_in_flight_tasks_on_init(tmp_path):
+    """Scheduler init does NOT touch in-flight task status. ANNOTATING / QC /
+    ARBITRATING are all preserved so the smart-resume claim path (and, for
+    ARBITRATING, the rearbitration runner) can pick up where the previous
+    session left off. Auto-routing ARBITRATING zombies to HR on restart was
+    incorrect under the current arbiter rules — ARBITRATING is now a
+    legitimate mechanical-retry state, and the per-task
+    arbiter_mechanical_retries counter caps the loop without needing
+    init-time intervention."""
     from datetime import datetime, timezone
     from annotation_pipeline_skill.core.models import Task as _Task
     from annotation_pipeline_skill.core.states import TaskStatus as _TS
@@ -291,9 +294,9 @@ def test_scheduler_arbitrating_zombies_to_hr_on_init(tmp_path):
         now_fn=lambda: now,
     )
 
-    assert store.load_task("zombie-arb").status is _TS.HUMAN_REVIEW
-    # ANNOTATING is preserved at init; resume / delayed-sweep handles it.
+    # Both stay in their in-flight status; the claim loop will pick them up.
     assert store.load_task("zombie-annot").status is _TS.ANNOTATING
+    assert store.load_task("zombie-arb").status is _TS.ARBITRATING
 
 
 def test_try_claim_resumes_annotating_to_qc_when_annotation_artifact_exists(tmp_path):
