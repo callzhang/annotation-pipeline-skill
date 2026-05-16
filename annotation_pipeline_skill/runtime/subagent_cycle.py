@@ -1820,15 +1820,33 @@ def _strip_markdown_json_fence(text: str) -> str:
     # emit a leading <think>...</think> reasoning block before the JSON payload.
     # Strip those blocks first, then handle the markdown fence.
     stripped = _THINK_BLOCK_RE.sub("", text).strip()
-    if not stripped.startswith("```"):
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+            opening = lines[0].strip().lower()
+            if opening in {"```", "```json"}:
+                return "\n".join(lines[1:-1]).strip()
+    # Some models (e.g., codex CLI used as fallback annotator) prefix the JSON
+    # with prose narration like "I'm rebuilding the annotations...". Try a
+    # direct parse first; if that fails, scan for the first `{`/`[` that
+    # raw_decodes successfully and return only the JSON substring. Falls
+    # through to original text so the caller's parse surfaces a useful error
+    # when no JSON is recoverable.
+    try:
+        json.loads(stripped)
         return stripped
-    lines = stripped.splitlines()
-    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
-        return stripped
-    opening = lines[0].strip().lower()
-    if opening not in {"```", "```json"}:
-        return stripped
-    return "\n".join(lines[1:-1]).strip()
+    except (json.JSONDecodeError, ValueError):
+        pass
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(stripped):
+        if ch not in "{[":
+            continue
+        try:
+            _, end = decoder.raw_decode(stripped[i:])
+        except (json.JSONDecodeError, ValueError):
+            continue
+        return stripped[i : i + end]
+    return stripped
 
 
 def _iter_verbatim_spans(output: dict) -> "list[tuple[str, str]]":
