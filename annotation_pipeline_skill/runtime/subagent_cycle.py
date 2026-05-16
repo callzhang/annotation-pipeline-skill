@@ -1834,11 +1834,55 @@ def _serialize_llm_json(text: str) -> str:
     """Parse LLM output and re-serialize as canonical JSON. Returns the
     original text if no JSON can be recovered (caller surfaces the error
     downstream).
+
+    Also dedupes within-type spans (annotators / arbiter sometimes emit
+    the same string twice under one entity type). Cross-type collisions
+    and non-verbatim spans are NOT touched — those are quality issues
+    that should be surfaced, not silently changed.
     """
     try:
-        return json.dumps(_parse_llm_json(text), ensure_ascii=False)
+        parsed = _parse_llm_json(text)
     except (ValueError, TypeError):
         return text
+    _dedupe_within_type_spans(parsed)
+    try:
+        return json.dumps(parsed, ensure_ascii=False)
+    except (ValueError, TypeError):
+        return text
+
+
+def _dedupe_within_type_spans(payload: Any) -> None:
+    """In-place dedupe of duplicate string spans within the same
+    entities/json_structures type. Preserves first occurrence order.
+    Safe no-op for non-conforming payloads.
+    """
+    if not isinstance(payload, dict):
+        return
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        output = row.get("output")
+        if not isinstance(output, dict):
+            continue
+        for field_key in ("entities", "json_structures"):
+            field = output.get(field_key)
+            if not isinstance(field, dict):
+                continue
+            for typ, items in field.items():
+                if not isinstance(items, list):
+                    continue
+                seen: set[str] = set()
+                deduped: list[Any] = []
+                for s in items:
+                    if isinstance(s, str):
+                        if s in seen:
+                            continue
+                        seen.add(s)
+                    deduped.append(s)
+                field[typ] = deduped
 
 
 def _iter_verbatim_spans(output: dict) -> "list[tuple[str, str]]":
