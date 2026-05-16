@@ -329,6 +329,59 @@ class SqliteStore:
             ),
         )
 
+    def list_events_paginated(
+        self,
+        *,
+        pipeline_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[AuditEvent], int]:
+        """Return (events, total_count) ordered by created_at DESC.
+
+        Optionally filtered to a single pipeline (joins audit_events ↔ tasks
+        on task_id). Used by /api/events for paginated display — the dashboard
+        was loading the full table every poll which got slow past ~30k rows.
+        """
+        if pipeline_id is None:
+            count_sql = "SELECT COUNT(*) FROM audit_events"
+            page_sql = (
+                "SELECT * FROM audit_events ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            )
+            count_args: tuple = ()
+            page_args: tuple = (limit, offset)
+        else:
+            count_sql = (
+                "SELECT COUNT(*) FROM audit_events e "
+                "JOIN tasks t ON e.task_id = t.task_id WHERE t.pipeline_id = ?"
+            )
+            page_sql = (
+                "SELECT e.* FROM audit_events e "
+                "JOIN tasks t ON e.task_id = t.task_id "
+                "WHERE t.pipeline_id = ? "
+                "ORDER BY e.created_at DESC LIMIT ? OFFSET ?"
+            )
+            count_args = (pipeline_id,)
+            page_args = (pipeline_id, limit, offset)
+
+        total = int(self._conn.execute(count_sql, count_args).fetchone()[0])
+        rows = self._conn.execute(page_sql, page_args).fetchall()
+        events = [
+            AuditEvent.from_dict({
+                "event_id": r["event_id"],
+                "task_id": r["task_id"],
+                "previous_status": r["previous_status"],
+                "next_status": r["next_status"],
+                "actor": r["actor"],
+                "reason": r["reason"],
+                "stage": r["stage"],
+                "attempt_id": r["attempt_id"],
+                "created_at": r["created_at"],
+                "metadata": json.loads(r["metadata_json"]),
+            })
+            for r in rows
+        ]
+        return events, total
+
     def list_events(self, task_id: str) -> list[AuditEvent]:
         rows = self._conn.execute(
             "SELECT * FROM audit_events WHERE task_id = ? ORDER BY seq",

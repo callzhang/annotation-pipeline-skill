@@ -133,6 +133,9 @@ export interface ConfigSnapshot {
 
 export interface EventLog {
   events: Array<Record<string, unknown>>;
+  total?: number;
+  limit?: number;
+  offset?: number;
 }
 
 export interface RuntimeStatus {

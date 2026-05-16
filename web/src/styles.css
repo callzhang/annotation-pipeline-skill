@@ -1693,6 +1693,50 @@ button {
   color: #e9f1f4;
 }
 
+.event-log-pager {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #d7e0e5;
+}
+
+.event-log-pager .page-arrow {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.event-log-pager .page-num {
+  background: #ffffff;
+  border: 1px solid #d7e0e5;
+  border-radius: 4px;
+  color: #52616b;
+  cursor: pointer;
+  font-size: 12px;
+  min-width: 28px;
+  padding: 4px 8px;
+}
+
+.event-log-pager .page-num:hover {
+  border-color: #2f6f73;
+  color: #2f6f73;
+}
+
+.event-log-pager .page-num.selected {
+  background: #2f6f73;
+  border-color: #2f6f73;
+  color: #ffffff;
+}
+
+.event-log-pager .page-gap {
+  color: #8fa3af;
+  font-size: 12px;
+  padding: 4px 4px;
+}
+
 .event-log {
   background: #ffffff;
   border: 1px solid #d7e0e5;

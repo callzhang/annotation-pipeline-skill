@@ -177,8 +177,15 @@ export async function saveConfigFile(id: string, content: string, storeKey: stri
   }
 }
 
-export async function fetchEventLog(projectId: string | null = null, storeKey: string | null = null): Promise<EventLog> {
-  const base = `/api/events${projectQuery(projectId)}`;
+export async function fetchEventLog(
+  projectId: string | null = null,
+  storeKey: string | null = null,
+  options: { limit?: number; offset?: number } = {},
+): Promise<EventLog> {
+  const limit = options.limit ?? 100;
+  const offset = options.offset ?? 0;
+  let base = `/api/events?limit=${limit}&offset=${offset}`;
+  if (projectId) base += `&project=${encodeURIComponent(projectId)}`;
   const response = await fetch(withStore(base, storeKey));
   if (!response.ok) {
     throw new Error(`Event log API returned ${response.status}`);

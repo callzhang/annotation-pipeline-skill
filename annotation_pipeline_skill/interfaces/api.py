@@ -114,7 +114,23 @@ class DashboardApi:
                 CoordinatorService(store, workspace_root=self.workspace_root).build_report(project_id=project_id),
             )
         if route == "/api/events":
-            return self._json_response(200, {"events": self._event_log(store, project_id=project_id)})
+            try:
+                limit = max(1, min(500, int(query.get("limit", ["100"])[0])))
+            except ValueError:
+                limit = 100
+            try:
+                offset = max(0, int(query.get("offset", ["0"])[0]))
+            except ValueError:
+                offset = 0
+            events, total = store.list_events_paginated(
+                pipeline_id=project_id, limit=limit, offset=offset,
+            )
+            return self._json_response(200, {
+                "events": [event.to_dict() for event in events],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            })
         if route == "/api/readiness":
             if not project_id:
                 return self._json_response(400, {"error": "project_required"})
@@ -784,15 +800,6 @@ class DashboardApi:
         path = store.root / config_id
         path.write_text(content, encoding="utf-8")
         return self._json_response(200, {"ok": True, "id": config_id})
-
-    def _event_log(self, store: SqliteStore, project_id: str | None = None) -> list[dict[str, Any]]:
-        events = []
-        for task in store.list_tasks():
-            if project_id is not None and task.pipeline_id != project_id:
-                continue
-            events.extend(event.to_dict() for event in store.list_events(task.task_id))
-        return sorted(events, key=lambda event: event["created_at"], reverse=True)
-
 
 MIME_TYPES: dict[str, str] = {
     ".html": "text/html; charset=utf-8",
