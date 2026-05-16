@@ -34,6 +34,23 @@ class QCParseError(ValueError):
         self.diagnostics = {"error_kind": "parse_error", "raw_text": raw_text}
 
 
+def _is_rate_limited(exc: BaseException) -> bool:
+    """Detect provider rate-limit / quota errors across SDKs and local-CLI clients.
+
+    Covers openai.RateLimitError (status 429), generic APIStatusError with
+    .status_code==429, and CLI-style errors that just carry a message — we
+    inspect both the type name and the string representation.
+    """
+    name = type(exc).__name__
+    if "RateLimit" in name:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return "rate limit" in text or "429" in text or "too many requests" in text
+
+
 class SubagentRuntime:
     def __init__(
         self,
@@ -560,6 +577,14 @@ class SubagentRuntime:
         return asyncio.run(self._generate_async(target, request))
 
     async def _generate_async(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
+        try:
+            return await self._call_client(target, request)
+        except Exception as exc:  # noqa: BLE001 — fall back on any rate-limit signal
+            if target == "fallback" or not _is_rate_limited(exc):
+                raise
+            return await self._call_client("fallback", request)
+
+    async def _call_client(self, target: str, request: LLMGenerateRequest) -> LLMGenerateResult:
         client = self.client_factory(target)
         try:
             return await client.generate(request)

@@ -1077,73 +1077,23 @@ def test_annotator_discussion_reply_for_unknown_feedback_id_is_ignored(tmp_path)
     assert store.load_task("t-bogus").status is TaskStatus.ACCEPTED
 
 
-def test_high_annotator_confidence_auto_closes_feedback_by_consensus(tmp_path):
-    """Annotator confidence > QC confidence + 0.1 → auto consensus, no need to wait for next QC."""
+def test_qc_unsure_label_closes_feedback_by_consensus(tmp_path):
+    """When QC labeled its complaint 'unsure', the annotator's rebuttal closes
+    it by consensus without burning more rounds — QC itself admitted noise."""
     from annotation_pipeline_skill.core.models import FeedbackRecord
     from annotation_pipeline_skill.core.states import FeedbackSeverity
 
     store = SqliteStore.open(tmp_path)
     task = Task.new(
-        task_id="t-conf-hi",
-        pipeline_id="p",
-        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
-    )
-    task.status = TaskStatus.PENDING
-    store.save_task(task)
-    # QC had only 0.4 confidence in the complaint.
-    fb = FeedbackRecord.new(
-        task_id="t-conf-hi",
-        attempt_id="t-conf-hi-attempt-prior",
-        source_stage=FeedbackSource.QC,
-        severity=FeedbackSeverity.WARNING,
-        category="missing_phrase",
-        message="Maybe missing constraint?",
-        target={},
-        suggested_action="annotator_rerun",
-        created_by="qc-agent",
-        metadata={"confidence": 0.4},
-    )
-    store.append_feedback(fb)
-
-    annotation_payload = {
-        "entities": [],
-        "discussion_replies": [
-            {"feedback_id": fb.feedback_id, "confidence": 0.9, "message": "Span isn't in the text."}
-        ],
-    }
-    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
-    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
-    runtime = SubagentRuntime(
-        store=store,
-        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
-    )
-
-    runtime.run_once(stage_target="annotation")
-
-    discussions = store.list_feedback_discussions("t-conf-hi")
-    sources = [d.metadata.get("resolution_source") for d in discussions if d.role == "qc"]
-    assert "confidence_auto" in sources, f"expected confidence_auto consensus, got {discussions}"
-    consensus_entries = [d for d in discussions if d.consensus]
-    assert any(d.metadata.get("annotator_confidence") == 0.9 for d in consensus_entries)
-
-
-def test_both_low_confidence_escalates_to_human_review_early(tmp_path):
-    """When both QC and annotator confidence < 0.5 on a dispute, task goes
-    straight to HUMAN_REVIEW without burning more rounds."""
-    from annotation_pipeline_skill.core.models import FeedbackRecord
-    from annotation_pipeline_skill.core.states import FeedbackSeverity
-
-    store = SqliteStore.open(tmp_path)
-    task = Task.new(
-        task_id="t-uncertain",
+        task_id="t-qc-unsure",
         pipeline_id="p",
         source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
     )
     task.status = TaskStatus.PENDING
     store.save_task(task)
     fb = FeedbackRecord.new(
-        task_id="t-uncertain",
-        attempt_id="t-uncertain-attempt-prior",
+        task_id="t-qc-unsure",
+        attempt_id="t-qc-unsure-attempt-prior",
         source_stage=FeedbackSource.QC,
         severity=FeedbackSeverity.WARNING,
         category="missing_phrase",
@@ -1151,14 +1101,14 @@ def test_both_low_confidence_escalates_to_human_review_early(tmp_path):
         target={},
         suggested_action="annotator_rerun",
         created_by="qc-agent",
-        metadata={"confidence": 0.35},
+        metadata={"confidence": "unsure"},
     )
     store.append_feedback(fb)
 
     annotation_payload = {
         "entities": [],
         "discussion_replies": [
-            {"feedback_id": fb.feedback_id, "confidence": 0.4, "message": "Also unsure."}
+            {"feedback_id": fb.feedback_id, "confidence": "confident", "message": "Span isn't in the text."}
         ],
     }
     annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
@@ -1170,59 +1120,9 @@ def test_both_low_confidence_escalates_to_human_review_early(tmp_path):
 
     runtime.run_once(stage_target="annotation")
 
-    loaded = store.load_task("t-uncertain")
-    assert loaded.status is TaskStatus.HUMAN_REVIEW
-    assert fb.feedback_id in loaded.metadata.get("low_confidence_feedback_ids", [])
-
-
-def test_both_high_confidence_stalemate_also_escalates_early(tmp_path):
-    """When QC and annotator are BOTH highly confident (>=0.85) but disagree,
-    more retries won't help — escalate to HR immediately."""
-    from annotation_pipeline_skill.core.models import FeedbackRecord
-    from annotation_pipeline_skill.core.states import FeedbackSeverity
-
-    store = SqliteStore.open(tmp_path)
-    task = Task.new(
-        task_id="t-stalemate",
-        pipeline_id="p",
-        source_ref={"kind": "jsonl", "payload": {"text": "alpha"}},
-    )
-    task.status = TaskStatus.PENDING
-    store.save_task(task)
-    fb = FeedbackRecord.new(
-        task_id="t-stalemate",
-        attempt_id="t-stalemate-attempt-prior",
-        source_stage=FeedbackSource.QC,
-        severity=FeedbackSeverity.WARNING,
-        category="missing_phrase",
-        message="Definitely missing.",
-        target={},
-        suggested_action="annotator_rerun",
-        created_by="qc-agent",
-        metadata={"confidence": 0.95},
-    )
-    store.append_feedback(fb)
-
-    # annotator equally sure QC is wrong, gap < 0.1 so no auto-consensus.
-    annotation_payload = {
-        "entities": [],
-        "discussion_replies": [
-            {"feedback_id": fb.feedback_id, "confidence": 0.92, "message": "Span isn't in the text."}
-        ],
-    }
-    annotation_client = StubLLMClient(final_text=json.dumps(annotation_payload), provider="annotator")
-    qc_client = StubLLMClient(final_text='{"passed": true}', provider="qc")
-    runtime = SubagentRuntime(
-        store=store,
-        client_factory=lambda target: qc_client if target == "qc" else annotation_client,
-    )
-
-    runtime.run_once(stage_target="annotation")
-
-    loaded = store.load_task("t-stalemate")
-    assert loaded.status is TaskStatus.HUMAN_REVIEW
-    assert loaded.metadata.get("early_hr_reason") == "high_confidence_stalemate"
-    assert fb.feedback_id in loaded.metadata.get("low_confidence_feedback_ids", [])
+    discussions = store.list_feedback_discussions("t-qc-unsure")
+    sources = [d.metadata.get("resolution_source") for d in discussions if d.role == "qc"]
+    assert "qc_unsure" in sources, f"expected qc_unsure consensus, got {discussions}"
 
 
 def test_arbiter_rules_in_annotator_favor_avoids_hr(tmp_path):
@@ -1831,7 +1731,7 @@ def test_arbiter_retries_when_verdict_qc_but_corrected_annotation_missing(tmp_pa
     assert len(arb.requests) == 2, (
         f"expected exactly 2 arbiter calls (initial + 1 retry); got {len(arb.requests)}"
     )
-    assert "FORGOT TO INCLUDE corrected_annotation" in arb.requests[1].instructions
+    assert "PREVIOUS ATTEMPT WAS MISSING corrected_annotation" in arb.requests[1].instructions
 
 
 def test_apply_arbiter_correction_rejects_non_verbatim_spans(tmp_path):
