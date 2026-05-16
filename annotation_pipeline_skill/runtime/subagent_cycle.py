@@ -295,7 +295,16 @@ class SubagentRuntime:
             )
             round_count = self._retry_round_count(task.task_id)
             if round_count >= self.max_qc_rounds:
-                arb = await self._arbitrate_and_apply(task, annotation_attempt_id, stage="validation")
+                # Last shot before HR: invoke the arbiter even if the
+                # annotator never produced a discussion rebuttal. Without
+                # this, silent annotators (models that don't emit
+                # discussion_replies) bypass arbitration entirely and
+                # always fall through to HR — see audit metadata where
+                # arbiter_ran=False and arbiter_unresolved=0.
+                arb = await self._arbitrate_and_apply(
+                    task, annotation_attempt_id, stage="validation",
+                    require_rebuttal=False,
+                )
                 terminal = self._terminal_from_arbiter(task, annotation_attempt_id, "validation", arb)
                 if terminal is not None:
                     self.store.save_task(task)
@@ -418,7 +427,11 @@ class SubagentRuntime:
                 self._record_confidence_sample("qc", qc_conf)
             round_count = self._retry_round_count(task.task_id)
             if round_count >= self.max_qc_rounds:
-                arb = await self._arbitrate_and_apply(task, qc_attempt_id, stage="qc")
+                # Last shot before HR: same rationale as the validation path.
+                arb = await self._arbitrate_and_apply(
+                    task, qc_attempt_id, stage="qc",
+                    require_rebuttal=False,
+                )
                 terminal = self._terminal_from_arbiter(task, qc_attempt_id, "qc", arb)
                 if terminal is not None:
                     self.store.save_task(task)
@@ -730,10 +743,10 @@ class SubagentRuntime:
             message = str(reply.get("message") or "").strip()
             if not message:
                 continue
-            ann_conf = _clamp_confidence(reply.get("confidence"))
+            ann_label = _resolve_confidence_label(reply.get("confidence"))
             metadata: dict[str, Any] = {"attempt_id": attempt_id}
-            if ann_conf is not None:
-                metadata["confidence"] = ann_conf
+            if ann_label is not None:
+                metadata["confidence"] = ann_label
             self.store.append_feedback_discussion(
                 FeedbackDiscussionEntry.new(
                     task_id=task.task_id,
@@ -754,59 +767,40 @@ class SubagentRuntime:
                 )
             )
             written += 1
-            # Confidence-based auto-resolution: if the annotator is meaningfully
-            # more confident than QC was when filing the complaint, close the
-            # feedback by consensus. This avoids burning another QC round on a
-            # dispute the data already settles.
-            if ann_conf is None:
+            # Label-based resolution. Per the empirical calibration study
+            # (every confidence bucket for both roles produced the same actual
+            # correctness rate, so numeric comparison was noise), decisions
+            # branch on the verbal label only — no thresholds.
+            ann_label = _resolve_confidence_label(reply.get("confidence"))
+            if ann_label is None:
                 continue
-            self._record_confidence_sample("annotator", ann_conf)
             qc_feedback = feedback_index[fid]
-            qc_conf = _clamp_confidence(qc_feedback.metadata.get("confidence"))
-            if qc_conf is None:
-                continue
-            # Semantics of confidence:
-            #   annotator: how sure I am QC is WRONG (0 = QC is right, 1 = QC is wrong)
-            #   qc:        how sure QC is the defect IS real
-            #
-            # We compare raw values, NOT normalized — semantic 0.2 means "I
-            # concede" regardless of how high other annotators have run lately.
-            # (The normalization helpers are kept for analytics but no longer
-            # drive decisions; they once flipped a low-confidence concession
-            # into an auto-consensus because QC's tight range collapsed to 0.)
-            if max(ann_conf, qc_conf) < 0.5:
-                # Both genuinely uncertain → punt to human.
-                self._mark_early_hr(task, fid, "low_confidence", ann_conf, qc_conf)
-            elif ann_conf < 0.5:
-                # Annotator is conceding (low certainty that QC is wrong). No
-                # auto-resolve; let the normal retry loop run — annotator has
-                # already updated the annotation accordingly.
-                continue
-            elif ann_conf >= qc_conf + 0.1:
-                # Annotator pushed back harder than QC was pushing → consensus.
+            qc_label = _resolve_confidence_label(qc_feedback.metadata.get("confidence"))
+            # QC: unsure → drop the feedback as noise. QC itself admitted it
+            # wasn't sure; no point burning a retry on a guess.
+            if qc_label == "unsure":
                 self.store.append_feedback_discussion(
                     FeedbackDiscussionEntry.new(
                         task_id=task.task_id,
                         feedback_id=fid,
                         role="qc",
                         stance="agree",
-                        message=(
-                            f"Auto-consensus: annotator confidence {ann_conf:.2f} > "
-                            f"QC original confidence {qc_conf:.2f}."
-                        ),
+                        message="QC was unsure when filing this; closing by consensus.",
                         consensus=True,
-                        created_by="confidence-auto-resolver",
-                        metadata={
-                            "attempt_id": attempt_id,
-                            "resolution_source": "confidence_auto",
-                            "annotator_confidence": ann_conf,
-                            "qc_confidence": qc_conf,
-                        },
+                        created_by="label-resolver",
+                        metadata={"attempt_id": attempt_id, "resolution_source": "qc_unsure"},
                     )
                 )
-            elif min(ann_conf, qc_conf) >= 0.85:
-                # Both sides confidently disagree → genuine semantic stalemate.
-                self._mark_early_hr(task, fid, "high_confidence_stalemate", ann_conf, qc_conf)
+                continue
+            # Annotator unsure (and QC isn't) → annotator concedes; the
+            # natural retry loop continues with whatever fix the annotator
+            # silently produced.
+            if ann_label == "unsure":
+                continue
+            # Both sides have at least some confidence and disagree (annotator
+            # filed a rebuttal). Don't auto-resolve — let the dispute reach
+            # the arbiter at max_qc_rounds. Genuine disagreement is what the
+            # arbiter exists for.
         return written
 
     def _terminal_from_arbiter(
@@ -821,12 +815,12 @@ class SubagentRuntime:
         with the normal HR / retry flow).
 
         Rules:
-        - Any unresolved verdict (low confidence) → None (HR fallthrough).
-        - Any fixed verdict (qc-wins or neither, conf>=0.7) AND
+        - Any unresolved verdict (arbiter label tentative/unsure) → None (HR fallthrough).
+        - Any fixed verdict (qc-wins or neither, label certain/confident) AND
           corrected_annotation present → write the correction as the final
           annotation and ACCEPT.
-        - All open feedbacks closed in annotator's favor (conf>=0.7) and zero
-          unresolved → ACCEPT with the current annotation.
+        - All open feedbacks closed in annotator's favor (label certain/confident)
+          and zero unresolved → ACCEPT with the current annotation.
         - Anything else → None (HR fallthrough).
         """
         if not arb.get("ran"):
@@ -977,9 +971,9 @@ class SubagentRuntime:
         Returns:
             {
                 "ran": bool,                 # arbiter was invoked
-                "closed": int,               # annotator-wins verdicts conf>=0.7
+                "closed": int,               # annotator-wins verdicts (label certain/confident)
                 "fixed": int,                # qc-wins verdicts where arbiter also provided a fix
-                "unresolved": int,           # any verdict with conf<0.7, or qc-wins without a fix
+                "unresolved": int,           # any verdict labeled tentative/unsure, or qc-wins without a fix
                 "corrected_annotation": dict | None,  # full corrected annotation from arbiter, when provided
             }
         Callers decide the terminal transition based on these counts (with help
@@ -1078,17 +1072,17 @@ class SubagentRuntime:
             "YOU MUST APPLY QC's REQUESTED FIX in corrected_annotation. (Add the missing entity, "
             "remove the wrong span, repopulate json_structures, whatever QC asked for.)\n"
             "  - 'neither':   both sides are wrong; YOU produce the right answer in corrected_annotation.\n"
-            "Confidence 0.0-1.0. Use the full range — 0.95+ only when provably correct; mid-range for "
-            "judgment calls; <0.7 when truly unsure.\n\n"
-            "RUNTIME DECISION RULES (wired into the code that reads your output):\n"
-            "  - All verdicts 'annotator' with conf >= 0.7 → ACCEPT with current annotation. In this "
-            "case set corrected_annotation = null.\n"
-            "  - ANY verdict 'qc' OR 'neither' with conf >= 0.7 → corrected_annotation MUST be a non-null "
-            "object containing the FULL corrected annotation. Runtime saves it as the final answer and "
-            "ACCEPTs the task. If you fail to provide corrected_annotation in this case, the runtime "
-            "ignores your response, the task goes to HUMAN REVIEW, and your verdicts are wasted. NEVER "
-            "skip the fix on a high-confidence qc/neither verdict.\n"
-            "  - ANY verdict with conf < 0.7 → HUMAN REVIEW (corrected_annotation may be null).\n"
+            "Confidence: ONE of these strings (no numbers; the runtime won't accept them):\n"
+            "  - \"certain\"   = evidence unambiguous; any reasonable reviewer would reach the same verdict.\n"
+            "  - \"confident\" = strong case but a reasonable reviewer with different priors might rule differently.\n"
+            "  - \"tentative\" = judgment call; you lean this way but admit another reading is defensible.\n"
+            "  - \"unsure\"    = you don't really know; route to human.\n"
+            "Pick the label that fits the evidence; don't default to \"certain\".\n\n"
+            "OUTPUT SHAPE REQUIREMENTS:\n"
+            "  - If ANY verdict is 'qc' or 'neither' (the annotation needs change), corrected_annotation "
+            "MUST be a non-null object with the FULL corrected annotation. Describing the fix in "
+            "reasoning while leaving corrected_annotation null wastes your verdicts.\n"
+            "  - If ALL verdicts are 'annotator' (the annotation stands as-is), set corrected_annotation = null.\n"
             "There is no 'rejected' outcome.\n\n"
             "Shape of corrected_annotation when non-null: a {\"rows\": [{\"row_index\": int, "
             "\"output\": {entities, classifications, relations, json_structures}}, ...]} object that "
@@ -1186,19 +1180,17 @@ class SubagentRuntime:
                 needs_correction = any(
                     isinstance(v, dict)
                     and str(v.get("verdict") or "").lower() in {"qc", "neither"}
-                    and (_clamp_confidence(v.get("confidence")) or 0) >= 0.7
+                    and _resolve_confidence_label(v.get("confidence")) in ("certain", "confident")
                     for v in verdicts
                 )
                 if needs_correction and attempt_idx < max_retries:
                     retry_note = (
-                        "\n\nPREVIOUS ATTEMPT FORGOT TO INCLUDE corrected_annotation: "
-                        "you ruled 'qc' or 'neither' at confidence >= 0.7 on at least "
-                        "one feedback, but set corrected_annotation to null. The "
-                        "runtime DROPS your verdicts when there is no "
-                        "corrected_annotation to apply, and the task escalates to "
-                        "HUMAN_REVIEW. Re-emit your full response with a non-null "
-                        "corrected_annotation: {\"rows\": [...]} containing the FULL "
-                        "corrected annotation. Your reasoning is wasted without it."
+                        "\n\nPREVIOUS ATTEMPT WAS MISSING corrected_annotation: you ruled "
+                        "'qc' or 'neither' on at least one feedback (meaning the annotation "
+                        "needs change) but set corrected_annotation to null. Re-emit your "
+                        "full response with a non-null corrected_annotation: "
+                        "{\"rows\": [...]} containing the FULL corrected annotation. "
+                        "Your reasoning is wasted without it."
                     )
                     continue
             break
@@ -1249,17 +1241,19 @@ class SubagentRuntime:
             if not isinstance(fid, str) or fid not in known_ids:
                 continue
             verdict = str(verdict_entry.get("verdict") or "").lower()
-            conf = _clamp_confidence(verdict_entry.get("confidence"))
+            conf_label = _resolve_confidence_label(verdict_entry.get("confidence"))
             reasoning = str(verdict_entry.get("reasoning") or "")
             base_metadata = {
                 "attempt_id": arbiter_attempt_id,
                 "resolution_source": "arbiter",
-                "arbiter_confidence": conf,
+                "arbiter_confidence": conf_label,
                 "arbiter_verdict": verdict,
                 "arbiter_reasoning": reasoning,
             }
-            if conf is None or conf < 0.7:
-                # Arbiter is uncertain — record but don't close. Caller will HR.
+            # Arbiter labels {tentative, unsure, None} → can't trust the
+            # verdict; punt to HR. Only {certain, confident} produce a
+            # terminal decision.
+            if conf_label in (None, "tentative", "unsure"):
                 outcome["unresolved"] += 1
                 self.store.append_feedback_discussion(
                     FeedbackDiscussionEntry.new(
@@ -1567,25 +1561,23 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "codes, requirements, must/shall statements are almost always constraints. Empty json_structures = {} is only "
         "acceptable when the input genuinely contains no instance of any type. "
         "\n\n"
-        "HANDLING QC FEEDBACK: for each item in feedback_bundle, choose either to fix or to rebut, "
-        "and ALWAYS attach a confidence score: "
-        "(a) if you accept the complaint — silently fix the annotation; you don't need a discussion_reply, "
-        "or you may add one with confidence < 0.3 to record agreement. "
-        "(b) if you believe the complaint is wrong, borderline, or based on inference rather than verbatim "
-        "evidence — add a discussion_reply with HIGH confidence (>= 0.7) and KEEP your annotation as you "
-        "believe is correct. Do NOT force phrases in just to satisfy QC. "
-        "\n\n"
+        "HANDLING QC FEEDBACK: for each item in feedback_bundle, choose either to fix or to rebut:\n"
+        "(a) if you accept the complaint — silently fix the annotation; no discussion_reply needed.\n"
+        "(b) if you disagree — add a discussion_reply with a verbal confidence label.\n"
+        "\n"
         "discussion_replies schema (each entry):\n"
         "  feedback_id: str (must match feedback_bundle.items)\n"
-        "  confidence:  float 0.0-1.0, REQUIRED — your certainty that QC is WRONG on this item. USE THE "
-        "FULL RANGE: 0.95-1.00 only when QC's claimed span is provably not in the input or QC asks for "
-        "something the input cannot support; 0.75-0.90 when you have a strong case but QC has any "
-        "leg to stand on; 0.55-0.70 for judgment-call disagreements; 0.35-0.50 when you're leaning "
-        "'QC is wrong' but unsure. If you default everything to 0.9+, you are miscalibrated.\n"
+        "  confidence:  REQUIRED — one of these strings (no numbers; the runtime won't accept them):\n"
+        "    - \"certain\"   = evidence unambiguous; you can quote the exact span/text proving QC is wrong; "
+        "any reasonable reviewer would agree.\n"
+        "    - \"confident\" = strong case but a reasonable reviewer with different priors might side with QC.\n"
+        "    - \"tentative\" = judgment call; you lean against QC but admit the other reading is defensible.\n"
+        "    - \"unsure\"    = you don't know — let the arbiter / human decide.\n"
+        "    Don't anchor on \"certain\". Pick the label that actually fits the evidence strength.\n"
         "  message:     str, REQUIRED, your reasoning\n"
         "  disputed_points: list[str], optional\n"
         "  proposed_resolution: str, optional\n"
-        "  stance:      str, optional — for human readability only. Confidence is the decision signal.\n"
+        "  stance:      str, optional — for human readability only. The label drives the decision.\n"
         "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself."
         f"\n\nModality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
@@ -1646,24 +1638,24 @@ def _build_qc_instructions(
         "json_structures.technology is appropriate only when the technology is the structural subject of a "
         "phrase (decision about it, constraint on it, status update on it). "
         "\n\n"
-        "CONFIDENCE (CALIBRATED): every entry in failures MUST include a numeric confidence field (0.0-1.0). "
-        "USE THE FULL RANGE — do not default everything to 0.9+. Calibration guide: "
-        "0.95-1.00 only when you can quote the exact verbatim span from input text that the annotation "
-        "missed or got factually wrong. "
-        "0.75-0.90 when the defect is strong but requires reading more than one sentence to confirm. "
-        "0.55-0.70 when this is a judgment call you'd defend but a reasonable reviewer could disagree. "
-        "0.35-0.50 when you're leaning toward 'defect' but it's borderline. "
-        "<0.35 when you're really unsure — at that point, just pass instead of flagging. "
-        "If most of your failures end up at 0.9+, you are MISCALIBRATED. Stop and re-score honestly. "
-        "\n\n"
-        "ANNOTATOR REBUTTALS: if feedback_bundle items carry annotator discussion_replies, each reply has "
-        "a confidence value (annotator's certainty that you were wrong). For every such item, compare "
-        "annotator.confidence against your original failure's confidence: "
-        "(1) annotator.confidence > your_original_confidence + 0.1 → the annotator is more sure; emit this "
-        "    feedback_id in consensus_acknowledgements (closes the dispute by consensus). "
-        "(2) annotator.confidence is roughly equal to yours (delta <= 0.1) → re-evaluate; if still defective "
-        "    keep the failure with the SAME confidence value; if you've changed your mind, ack it. "
-        "(3) annotator.confidence is clearly lower → keep the failure. "
+        "CONFIDENCE: every entry in failures MUST include a confidence field set to ONE of these "
+        "strings (no numbers; the runtime won't accept them):\n"
+        "  - \"certain\"   = you can quote the exact verbatim span the annotation got wrong; any reasonable "
+        "reviewer would agree this is a defect.\n"
+        "  - \"confident\" = strong defect but requires reading more than one sentence to confirm; reasonable "
+        "reviewer with different priors might disagree.\n"
+        "  - \"tentative\" = judgment call you'd defend but you admit a reasonable reviewer could disagree.\n"
+        "  - \"unsure\"    = you're really not sure — at that point DO NOT FLAG. Just pass instead.\n"
+        "Don't anchor on \"certain\". Pick the label that fits the evidence strength. If you only ever use "
+        "\"certain\", you are miscalibrated.\n"
+        "\n"
+        "ANNOTATOR REBUTTALS: if feedback_bundle items carry annotator discussion_replies, each reply has a "
+        "confidence label. Compare against your own label for that feedback:\n"
+        "(1) annotator label is HIGHER than yours (e.g. annotator=\"certain\", you=\"tentative\") → the "
+        "annotator is more sure; emit this feedback_id in consensus_acknowledgements (closes the dispute).\n"
+        "(2) labels are equal → re-evaluate; if still defective keep the failure (same label); if you've "
+        "changed your mind, ack it.\n"
+        "(3) annotator label is LOWER than yours → keep the failure.\n"
         "\n\n"
         f"qc_policy (informational): {json.dumps(resolved_policy, sort_keys=True)}. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
@@ -1765,7 +1757,15 @@ def _iter_verbatim_spans(output: dict) -> "list[tuple[str, str]]":
 
 
 def _clamp_confidence(value: Any) -> float | None:
-    """Coerce a model-provided confidence value to a clamped float in [0, 1]."""
+    """Coerce a model-provided confidence value to a clamped float in [0, 1].
+
+    Accepts a verbal label (preferred) or a legacy numeric value. Labels map
+    to bin midpoints so callers that still need a number get a comparable
+    one. Returns None if the value can't be interpreted.
+    """
+    label = _resolve_confidence_label(value)
+    if label is not None:
+        return _LABEL_TO_NUMERIC[label]
     try:
         f = float(value)
     except (TypeError, ValueError):
@@ -1775,13 +1775,63 @@ def _clamp_confidence(value: Any) -> float | None:
     return max(0.0, min(1.0, f))
 
 
+# Verbal confidence scale. Ordered high → low. Each label has an explicit
+# semantic anchor written into the role prompts; the runtime treats them as
+# categorical (no numeric comparison across roles). The numeric mapping is
+# kept only for backward compat with historical samples and for legacy
+# diagnostics — decisions should branch on the label.
+CONFIDENCE_LABELS = ("certain", "confident", "tentative", "unsure")
+
+_LABEL_TO_NUMERIC: dict[str, float] = {
+    "certain": 0.97,
+    "confident": 0.85,
+    "tentative": 0.55,
+    "unsure": 0.20,
+}
+
+# Coarse buckets to map legacy numeric values back into the label scale.
+# Threshold is the inclusive lower bound.
+_NUMERIC_TO_LABEL_BINS: list[tuple[float, str]] = [
+    (0.85, "certain"),
+    (0.65, "confident"),
+    (0.40, "tentative"),
+    (0.0, "unsure"),
+]
+
+
+def _resolve_confidence_label(value: Any) -> str | None:
+    """Return one of CONFIDENCE_LABELS for any model-provided confidence value.
+
+    Accepts the new verbal label or a legacy numeric value. Returns None
+    if the value is missing or uninterpretable.
+    """
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in CONFIDENCE_LABELS:
+            return normalized
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f:  # NaN
+        return None
+    f = max(0.0, min(1.0, f))
+    for threshold, label in _NUMERIC_TO_LABEL_BINS:
+        if f >= threshold:
+            return label
+    return "unsure"
+
+
 def _feedback_from_qc_decision(task: Task, attempt_id: str, decision: dict[str, Any]) -> FeedbackRecord:
     failures = decision.get("failures") if isinstance(decision.get("failures"), list) else []
     first_failure = failures[0] if failures and isinstance(failures[0], dict) else {}
-    confidence = _clamp_confidence(first_failure.get("confidence") if isinstance(first_failure, dict) else None)
+    confidence_label = _resolve_confidence_label(
+        first_failure.get("confidence") if isinstance(first_failure, dict) else None
+    )
     metadata: dict[str, Any] = {"qc_decision": decision}
-    if confidence is not None:
-        metadata["confidence"] = confidence
+    if confidence_label is not None:
+        metadata["confidence"] = confidence_label
     return FeedbackRecord.new(
         task_id=task.task_id,
         attempt_id=attempt_id,
