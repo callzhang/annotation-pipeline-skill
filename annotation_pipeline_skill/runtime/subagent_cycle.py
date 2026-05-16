@@ -689,6 +689,33 @@ class SubagentRuntime:
             )
         )
 
+    def _latest_annotation_is_valid_json(self, task: Task) -> bool:
+        """Return True if the latest annotation_result artifact's text payload
+        parses as JSON after standard wrapper stripping. Used as a sanity
+        gate before accepting an annotation that the arbiter ruled in
+        annotator's favor — see _terminal_from_arbiter.
+        """
+        artifacts = [a for a in self.store.list_artifacts(task.task_id) if a.kind == "annotation_result"]
+        if not artifacts:
+            return False
+        path = self.store.root / artifacts[-1].path
+        if not path.exists():
+            return False
+        try:
+            outer = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            return False
+        if not isinstance(outer, dict):
+            return False
+        text = outer.get("text")
+        if not isinstance(text, str):
+            return False
+        try:
+            json.loads(_strip_markdown_json_fence(text))
+        except (json.JSONDecodeError, ValueError):
+            return False
+        return True
+
     def _check_annotation_validation(self, task: Task, final_text: str) -> dict | None:
         if not final_text.strip():
             return {
@@ -882,6 +909,17 @@ class SubagentRuntime:
             applied = self._apply_arbiter_correction(task, attempt_id, corrected, arb)
             return applied
         if arb["closed"] > 0:
+            # Before accepting "annotator's annotation stands", re-validate
+            # that the current annotation_result artifact actually parses as
+            # JSON. Pre-2026-05-16 some accepted tasks had artifacts whose
+            # text wasn't valid JSON (raw <think> block + structurally
+            # broken JSON from an older schema), and the export step later
+            # blocked on them. Treat parse failure here as a mechanical fail
+            # so the caller leaves the task in ARBITRATING for re-pickup
+            # (and eventually hits the mechanical retry cap → HR).
+            if not self._latest_annotation_is_valid_json(task):
+                arb["mechanical_fail"] += 1
+                return None
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
