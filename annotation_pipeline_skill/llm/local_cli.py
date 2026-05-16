@@ -61,6 +61,7 @@ def build_codex_command(
     command.extend(
         [
             "--ignore-user-config",
+            "--ignore-rules",
             "--ephemeral",
             "--disable",
             "apps",
@@ -71,6 +72,8 @@ def build_codex_command(
             "--json",
             "--model",
             model,
+            "--config",
+            "enabled_tools=[]",
         ]
     )
     if reasoning_effort:
