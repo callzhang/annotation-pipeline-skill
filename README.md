@@ -43,7 +43,7 @@ annotation-pipeline report readiness --project-root ./annotation-project --proje
 Start the dashboard API when the user wants the Kanban, provider, Coordinator, or Event Log UI:
 
 ```bash
-annotation-pipeline serve --project-root ./annotation-project --host 127.0.0.1 --port 8765
+annotation-pipeline serve --project-root ./annotation-project --host 127.0.0.1 --port 8509
 ```
 
 Export accepted labels for model training:
@@ -257,7 +257,7 @@ annotation-pipeline --help
 annotation-pipeline init --project-root ./demo-project
 annotation-pipeline doctor --project-root ./demo-project
 annotation-pipeline provider doctor --project-root ./demo-project
-annotation-pipeline serve --project-root ./demo-project --host 127.0.0.1 --port 8765
+annotation-pipeline serve --project-root ./demo-project --host 127.0.0.1 --port 8509
 ```
 
 ## Run The Dashboard
@@ -268,7 +268,7 @@ Start the Python dashboard API against a file-store root:
 UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   python -m annotation_pipeline_skill.interfaces.api .annotation-pipeline \
   --host 127.0.0.1 \
-  --port 8765
+  --port 8509
 ```
 
 Start the Vite React dashboard:
@@ -278,7 +278,7 @@ cd web
 npm run dev
 ```
 
-The Vite dev server proxies `/api` to `http://127.0.0.1:8765`.
+The Vite dev server proxies `/api` to `http://127.0.0.1:8509`.
 Use `VITE_API_TARGET=http://127.0.0.1:<port>` when the API runs on another port.
 
 The dashboard includes Kanban, Runtime, Readiness, Outbox, Providers, Coordinator, Configuration, and Event Log views. The Coordinator tab shows the selected project's Human Review reminders, open feedback, provider diagnostics, rule updates, long-tail issues, and coordinator record forms. The Outbox view can follow the selected project and shows pending, sent, and dead-letter callback records with retry/error details.
@@ -612,5 +612,5 @@ UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy uv run \
   annotation-pipeline serve \
   --project-root ./demo-project \
   --host 127.0.0.1 \
-  --port 8765
+  --port 8509
 ```

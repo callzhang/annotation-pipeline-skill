@@ -42,7 +42,7 @@ annotation-pipeline report readiness --project-root ./annotation-project --proje
 Start the operator API when the user needs the Kanban dashboard:
 
 ```bash
-annotation-pipeline serve --project-root ./annotation-project --host 127.0.0.1 --port 8765
+annotation-pipeline serve --project-root ./annotation-project --host 127.0.0.1 --port 8509
 ```
 
 Before handing this skill to another agent, run the clean handoff verification:
