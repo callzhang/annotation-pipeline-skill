@@ -441,6 +441,50 @@ button {
   background: rgb(58 138 215 / 25%);
 }
 
+.hr-reason-banner {
+  background: #fff4d8;
+  border: 1px solid #e8c46b;
+  border-radius: 6px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+}
+
+.hr-reason-banner.critical {
+  background: #fbe5df;
+  border-color: #e5b29c;
+}
+
+.hr-reason-banner strong {
+  color: #5f4300;
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hr-reason-banner.critical strong {
+  color: #7a2b12;
+}
+
+.hr-reason-quote {
+  color: #2b3a42;
+  font-size: 13px;
+  font-style: italic;
+  margin: 4px 0 0;
+}
+
+.hr-reason-detail {
+  color: #2b3a42;
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
+.hr-reason-meta {
+  color: #6e7a82;
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
 .drawer-tabs {
   border-bottom: 1px solid #d7e0e5;
   display: flex;

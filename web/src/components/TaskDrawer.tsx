@@ -145,6 +145,9 @@ export function TaskDrawer({
 
       {detail ? (
         <>
+          {detail.task.status === "human_review" ? (
+            <HumanReviewReasonBanner events={detail.events} />
+          ) : null}
           <div className="drawer-tabs" role="tablist">
             {(["annotation", "raw", "discussions", "logs"] as const).map((tab) => (
               <button
@@ -311,6 +314,59 @@ export function TaskDrawer({
       ) : null}
       </aside>
     </>
+  );
+}
+
+function HumanReviewReasonBanner({ events }: { events: Array<Record<string, unknown>> }) {
+  // Find the most recent transition that landed in human_review.
+  let entry: Record<string, unknown> | null = null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.next_status === "human_review") {
+      entry = e;
+      break;
+    }
+  }
+  if (!entry) return null;
+
+  const reason = String(entry.reason ?? "");
+  const meta = (entry.metadata && typeof entry.metadata === "object")
+    ? (entry.metadata as Record<string, unknown>)
+    : {};
+  const arbiterRan = meta.arbiter_ran === true;
+  const arbiterUnresolved = typeof meta.arbiter_unresolved === "number" ? meta.arbiter_unresolved : 0;
+  const roundCount = typeof meta.round_count === "number" ? meta.round_count : null;
+  const maxRounds = typeof meta.max_qc_rounds === "number" ? meta.max_qc_rounds : null;
+  const autoEscalated = meta.auto_escalated === true;
+
+  let detail: string;
+  let tone: "warning" | "critical" = "warning";
+  if (autoEscalated && !arbiterRan) {
+    tone = "critical";
+    detail =
+      "Arbiter was skipped because the annotator never posted a rebuttal " +
+      "(no discussion_replies emitted). The retry loop ran out without " +
+      "anyone disputing QC's complaints.";
+  } else if (autoEscalated && arbiterRan && arbiterUnresolved > 0) {
+    detail = `Arbiter ran but ${arbiterUnresolved} disputes remained unresolved after the retry loop exhausted.`;
+  } else if (autoEscalated) {
+    detail = "Auto-escalated after the retry loop exhausted.";
+  } else {
+    detail = "Routed to human review.";
+  }
+
+  return (
+    <div className={`hr-reason-banner ${tone}`}>
+      <strong>Why this is in Human Review</strong>
+      <p className="hr-reason-quote">{reason}</p>
+      <p className="hr-reason-detail">{detail}</p>
+      {roundCount !== null && maxRounds !== null ? (
+        <p className="hr-reason-meta">
+          Rounds: {roundCount} / {maxRounds} · Arbiter ran: {arbiterRan ? "yes" : "no"}
+          {arbiterRan ? ` · unresolved: ${arbiterUnresolved}` : ""}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
