@@ -316,52 +316,67 @@ AuditEvent:
 
 ### 6.1 Task 状态
 
-```text
-draft
-ready
-annotating
-validating
-qc
-human_review
-repair_needed
-accepted
-rejected
-merged
-blocked
-retry_scheduled
-cancelled
+当前实现使用 7 个 task status（`core/states.py:TaskStatus`）：
+
+| Status | 含义 |
+|---|---|
+| `pending` | 等待 worker claim |
+| `annotating` | 标注 LLM 调用进行中 |
+| `qc` | 验证已通过，QC 进行中（或恢复中） |
+| `arbitrating` | 仲裁 LLM 调用进行中，或 mechanical retry 等待重新 pickup |
+| `accepted` | 终态 — 标注通过所有检查 |
+| `human_review` | 准终态 — arbiter 真正不确定，或 retry 上限触发 |
+| `rejected` | 保留给手动 reject |
+
+整体流向：
+
+```
+PENDING ─┬─ (prelabel shortcut, current_attempt=0) ───────► QC
+         └─► ANNOTATING ─► (validation) ─► QC ─► ACCEPTED
+                          │                  │
+                          └─► PENDING ◄──────┘  (retry, round_count++)
+                                       │
+                         (round_count ≥ max_qc_rounds)
+                                       │
+                                       ▼
+                                  ARBITRATING ─┬─► ACCEPTED
+                                               ├─► ARBITRATING (mechanical retry)
+                                               └─► HUMAN_REVIEW
 ```
 
 ### 6.2 状态转换原则
 
-- 所有状态转换必须通过统一 service 完成
-- worker 不直接任意改写 task 文件
-- 每次转换必须写 audit event
-- 运行时状态和业务状态分离
+- 所有状态转换走 `core/transitions.py:transition_task`，返回 `AuditEvent`
+- worker 不直接写 task 文件；通过 `SqliteStore.save_task` + `append_event` 一并落地
+- 每次转换必须有 reason + stage + metadata，落 `audit_events` 表
+- 运行时状态（lease, active_run）单独建模，不污染业务 status
 
 ### 6.3 运行时状态
 
-运行时状态单独建模为 `RunLease` 或 `ExecutionRecord`：
+运行时状态以两张表表达：
 
 ```python
-ExecutionRecord:
+RuntimeLease:        # core/models.py
+  lease_id: str
+  task_id: str
+  worker_id: str
+  acquired_at: datetime
+  expires_at: datetime
+
+ActiveRun:
   run_id: str
   task_id: str
+  worker_id: str
   stage: str
-  runtime_backend: str
-  provider_id: str | None
-  model: str | None
-  worker_id: str | None
-  pid: int | None
-  lease_expires_at: datetime | None
-  heartbeat_at: datetime | None
-  status: str
+  provider_target: str
+  started_at: datetime
 ```
 
-理由：
+设计理由：
 
-- 避免 task 文件既承担业务状态又承担活跃进程注册
-- 可以更清晰地做 crash recovery
+- task 表只记业务真相（status + current_attempt + metadata），不混入活跃进程注册
+- lease 过期 / active_run 孤儿可独立检测，crash recovery 路径清晰
+- scheduler 可重启而不丢业务状态：smart resume 用 task status + 工件存在性恢复执行位置
 
 
 ## 7. 存储架构
@@ -654,274 +669,414 @@ StageRoute:
 
 ## 10. Runtime 设计
 
-### 10.1 RuntimeBackend 抽象
+### 10.1 LocalRuntimeScheduler
+
+当前实现是 `runtime/local_scheduler.py:LocalRuntimeScheduler` —— 单进程多 async
+worker 的本地调度器：
+
+- N 个 async worker（`max_concurrent_tasks`，默认 24）共享一个 SubagentRuntime
+- 每个 worker 循环 claim → 跑 → 释放 lease
+- 没有外部队列、没有 systemd、没有额外基础设施
+- 适合单机跑 ~10K-100K task 的项目
+
+### 10.2 Worker 循环
 
 ```python
-class RuntimeBackend(Protocol):
-    def submit(self, run_spec: RunSpec) -> ExecutionRecord: ...
-    def poll(self, run_id: str) -> ExecutionRecord: ...
-    def cancel(self, run_id: str) -> None: ...
-    def heartbeat(self) -> RuntimeHealth: ...
+loop:
+  task, lease, run = try_claim_task(stage_target)
+  try:
+    await wait_for(runtime.run_task_async(...),
+                   timeout=worker_task_timeout_seconds)
+  except TimeoutError | Exception:
+    pass  # 错误已记录在 attempt 行；worker 继续
+  finally:
+    delete_lease(); delete_active_run()
+    if task.status == ANNOTATING:
+      reset to PENDING  # "worker bailed mid-annotation"
 ```
 
-### 10.2 MVP：LocalSubprocessRuntime
+`worker_task_timeout_seconds` 是单次 task 的硬上限。LLM 调用挂死（codex
+subprocess 卡住、HTTP stream 不返回）超过这个时间会被取消，task 回收。
 
-默认用本地 subprocess 实现，特点：
+### 10.3 Worker-bail reset
 
-- 无额外基础设施
-- 易于开源用户上手
-- 适合单机小规模运行
+worker `finally` 段会主动把 ANNOTATING 的 task reset 回 PENDING。理由：
 
-### 10.3 可选：QueuedRuntime
+LLM 调用 raise 后（rate limit、网络、parse fail），task 留在 ANNOTATING 但没
+lease。下一轮 claim 会触发 smart resume → 检查工件 → 没工件 → reset PENDING →
+重新 claim → 又走 PENDING→ANNOTATING → LLM 又 fail → 死循环（实测 ~700
+audit events/min）。在 finally 显式 reset 把这个环切断：下次 claim 看到的就是
+干净的 PENDING。
 
-用于更大规模或长期运行场景：
+### 10.4 Smart resume
 
-- queue backend
-- worker pool
-- lease + heartbeat
-- delayed retry
+`_try_claim_task` 在每次 claim 时检查 task 状态决定执行入口：
 
-### 10.4 SystemdRuntime 作为扩展而非默认
+| Status seen | 有 annotation_result? | 动作 |
+|---|---|---|
+| ANNOTATING | yes | 升级到 QC + `runtime_next_stage=qc`（跳过重新标注） |
+| ANNOTATING | no | reset 到 PENDING |
+| QC + `runtime_next_stage=qc` | — | claim，从 QC 恢复 |
+| ARBITRATING（无 lease） | — | claim，跑 `_run_rearbitration` |
+| PENDING | — | claim，全 pipeline |
 
-如果未来保留 systemd 模式，应放在可选插件里，而不是核心默认能力。
+这样 runtime 重启后能从中断处继续，而不是从头跑。
+
+### 10.5 Zombie recovery on init
+
+scheduler 启动时 `_recover_arbitrating_zombies` 跑一次：把所有 ARBITRATING
+但无 lease 的 task 路由到 HUMAN_REVIEW。理由：ARBITRATING 表示 arbiter 已经
+在前次运行中介入，自动重试不一定有意义（trade-off：会丢失 mechanical retry
+counter 上下文，operator 可手动拖回 Arbitration）。
+
+### 10.6 Local CLI 调用约束
+
+`provider: local_cli` 类型的 profile（codex / claude）通过 subprocess 调用，
+runtime 强制以下隔离参数：
+
+- `--ignore-user-config` —— 不受 user config 干扰
+- `--ignore-rules` —— 跳过 user 安装的 rule files（skills、AGENT.md）
+- `--ephemeral` —— 无 thread 持久化
+- `--disable apps --disable plugins` —— 不加载外部集成
+- `--config enabled_tools=[]` —— 抑制 tool use（arbiter 是纯 JSON 输出，不
+  需要 bash/read）
+- `--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check` —— 非
+  交互运行
+
+每次调用创建一个隔离的 `CODEX_HOME`（auth + config 拷贝），避免并发 codex
+调用互相污染。
 
 
 ## 11. 执行模型
 
+当前实现是三 LLM 角色协作的循环（`runtime/subagent_cycle.py:SubagentRuntime`）：
+
+| Role | 默认 profile | 职责 |
+|---|---|---|
+| annotator | `minimax_2.7` | 从原始输入产出结构化标注 |
+| QC | `deepseek_flash` | 找标注的缺陷，写 feedback |
+| arbiter | `codex_5.5_arbiter` (codex CLI, gpt-5.5) | 仲裁分歧、产出修正 |
+
+外加一个 `fallback` target（`codex_5.4_mini`）供主路 429 时透明切换。
+
 ### 11.1 Annotate 阶段
 
-1. scheduler 选择 `ready` task
-2. `AnnotatorSelector` 根据 modality 和 annotation requirements 选择 annotator
-3. 创建 `ExecutionRecord`
-4. runtime 提交 worker 或 external tool call
-5. worker 执行 provider call、外部模型调用或人工队列分配
-6. 写出 annotation artifact
-7. 如果 annotator profile 配置了 preview renderer，`PreviewRenderer` 生成 preview artifact
-8. pipeline 将 task 推进到 `validating`
-
-### 11.1.1 多模态图片检测示例
-
-1. task manifest 声明 `modality=image`、`annotation_type=bounding_box`
-2. `AnnotatorSelector` 选择支持 image/bounding_box 的 VC detection annotator
-3. annotator 调用检测模型，生成 `image_bbox_annotation`
-4. `ImageBoundingBoxRenderer` 生成 `image_bbox_preview`
-5. task 进入 validation 和 QC
-6. 如果 Human Review policy 启用，QC 后进入 `human_review`
-7. TypeScript 看板展示 overlay 图片，reviewer 决定 accept、reject 或 request repair
+1. worker claim 一个 PENDING task
+2. 检查 prelabel shortcut：`metadata.prelabeled=true` AND `current_attempt=0`
+   AND 已存在 `annotation_result` artifact → 直接复用，跳到 QC
+3. 否则调用 annotator LLM，写 `annotation_result` artifact
+4. transition → ANNOTATING
 
 ### 11.2 Validate 阶段
 
-1. validator 读取输出 artifact
-2. 返回 `ValidationResult`
-3. 若通过，进入 `qc`
-4. 若失败，进入 `repair_needed`
+annotation 写完后立刻跑两层确定性检查：
+
+1. **Schema 校验** —— `core/schema_validation.py:validate_payload_against_task_schema`
+   读项目 `output_schema.json` 或 task `annotation_guidance.output_schema`
+2. **Verbatim 校验** —— `find_verbatim_violations`：所有 entity / json_structures
+   span 必须是 `input.text` 的精确子串
+
+任一失败 → 写 BLOCKING `FeedbackRecord(source_stage=VALIDATION)` → task 回
+PENDING 重试。无新工件，annotation 留作历史记录。
+
+Verbatim guard 在三个写入路径都有：annotator 输出、arbiter 修正、operator
+人工修正。否则 5% 抽样发现 ~11% accepted task 含幻觉 span。
 
 ### 11.3 QC 阶段
 
-1. `QcPolicy` 生成 sample
-2. QC worker 或 deterministic checker 评估
-3. 生成 QC artifact
-4. 若通过，合并 pipeline review policy 和 QC risk decision
-5. 若任一 policy 要求 review，进入 `human_review`
-6. 若都不要求 review，进入 `accepted`
-7. 若失败，`FeedbackService` 从 QC artifact 生成 `FeedbackRecord`
-8. `RepairStrategy` 基于 feedback records 选择 repair decision
-9. 根据 repair decision 进入 `repair_needed`、`validating` 或 `blocked`
+1. validation 通过后 transition → QC
+2. QC LLM 看到当前 annotation + 所有 open feedback + annotator discussion
+   replies（如有）
+3. QC 输出：
+   ```json
+   {"passed": true | false,
+    "message": "...",
+    "failures": [
+      {"category": "missing_phrase|...",
+       "message": "...",
+       "confidence": "certain|confident|tentative|unsure",
+       "target": {...}}
+    ],
+    "consensus_acknowledgements": ["feedback_id", ...]}
+   ```
+4. `passed=true` → ACCEPTED
+5. `passed=false`:
+   - `consensus_acknowledgements` 关闭对应 feedback（QC 看了 annotator
+     的反驳后承认）
+   - `failures` 开新 FeedbackRecord
+   - task 回 PENDING，下一轮 annotator 拿到新 feedback bundle 重写
 
-### 11.3.1 Human Review 阶段
+### 11.4 重试循环
 
-Human Review 是 QC 后的可选阶段，采用混合触发策略：
+每轮 = 一次 annotator + 一次 QC。`round_count` = task 上 *open* QC/validation
+feedback 数量（consensus 关闭的不算）。
 
-1. pipeline policy 可以强制 review
-2. QC policy 可以基于风险要求 review
-3. 任一 policy 命中时进入 `human_review`
-4. dashboard 展示 QC artifact、feedback summary、review reason 和 media preview artifacts
-5. reviewer 可以 `accept`、`reject` 或 `request_repair`
-6. `accept` 推进到 `accepted`
-7. `reject` 推进到 `rejected`
-8. `request_repair` 生成或更新 `FeedbackRecord`，并进入 `repair_needed`
-9. 所有 reviewer 动作必须写 audit event
+```
+PENDING → annotator → validation (fail → PENDING)
+                    → QC (passed → ACCEPTED, failed → PENDING + feedback)
 
-### 11.4 Repair 阶段
+if round_count >= max_qc_rounds (默认 3) → ARBITRATING
+```
 
-1. `FeedbackService` 读取 open feedback records
-2. `RepairStrategy` 决定 `bulk_code_repair`、`annotator_rerun`、`manual_annotation` 或 `reject`
-3. `bulk_code_repair` 生成 deterministic repair artifact，回到 `validating`
-4. `annotator_rerun` 生成 compact feedback bundle 和 repair prompt，回到 `annotating`
-5. `manual_annotation` 进入人工队列或 `blocked`
-6. 每次 repair decision 和 operator override 都写 audit event
+### 11.5 Arbiter
 
-### 11.5 Merge 阶段
+输入：input task + 最新 annotation + 所有 open feedback + annotator
+discussion replies。
 
-1. `MergeSink` 接收 accepted artifact
-2. 写回目标 truth store
-3. 返回 merge report
-4. task 标记 `merged`
+输出：
+```json
+{
+  "verdicts": [
+    {"feedback_id": "...",
+     "verdict": "annotator|qc|neither",
+     "confidence": "certain|confident|tentative|unsure",
+     "reasoning": "..."}
+  ],
+  "corrected_annotation": {"rows": [...]} | null
+}
+```
+
+`verdict`:
+- `annotator` —— QC 投诉错了，当前 annotation 留下
+- `qc` —— annotation 错了，按 QC 说的修
+- `neither` —— 都不对，arbiter 给出正确版本
+
+`confidence` 是 4 档语言标签（弃用数字 —— 经过校准实测，所有数字 bucket 的
+正确率几乎一样，是噪声）。
+
+#### 内部 retry loop
+
+`_arbitrate_and_apply` 自带最多 `arbiter_verbatim_retries`（默认 2）次重试：
+
+- arbiter 给了 qc/neither 高 confidence 但 `corrected_annotation=null` ——
+  显式提示"你忘了 JSON" 让它重出
+- arbiter 的 corrected 含非 verbatim span —— 给出具体哪个 span 错了，要求重
+  emit verbatim
+
+retry 耗尽后清空 corrected_annotation，让外层逻辑继续。
+
+#### Arbiter outcome counters
+
+四个计数器驱动后续决策：
+
+| Counter | 在何时 +1 |
+|---|---|
+| `closed` | verdict=`annotator`, label ∈ {certain, confident} |
+| `fixed` | verdict ∈ {`qc`, `neither`}, label confident/certain, AND retry 后 `corrected_annotation` 仍非空 |
+| `unresolved` | label ∈ {tentative, unsure, None} |
+| `mechanical_fail` | verdict ∈ {`qc`, `neither`} 高 confidence 但 `corrected_annotation` 是 null（retry 耗尽）；OR 未知 verdict 值 |
+
+### 11.6 HR 路由规则
+
+只有"arbiter 真正不确定"才进 HR。所有机械故障（codex error、缺 fix、
+verbatim 违规、JSON parse fail）都是 mechanical retry，留在 ARBITRATING 等下
+次 worker pickup。
+
+```
+_terminal_from_arbiter:
+  unresolved > 0       → None  (上层决定：HR 还是 retry)
+  fixed > 0 + valid    → ACCEPTED  (写修正、accept)
+  closed > 0           → ACCEPTED  (annotator 的 annotation 留下)
+  else                 → None  (mechanical 信号)
+
+caller (validation / qc / rearbitration paths):
+  terminal is not None              → ACCEPTED (已经 transition)
+  terminal is None, unresolved > 0  → HUMAN_REVIEW
+  terminal is None, unresolved == 0 → 留 ARBITRATING (mechanical retry)
+                                       └─► after N=3 retries → HUMAN_REVIEW
+```
+
+#### Mechanical retry cap
+
+`SubagentRuntime.ARBITER_MECHANICAL_RETRY_CAP = 3`。每次 mechanical fail
+自增 `task.metadata.arbiter_mechanical_retries`。到 3 强制 → HR，reason 带
+"arbiter exhausted N mechanical retries without an actionable verdict"。
+counter 持久化在 task metadata，重启 runtime 不丢。
+
+为什么 mechanical retry 留 ARBITRATING 而不是回 PENDING：annotation 没变，
+重跑 annotator 是浪费 —— 只需要 arbiter 再判一次。scheduler 的 claim
+逻辑会自动 pick up 无 lease 的 ARBITRATING task。
+
+### 11.7 Human Review
+
+进入 HR 的路径：
+- arbiter `unresolved > 0`（真不确定）
+- mechanical retry cap 触发（3 次都失败）
+- scheduler init 的 zombie recovery（ARBITRATING + 无 lease）
+- operator 在 HR drawer 主动 reject（`HumanReviewService`）
+
+HR 卡片在看板上：
+- 显示 reason quote（最近一次 transition 的 reason）
+- 自动失败的卡显示 detail 段：`!arbiter_ran` / `unresolved>0` / generic
+- operator 可以 accept、reject、submit corrected answer、或拖回 Arbitration
+
+operator submit_correction 也走 verbatim guard + schema 校验，不通过会直接
+拒绝写入。
+
+### 11.8 Rearbitrate
+
+Operator 把 HR/REJECTED 卡拖到 Arbitration → API 把 status 改成
+ARBITRATING。Scheduler claim 后跑 `_run_rearbitration`：
+
+- 同样调 `_arbitrate_and_apply`，但 `require_rebuttal=False` +
+  `include_closed_feedbacks=True`
+- 即使 annotator 没写 discussion reply 也能跑 arbiter
+- 决策逻辑同 §11.6（HR 只在 unresolved > 0 时）
 
 
 ## 12. 错误模型
 
-### 12.1 错误分类
+所有 in-flight 错误都是非致命的，由三层兜住：
 
-- `RuntimeError`
-  - worker crash
-  - timeout
-  - backend unavailable
-- `ProviderError`
-  - rate limit
-  - malformed provider response
-- `ValidationError`
-  - schema invalid
-  - line count mismatch
-  - manifest mismatch
-- `QualityError`
-  - QC threshold not met
-- `MergeError`
-  - sink write failure
+### 12.1 SubagentRuntime 层
 
-### 12.2 错误处理原则
+每个 LLM 调用包在 try/except 里：raise → 尽量不记录 attempt（有些路径
+`status=failed`），让上层把 task 留在 in-flight status，由 worker `finally`
+清理。
 
-- 运行时错误可以自动 retry
-- 业务质量错误进入 repair or review
-- merge 错误不回滚 task trace，只记录失败 attempt
-- 所有错误必须结构化记录
+### 12.2 Provider fallback
+
+`SubagentRuntime._generate_async` 在每次调用前包一层：
+
+```python
+try:
+    return await self._call_client(target, request)
+except Exception as exc:
+    if target == "fallback" or not _is_rate_limited(exc):
+        raise
+    return await self._call_client("fallback", request)
+```
+
+`_is_rate_limited` 识别 `openai.RateLimitError`、`status_code == 429`、
+以及 "rate limit" / "429" / "too many requests" 字符串匹配（覆盖 local-CLI
+client 抛出的非结构化异常）。
+
+Try-first 语义 —— 每次都先打主路；只在 429 时 fallback。无 circuit breaker
+/ recovery window，主路恢复就自动用回去。
+
+### 12.3 Worker `finally` 兜底
+
+worker 释放 lease + active_run，把 ANNOTATING reset 到 PENDING（参见 §10.3
+worker-bail reset）。
+
+### 12.4 Smart resume + zombie recovery
+
+下次 claim 或下次 scheduler 启动，没到达终态的 task 走 §10.4 / §10.5 的恢复
+路径。
+
+### 12.5 错误进 HR 的唯一路径
+
+- arbiter `unresolved > 0`（真不确定）
+- arbiter mechanical retry cap（3 次都失败）
+- scheduler init 的 zombie recovery
+- operator 主动 reject
+
+annotator / QC / validation 层的错误**不**直接进 HR，全部走 retry 循环 →
+（达到 max_qc_rounds）→ ARBITRATING → arbiter 决定。
 
 
 ## 13. 配置架构
 
+配置分两层：workspace-global 的 LLM profile，和每个项目的 workflow / annotator
+/ schema。
+
 ### 13.1 配置层级
 
 ```text
-project.yaml
-pipeline.yaml
-providers.yaml
-stage_routes.yaml
-annotators.yaml
-adapters/<adapter>.yaml
-external_tasks.yaml
+<workspace>/llm_profiles.yaml          # 多项目共用，profile + targets
+
+<project>/.annotation-pipeline/
+  workflow.yaml                        # runtime + 调度策略
+  annotators.yaml                      # 该项目的 annotator profile 定义
+  external_tasks.yaml                  # 外部任务系统绑定
+  callbacks.yaml                       # 回调 / outbox
+  output_schema.json                   # JSON Schema —— 所有 accepted 必须符合
 ```
 
-### 13.2 配置示例
+profile 在 scheduler 启动时加载到 registry 并冻结，YAML 改动需要重启
+runtime 才生效。
+
+### 13.2 llm_profiles.yaml 示例
 
 ```yaml
-project:
-  id: demo-jsonl
-  runtime_backend: local_subprocess
-  task_store: file_store
+profiles:
+  minimax_2.7:
+    provider: openai_compatible
+    provider_flavor: minimax
+    model: MiniMax-M2.7
+    base_url: https://api.minimaxi.com/v1
+    timeout_seconds: 300
+    api_key: <secret>
 
-pipeline:
-  task_size: 500
-  concurrency:
-    annotation: 8
-    qc: 2
-  retry:
-    runtime_error_delay_seconds: 3600
-    max_attempts: 5
+  deepseek_flash:
+    provider: openai_compatible
+    provider_flavor: deepseek
+    model: deepseek-v4-flash
+    base_url: https://api.deepseek.com
+    timeout_seconds: 120
+    api_key: <secret>
 
-plugins:
-  dataset_adapter: jsonl_basic
-  prompt_builder: jsonl_basic
-  validator: schema_v1
-  qc_policy: random_sample_50
-  merge_sink: file_append
+  codex_5.5_arbiter:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.5
+    reasoning_effort: high
+    timeout_seconds: 900
 
-providers:
-  general_llm:
-    kind: openai_compatible
-    models: ["general-large", "general-small"]
-    default_model: general-large
-    effort_options: ["low", "medium", "high"]
-    secret_ref: env:GENERAL_LLM_API_KEY
-    enabled: true
-  review_llm:
-    kind: chat_completion
-    models: ["review-large", "review-fast"]
-    default_model: review-large
-    effort_options: ["low", "medium", "high"]
-    secret_ref: env:REVIEW_LLM_API_KEY
-    enabled: true
+  codex_5.4_mini:
+    provider: local_cli
+    cli_kind: codex
+    cli_binary: codex
+    model: gpt-5.4-mini
+    reasoning_effort: medium
+    timeout_seconds: 900
 
-stage_routes:
-  annotation:
-    primary_provider_id: general_llm
-    primary_model: general-large
-    primary_effort: medium
-    fallback_provider_id: review_llm
-    fallback_model: review-fast
-    fallback_effort: high
-    fallback_delay_seconds: 3600
-  qc:
-    primary_provider_id: review_llm
-    primary_model: review-large
-    primary_effort: high
-    fallback_provider_id: general_llm
-    fallback_model: general-large
-    fallback_effort: high
-    fallback_delay_seconds: 3600
-  repair:
-    primary_provider_id: general_llm
-    primary_model: general-large
-    primary_effort: high
-    fallback_provider_id: review_llm
-    fallback_model: review-large
-    fallback_effort: high
-    fallback_delay_seconds: 3600
-  merge:
-    primary_provider_id: general_llm
-    primary_model: general-small
-    primary_effort: high
-    fallback_provider_id: general_llm
-    fallback_model: general-large
-    fallback_effort: high
-    fallback_delay_seconds: 3600
+targets:
+  annotation: minimax_2.7
+  qc: deepseek_flash
+  arbiter: codex_5.5_arbiter
+  fallback: codex_5.4_mini
+  coordinator: glm_46
 
-annotators:
-  text_extraction_default:
-    display_name: Default text extractor
-    modality: ["text"]
-    annotation_types: ["extraction", "classification"]
-    input_artifact_kinds: ["raw_slice"]
-    output_artifact_kinds: ["output"]
-    provider_route_id: annotation
-    preview_renderer_id: null
-    human_review_policy_id: null
-    fallback_annotator_id: null
-    enabled: true
-  vc_detection_bbox:
-    display_name: VC detection bounding box annotator
-    modality: ["image"]
-    annotation_types: ["bounding_box"]
-    input_artifact_kinds: ["image_source"]
-    output_artifact_kinds: ["image_bbox_annotation"]
-    provider_route_id: null
-    external_tool_id: vc_detection
-    preview_renderer_id: image_bbox_renderer
-    human_review_policy_id: image_bbox_spot_check
-    fallback_annotator_id: human_image_bbox_queue
-    enabled: true
-  human_image_bbox_queue:
-    display_name: Human image bbox queue
-    modality: ["image"]
-    annotation_types: ["bounding_box"]
-    input_artifact_kinds: ["image_source"]
-    output_artifact_kinds: ["image_bbox_annotation"]
-    provider_route_id: null
-    external_tool_id: human_queue
-    preview_renderer_id: image_bbox_renderer
-    human_review_policy_id: image_bbox_required_review
-    fallback_annotator_id: null
-    enabled: true
-
-external_tasks:
-  enabled: false
-  adapter: http_json
-  pull_url: https://tasks.example.com/api/tasks/pull
-  status_url: https://tasks.example.com/api/tasks/status
-  submit_url: https://tasks.example.com/api/tasks/submit
-  auth_secret_ref: env:EXTERNAL_TASK_API_TOKEN
-  idempotency_key: project_id:external_task_id:attempt_index
-  max_outbox_attempts: 10
+limits:
+  local_cli_global_concurrency: 8     # 同时跑的 codex/claude subprocess 上限
 ```
+
+`targets` 是逻辑角色 → profile 的映射。runtime 通过
+`registry.resolve("annotation")` 拿到当前 annotation 该用的 profile。
+fallback 是 `_generate_async` 在 429 时切换的目标（参见 §12.2）。
+
+### 13.3 workflow.yaml 示例
+
+```yaml
+runtime:
+  max_concurrent_tasks: 24            # async worker 数
+  max_qc_rounds: 3                    # 触发 arbiter 的 round 阈值
+  worker_task_timeout_seconds: 900    # 单 task 硬上限
+  arbiter_verbatim_retries: 2         # arbiter 内部 retry 次数
+
+qc_policy:
+  sampling: full                       # 还是 random / risk_based
+```
+
+### 13.4 annotators.yaml 示例
+
+```yaml
+annotators:
+  default_text:
+    display_name: Default text annotator
+    modalities: [text]
+    annotation_types: [extraction, classification]
+    provider_target: annotation        # 引用 llm_profiles.yaml 的 target
+    enabled: true
+```
+
+### 13.5 output_schema.json
+
+JSON Schema (Draft 2020-12) 约束 annotator / arbiter / operator 的输出。
+Verbatim 校验 (`find_verbatim_violations`) 额外约束 entity / json_structures
+phrase 必须是 `input.text` 子串。这两层一起保证 accepted artifact 不含幻觉。
 
 
 ## 14. 接口设计

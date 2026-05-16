@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-05-16
+
+- BREAKING (HR routing): the runtime no longer escalates to HUMAN_REVIEW on
+  any "couldn't resolve" outcome. HR is now reserved strictly for genuine
+  arbiter uncertainty — verdicts with `confidence` label `tentative` or
+  `unsure` (i.e. `arb["unresolved"] > 0`). All other non-terminal arbiter
+  outcomes (codex subprocess error, missing `corrected_annotation`, JSON
+  parse fail, non-verbatim correction, unknown verdict value) are
+  classified as **mechanical failures**: the task stays in `arbitrating`
+  status for re-pickup, and the next worker cycle re-runs the arbiter on
+  the same annotation (the annotation didn't change — there's no point
+  re-running the annotator).
+- New `arb["mechanical_fail"]` counter in `_arbitrate_and_apply` outcome.
+  The "qc-wins-but-no-fix" case used to bump `unresolved` (forcing HR);
+  now bumps `mechanical_fail` (allowing retry).
+- `SubagentRuntime.ARBITER_MECHANICAL_RETRY_CAP = 3`. The runtime tracks
+  consecutive mechanical retries per task in `task.metadata.arbiter_mechanical_retries`.
+  When the counter reaches 3, the task is forced to HR with a clear reason.
+  Counter is persistent across restarts.
+- Provider fallback: `_generate_async` now wraps the target client and
+  retries via the `fallback` target on rate-limit errors
+  (`openai.RateLimitError`, `status_code == 429`, or message strings
+  matching "rate limit"/"429"/"too many requests"). No circuit breaker;
+  try-first semantics.
+- Codex CLI invocation gains `--ignore-rules` and `--config enabled_tools=[]`
+  to suppress user-installed rule files and tool-use, keeping arbiter calls
+  pure-JSON and faster.
+- Worker bail reset: when an `annotating` worker raises (rate-limit etc.),
+  the `finally` block resets the task to `pending` instead of leaving
+  `annotating` for the smart-resume path. Eliminates a tight loop that
+  produced ~700 spurious audit events/min during MiniMax 429 storms.
+- Audit script `scripts/audit_verbatim_accepted.py` to scan ACCEPTED tasks
+  for verbatim violations (5% audit found ~11% violations) and route
+  them back to ARBITRATING under the new arbiter / verbatim guard.
+- HR drawer banner: drop redundant "Routed to human review." fallback line.
+- `docs/RUNTIME_DESIGN.md` removed; content merged into
+  `TECHNICAL_ARCHITECTURE.md` §6 (state machine), §10 (runtime), §11
+  (execution model), §12 (error model), §13 (config) — these sections
+  now describe the actual implementation rather than the original
+  aspirational design.
+
 ## 2026-05-11
 
 - Auto-escalate tasks to HUMAN_REVIEW after `RuntimeConfig.max_qc_rounds` (default 3) QC rejections, replacing the silent infinite-loop hazard. Triggered by counting `FeedbackRecord(source_stage=QC)` per task; configurable via `runtime.max_qc_rounds` in `workflow.yaml`.

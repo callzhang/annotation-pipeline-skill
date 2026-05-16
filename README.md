@@ -447,10 +447,18 @@ Common provider routing examples:
 
 ```yaml
 targets:
-  annotation: local_codex
-  qc: deepseek_default
-  coordinator: local_codex
+  annotation: local_codex      # required — main annotation LLM
+  qc: deepseek_default         # required — QC LLM
+  arbiter: local_codex         # required — arbiter LLM (invoked at max_qc_rounds)
+  fallback: deepseek_default   # required — automatic fallback when annotation
+                               # target hits a 429 rate limit
+  coordinator: local_codex     # optional — used by manual coordination flows
 ```
+
+The runtime resolves these logical roles to profiles at startup. `fallback`
+is invoked transparently when `annotation` raises a rate-limit error; pick a
+profile on a different account / API quota so the fallback isn't sharing the
+same limit.
 
 Use `provider: openai_responses` for OpenAI Responses API, `provider: openai_compatible` with `provider_flavor: deepseek`, `glm`, or `minimax` for compatible APIs, and `provider: local_cli` with `cli_kind: codex` or `claude` for local CLI subagents. Keep secrets in environment variables referenced by `api_key_env`.
 
