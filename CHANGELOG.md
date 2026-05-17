@@ -2,14 +2,65 @@
 
 ## 2026-05-17
 
-- Design + plan for V1.2 prior-driven verifier feature. Targets the
-  cascade problem inherent in multi-agent LLM aggregation (correlated
-  errors across same-family LLMs) by introducing an external statistical
-  verifier built from the project's empirical (span, type) distribution.
+- V1.2 prior-driven verifier feature SHIPPED. Implementation complete
+  per the 13-task plan; bootstrap script populated 155k (project, span,
+  type) counters from 4133 historical accepted tasks; runtime restarted
+  with the verifier active.
   - Spec: `docs/superpowers/specs/2026-05-17-prior-driven-verifier-design.md`
   - Plan: `docs/superpowers/plans/2026-05-17-prior-driven-verifier.md`
-  - PRODUCT_DESIGN §8.5 + TECHNICAL_ARCHITECTURE §11.9 updated.
-  - No code changes yet; implementation tracked via the plan's 13 tasks.
+  - PRODUCT_DESIGN §8.5 + TECHNICAL_ARCHITECTURE §11.9 cover the design.
+
+- **Operator setup note**: the verifier's second-arbiter path needs an
+  `arbiter_secondary` target in the workspace's `llm_profiles.yaml`
+  (gitignored because it carries API keys). For a different-family
+  cross-check, add a profile like:
+
+  ```yaml
+  profiles:
+    claude_sonnet_arbiter:
+      provider: local_cli
+      cli_kind: claude
+      cli_binary: claude
+      model: sonnet
+      permission_mode: dontAsk
+      timeout_seconds: 900
+  targets:
+    arbiter_secondary: claude_sonnet_arbiter
+  ```
+
+  Without this target the runtime falls back to first-arbiter acceptance
+  on prior-divergent tasks (recorded as `prior_verifier_action=
+  second_arbiter_unavailable` in the audit log).
+
+- New table `entity_statistics` (additive migration). New service
+  `EntityStatisticsService` with `increment` / `distribution` / `check`
+  / `contested_spans` and a module-level `iter_span_decisions` helper.
+
+- Wired into all four surfaces:
+  - QC-pass (annotator+QC consensus): divergent → ARBITRATING + BLOCKING
+    `prior_disagreement` feedback; agree → ACCEPTED + stats++ +
+    conventions++; cold_start → ACCEPTED + stats++ (no conventions++)
+  - First-arbiter accept: stats++ then re-check against prior; on
+    divergence, mark task metadata for second-arbiter dispatch
+  - Scheduler claim loop: tasks with the divergence flag get routed to
+    `_resolve_first_arbiter_divergence_async` instead of `run_task_async`
+  - Second-arbiter resolution: matches first → accept first; matches
+    prior → flip annotation to prior's type; third option → HR
+  - HumanReviewService.submit_correction: verifier check + `force=True`
+    override + stats++ with `HR_WEIGHT=5`
+  - HumanReviewService.decide(accept): verifier check (no force here;
+    operator must use submit_correction to override) + stats++
+
+- New `GET /api/posterior-audit` endpoint + Posterior Audit tab in the
+  dashboard. Operator-triggered "Check" lists task-level deviations
+  (Send to HR) + project-level contested spans (Declare canonical
+  type).
+
+- Bootstrap script `scripts/bootstrap_entity_statistics.py` seeds
+  stats from existing ACCEPTED tasks. HR_WEIGHT=5 for HR-authored
+  artifacts, 1x for everything else. The historical sample is "clean"
+  because all current ACCEPTED tasks predate the dictionary-injection
+  feature.
 
 ## 2026-05-16
 
