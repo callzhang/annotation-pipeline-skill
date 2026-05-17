@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import sys
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -497,6 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--workspace", type=Path, default=Path.cwd() / "projects")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8509)
+    serve_parser.add_argument("--reload", action="store_true", help="Auto-restart on .py file changes")
     serve_parser.set_defaults(handler=handle_serve)
 
     _register_db_commands(subparsers)
@@ -1391,9 +1395,10 @@ def handle_provider_targets(args: argparse.Namespace) -> int:
 
 
 def handle_export_training_data(args: argparse.Namespace) -> int:
+    import uuid as _uuid
     store = SqliteStore.open(args.project_root / ".annotation-pipeline")
-    export_id = args.export_id
-    output_dir = args.output_dir or store.root / "exports" / (export_id or args.project_id)
+    export_id = args.export_id or "export-" + _uuid.uuid4().hex[:12]
+    output_dir = args.output_dir or store.root / "exports" / export_id
     manifest = TrainingDataExportService(store).export_jsonl(
         project_id=args.project_id,
         output_dir=output_dir,
@@ -1553,11 +1558,39 @@ def discover_project_stores(workspace: Path) -> dict[str, Path]:
     return result
 
 
+def _start_reload_watcher(watch_dir: Path, interval: float = 1.0) -> None:
+    """Background thread: restart the process when any .py file mtime changes."""
+    mtimes: dict[Path, float] = {}
+    for p in watch_dir.rglob("*.py"):
+        try:
+            mtimes[p] = p.stat().st_mtime
+        except OSError:
+            pass
+
+    def _watch() -> None:
+        while True:
+            time.sleep(interval)
+            for p in watch_dir.rglob("*.py"):
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    continue
+                if mtimes.get(p) != mtime:
+                    print(f"[reload] {p.name} changed — restarting", flush=True)
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
+
+
 def handle_serve(args: argparse.Namespace) -> int:
     stores_map = discover_project_stores(args.workspace)
     if not stores_map:
         print(json.dumps({"error": "no_projects_found", "workspace": str(args.workspace)}))
         return 1
+    if getattr(args, "reload", False):
+        package_dir = Path(__file__).parent.parent
+        _start_reload_watcher(package_dir)
     stores = {key: SqliteStore.open(path / ".annotation-pipeline") for key, path in stores_map.items()}
     default_key = next(iter(stores))
     default_store = stores[default_key]

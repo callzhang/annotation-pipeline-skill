@@ -29,15 +29,19 @@ def test_readiness_report_recommends_export_when_accepted_tasks_are_exportable(t
         "ready_for_training": False,
         "accepted_count": 1,
         "exported_count": 0,
-        "exportable_count": 1,
+        "pending_export_count": 1,
         "open_feedback_count": 0,
+        "resolved_feedback_count": 0,
+        "closed_feedback_count": 0,
         "human_review_count": 0,
         "validation_blockers": [],
         "pending_outbox_count": 0,
         "dead_letter_outbox_count": 0,
         "latest_export": None,
+        "exports": [],
         "recommended_next_action": "export_training_data",
         "next_command": "annotation-pipeline export training-data --project-id pipe",
+        "export_command": f"annotation-pipeline export training-data --project-root {tmp_path} --project-id pipe",
     }
 
 

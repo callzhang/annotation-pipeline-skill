@@ -21,10 +21,10 @@ const summary: OutboxSummary = {
 
 describe("outbox helpers", () => {
   it("orders outbox counts for operator scanning", () => {
-    expect(outboxFacts(summary)).toEqual([
+    expect(outboxFacts(summary).map((f) => ({ label: f.label, value: f.value }))).toEqual([
       { label: "Pending", value: 2 },
       { label: "Sent", value: 3 },
-      { label: "Dead letters", value: 1 },
+      { label: "Dead Letters", value: 1 },
     ]);
   });
 

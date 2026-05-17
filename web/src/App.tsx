@@ -226,7 +226,7 @@ export default function App() {
           Runtime
         </button>
         <button className={viewMode === "output" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("output")}>
-          Output
+          Export
         </button>
         <button className={viewMode === "providers" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("providers")}>
           Providers
@@ -258,7 +258,7 @@ export default function App() {
         />
       ) : null}
       {viewMode === "runtime" ? <RuntimePanel storeKey={selectedStoreKey} /> : null}
-      {viewMode === "output" ? <OutputPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
+      {viewMode === "output" ? <OutputPanel projectId={selectedProjectId} storeKey={selectedStoreKey} storePath={stores.find((s) => s.key === selectedStoreKey)?.path ?? null} /> : null}
       {viewMode === "providers" ? <ProvidersPanel /> : null}
       {viewMode === "config" ? <ConfigPanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}

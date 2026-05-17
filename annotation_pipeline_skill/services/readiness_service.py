@@ -4,6 +4,8 @@ from typing import Any
 
 from annotation_pipeline_skill.core.models import ArtifactRef, ExportManifest, Task
 from annotation_pipeline_skill.core.states import OutboxStatus, TaskStatus
+
+_TERMINAL_STATUSES = {TaskStatus.ACCEPTED, TaskStatus.REJECTED, TaskStatus.CANCELLED}
 from annotation_pipeline_skill.services.feedback_service import build_feedback_consensus_summary
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
@@ -34,11 +36,17 @@ def build_readiness_report(store: SqliteStore, project_id: str) -> dict[str, Any
             continue
         exportable_task_ids.append(task.task_id)
 
-    open_feedback = [
-        feedback_id
-        for task in tasks
-        for feedback_id in build_feedback_consensus_summary(store, task.task_id)["open_feedback"]
-    ]
+    active_tasks = [task for task in tasks if task.status not in _TERMINAL_STATUSES]
+    open_feedback: list[str] = []
+    resolved_feedback_count = 0
+    closed_feedback_count = 0
+    for task in tasks:
+        summary = build_feedback_consensus_summary(store, task.task_id)
+        resolved_feedback_count += summary["consensus_feedback"]
+        if task.status in _TERMINAL_STATUSES:
+            closed_feedback_count += len(summary["open_feedback"])
+        else:
+            open_feedback.extend(summary["open_feedback"])
     pending_outbox_count = sum(
         1
         for record in store.list_outbox()
@@ -62,7 +70,7 @@ def build_readiness_report(store: SqliteStore, project_id: str) -> dict[str, Any
 
     recommended_next_action = _recommended_next_action(
         accepted_count=len(accepted_tasks),
-        exportable_count=len(exportable_task_ids),
+        exportable_count=len(exportable_task_ids),  # task count for logic, not rows
         validation_blockers=validation_blockers,
         human_review_count=len(human_review_tasks),
         open_feedback_count=len(open_feedback),
@@ -71,21 +79,44 @@ def build_readiness_report(store: SqliteStore, project_id: str) -> dict[str, Any
         ready_for_training=ready_for_training,
     )
 
+    task_by_id = {task.task_id: task for task in tasks}
+    exportable_task_ids_set = set(exportable_task_ids)
+
     return {
         "project_id": project_id,
         "ready_for_training": ready_for_training,
-        "accepted_count": len(accepted_tasks),
-        "exported_count": len(exported_task_ids),
-        "exportable_count": len(exportable_task_ids),
+        "accepted_count": sum(_task_row_count(t) for t in accepted_tasks),
+        "exported_count": sum(
+            _task_row_count(task_by_id[tid]) for tid in exported_task_ids if tid in task_by_id
+        ),
+        "pending_export_count": sum(
+            _task_row_count(task_by_id[tid]) for tid in exportable_task_ids_set if tid in task_by_id
+        ),
         "open_feedback_count": len(open_feedback),
+        "resolved_feedback_count": resolved_feedback_count,
+        "closed_feedback_count": closed_feedback_count,
         "human_review_count": len(human_review_tasks),
         "validation_blockers": validation_blockers,
         "pending_outbox_count": pending_outbox_count,
         "dead_letter_outbox_count": dead_letter_outbox_count,
         "latest_export": latest_export,
+        "exports": _all_exports(manifests),
         "recommended_next_action": recommended_next_action,
         "next_command": _next_command(project_id, recommended_next_action),
+        "export_command": (
+            f"annotation-pipeline export training-data"
+            f" --project-root {store.root.parent}"
+            f" --project-id {project_id}"
+        ),
     }
+
+
+def _task_row_count(task: Task) -> int:
+    raw = task.source_ref.get("row_count") if isinstance(task.source_ref, dict) else None
+    try:
+        return int(raw) if raw is not None else 1
+    except (TypeError, ValueError):
+        return 1
 
 
 def _latest_annotation_artifact(store: SqliteStore, task: Task) -> ArtifactRef | None:
@@ -119,6 +150,10 @@ def _latest_export(manifests: list[ExportManifest]) -> dict[str, Any] | None:
     manifest = _latest_export_manifest(manifests)
     if manifest is None:
         return None
+    return _manifest_summary(manifest)
+
+
+def _manifest_summary(manifest: ExportManifest) -> dict[str, Any]:
     return {
         "export_id": manifest.export_id,
         "created_at": manifest.created_at.isoformat(),
@@ -126,6 +161,10 @@ def _latest_export(manifests: list[ExportManifest]) -> dict[str, Any] | None:
         "included": len(manifest.task_ids_included),
         "excluded": len(manifest.task_ids_excluded),
     }
+
+
+def _all_exports(manifests: list[ExportManifest]) -> list[dict[str, Any]]:
+    return [_manifest_summary(m) for m in sorted(manifests, key=lambda m: m.created_at, reverse=True)]
 
 
 def _recommended_next_action(

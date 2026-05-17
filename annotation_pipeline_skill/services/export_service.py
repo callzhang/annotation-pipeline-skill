@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ class TrainingDataExportService:
         export_id: str | None = None,
         enqueue_external_submit: bool = False,
     ) -> ExportManifest:
-        export_id = export_id or "export-" + sha256(project_id.encode("utf-8")).hexdigest()[:12]
+        export_id = export_id or "export-" + uuid.uuid4().hex[:12]
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / "training_data.jsonl"
 

@@ -203,8 +203,10 @@ export interface ReadinessReport {
   ready_for_training: boolean;
   accepted_count: number;
   exported_count: number;
-  exportable_count: number;
+  pending_export_count: number;
   open_feedback_count: number;
+  resolved_feedback_count: number;
+  closed_feedback_count: number;
   human_review_count: number;
   validation_blockers: Array<Record<string, unknown>>;
   pending_outbox_count: number;
@@ -216,8 +218,16 @@ export interface ReadinessReport {
     included: number;
     excluded: number;
   } | null;
+  exports: Array<{
+    export_id: string;
+    created_at: string;
+    output_paths: string[];
+    included: number;
+    excluded: number;
+  }>;
   recommended_next_action: string;
   next_command: string | null;
+  export_command: string;
 }
 
 export interface OutboxRecord {
