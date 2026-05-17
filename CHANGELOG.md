@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-05-17
+
+- Design + plan for V1.2 prior-driven verifier feature. Targets the
+  cascade problem inherent in multi-agent LLM aggregation (correlated
+  errors across same-family LLMs) by introducing an external statistical
+  verifier built from the project's empirical (span, type) distribution.
+  - Spec: `docs/superpowers/specs/2026-05-17-prior-driven-verifier-design.md`
+  - Plan: `docs/superpowers/plans/2026-05-17-prior-driven-verifier.md`
+  - PRODUCT_DESIGN §8.5 + TECHNICAL_ARCHITECTURE §11.9 updated.
+  - No code changes yet; implementation tracked via the plan's 13 tasks.
+
 ## 2026-05-16
 
 - BREAKING (HR routing): the runtime no longer escalates to HUMAN_REVIEW on

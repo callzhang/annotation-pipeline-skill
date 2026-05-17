@@ -387,9 +387,13 @@ ActiveRun:
 authoritative metadata store. Every workspace contains:
 
 - `db.sqlite` — task / event / attempt / feedback / outbox / lease / document
-  metadata in 13 tables (see `store/schema.sql`). WAL mode, single-machine
-  multi-process safe; per-thread connections via `threading.local()` so the
-  threaded HTTP dashboard can share the store safely.
+  metadata in 13 tables (see `store/schema.sql`), plus two additive tables
+  added via `_ADDITIVE_MIGRATIONS_SQL`: `entity_conventions` (high-trust
+  prompt-injection dictionary) and `entity_statistics` (per-(project, span)
+  type-frequency counter used by the prior verifier — see §11.9). WAL mode,
+  single-machine multi-process safe; per-thread connections via
+  `threading.local()` so the threaded HTTP dashboard can share the store
+  safely.
 - `artifacts/` — annotation result files referenced from `artifact_refs.path`.
 - `document_versions/<doc>/<version>.md` — guideline content; DB row stores
   path + sha256.
@@ -927,6 +931,66 @@ ARBITRATING。Scheduler claim 后跑 `_run_rearbitration`：
 - 即使 annotator 没写 discussion reply 也能跑 arbiter
 - 决策逻辑同 §11.6（HR 只在 unresolved > 0 时）
 
+### 11.9 Prior-driven verifier（V1.2）
+
+理论背景：多 agent LLM 标注存在系统性 correlated error（实测
+GPT-4/Claude/Gemini 之间 forecasting error 相关性 r=0.78）。Annotator+QC
+consensus 不是独立投票，arbiter 是另一个 LLM，纯 LLM 聚合规则在没有外部
+verifier 时无法可靠避开 cascade。Verifier 用项目内历史决策的经验分布作为
+**外部验证信号**，独立于 LLM 决策本身。
+
+详细设计：`docs/superpowers/specs/2026-05-17-prior-driven-verifier-design.md`。
+
+**双表分工**:
+
+| 表 | 输入 | 用途 |
+|---|---|---|
+| `entity_statistics` | ALL ACCEPTED（含 arbiter），HR 加权 5x | verifier 查 prior |
+| `entity_conventions`（已存在） | QC consensus + verifier agree，或 HR 决定（**不含** arbiter） | 注入 prompt |
+
+`entity_conventions` 严格排除 arbiter 是因为 arbiter 是 LLM，如果错误进
+prompt 会 self-reinforcement。`entity_statistics` 接受 arbiter 因为它是
+empirical distribution 不会被 prompt 看到，cascade 路径被切断。
+
+**Verifier 语义** (`PriorVerifier.check`)：
+- `total < 10` → `cold_start`（不动）
+- 主类型 < 80% → `agree`（prior 不够独断）
+- 主类型 == proposed_type → `agree`
+- 否则 → `divergent`
+
+**三个触发点**:
+
+1. **QC pass**: annotator+QC consensus 后查 verifier。`divergent` →
+   路由到 ARBITRATING + 写 `prior_disagreement` BLOCKING feedback。
+   `agree`/`cold_start` → ACCEPTED + stats++（`agree` 时 conventions++）。
+
+2. **Arbiter ruling**: arbiter 出 verdict 后 post-check 一次。`divergent`
+   → 标记 task metadata，scheduler 下个 cycle pick up 后调 **第二个
+   arbiter**（不同 model family，配置 `arbiter_secondary` target）。
+
+3. **HR submit_correction**: 同样查 verifier，`divergent` 时 raise
+   `SchemaValidationError`，UI 可让 operator 用 `force=True` 覆盖（human
+   authority）。
+
+**第二 arbiter 三向解析**:
+
+| 第二 arbiter 选择 | 结果 |
+|---|---|
+| 与第一 arbiter 同 | ACCEPTED，两 LLM 推翻 prior |
+| 与 prior 主类型同 | 改写 annotation，ACCEPTED 用 prior 类型 |
+| 第三种 | HR（三方不一致需人裁定） |
+
+**Posterior Audit tab**:
+Operator 点 "Check" 后端扫所有 ACCEPTED：
+- **Task-level deviations**: 当前 annotation 与 prior 分歧的 (task,
+  span, type) 列表，每行 "Send to HR" 按钮
+- **Contested spans**: prior 分布本身没共识的 span（≥10 样本，
+  无类型 ≥80%，至少两类型各 ≥20%），每行 "Declare canonical type" 让
+  operator 一次定调，写 `entity_conventions` + 加权 `entity_statistics`
+
+实现入口：`annotation_pipeline_skill/services/entity_statistics_service.py`
+和 `runtime/subagent_cycle.py` 的 verifier 注入点。
+
 
 ## 12. 错误模型
 
@@ -1041,6 +1105,7 @@ targets:
   annotation: minimax_2.7
   qc: deepseek_flash
   arbiter: codex_5.5_arbiter
+  arbiter_secondary: claude_sonnet_arbiter   # V1.2 §11.9 — 不同 family，prior verifier 触发时调用
   fallback: codex_5.4_mini
   coordinator: glm_46
 
@@ -1060,6 +1125,14 @@ runtime:
   max_qc_rounds: 3                    # 触发 arbiter 的 round 阈值
   worker_task_timeout_seconds: 900    # 单 task 硬上限
   arbiter_verbatim_retries: 2         # arbiter 内部 retry 次数
+  prior_verifier:                     # V1.2, §11.9
+    enabled: true
+    min_prior_samples: 10             # cold_start 阈值
+    dominance_threshold: 0.80         # 主类型占比阈值
+    hr_weight: 5                      # HR 决策权重
+  posterior_audit:
+    min_contested_samples: 10
+    min_runner_up_share: 0.20         # 至少两类型各 ≥20% 才算 contested
 
 qc_policy:
   sampling: full                       # 还是 random / risk_based
