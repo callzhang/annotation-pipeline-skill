@@ -18,3 +18,8 @@ web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
 projects/
+# Per-worker codex CLI homes (auto-created by local_cli.isolated_codex_home;
+# contains auth.json credentials + transient sqlite state — never commit).
+.annotation-pipeline-codex-homes/
+# Local Claude Code settings.
+.claude/
