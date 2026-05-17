@@ -110,6 +110,35 @@ class HumanReviewService:
                             for t in trailing
                         ],
                     )
+                # Prior verifier check — no force override here; operator must
+                # use submit_correction(force=True) to override the prior.
+                from annotation_pipeline_skill.services.entity_statistics_service import (
+                    EntityStatisticsService,
+                    iter_span_decisions,
+                )
+                _ess = EntityStatisticsService(self.store)
+                _divergent = []
+                for _span, _entity_type in iter_span_decisions(latest_annotation):
+                    _r = _ess.check(
+                        project_id=task.pipeline_id,
+                        span=_span,
+                        proposed_type=_entity_type,
+                    )
+                    if _r.status == "divergent":
+                        _divergent.append(_r)
+                if _divergent:
+                    raise SchemaValidationError(
+                        f"underlying annotation disagrees with project prior on "
+                        f"{len(_divergent)} span(s); use submit_correction with force=True to override",
+                        [{
+                            "kind": "prior_disagreement",
+                            "path": f"output.entities[{_r.proposed_type}]",
+                            "message": (
+                                f"span {_r.span!r} proposed as {_r.proposed_type!r} but "
+                                f"prior ({_r.dominant_count}/{_r.total}) → {_r.dominant_type!r}"
+                            ),
+                        } for _r in _divergent],
+                    )
         decision = {
             "task_id": task_id,
             "action": action,
@@ -131,6 +160,12 @@ class HumanReviewService:
         )
         self.store.append_event(event)
         self.store.save_task(task)
+
+        # Update stats with HR weight (5x) when accepting via decide.
+        if next_status is TaskStatus.ACCEPTED:
+            _ann = self._latest_annotation_payload(task_id)
+            if _ann is not None:
+                self._increment_stats_from_hr(task, _ann)
 
         # Persist the human reviewer's feedback as a first-class FeedbackRecord
         # so it appears in the Discussions tab alongside QC feedback.
@@ -161,6 +196,7 @@ class HumanReviewService:
         answer: dict,
         actor: str,
         note: str | None,
+        force: bool = False,
     ) -> HumanCorrectionResult:
         task = self.store.load_task(task_id)
         if task.status is not TaskStatus.HUMAN_REVIEW:
@@ -210,6 +246,36 @@ class HumanReviewService:
                 ],
             )
 
+        # Prior verifier check — skipped on operator-force override.
+        if not force:
+            from annotation_pipeline_skill.services.entity_statistics_service import (
+                EntityStatisticsService,
+                iter_span_decisions,
+            )
+            svc = EntityStatisticsService(self.store)
+            divergent = []
+            for span, entity_type in iter_span_decisions(answer):
+                r = svc.check(
+                    project_id=task.pipeline_id,
+                    span=span,
+                    proposed_type=entity_type,
+                )
+                if r.status == "divergent":
+                    divergent.append(r)
+            if divergent:
+                raise SchemaValidationError(
+                    f"corrected answer disagrees with project prior on "
+                    f"{len(divergent)} span(s); pass force=True to override",
+                    [{
+                        "kind": "prior_disagreement",
+                        "path": f"output.entities[{r.proposed_type}]",
+                        "message": (
+                            f"span {r.span!r} proposed as {r.proposed_type!r} but "
+                            f"prior ({r.dominant_count}/{r.total}) → {r.dominant_type!r}"
+                        ),
+                    } for r in divergent],
+                )
+
         artifact = self._write_correction_artifact(task_id, answer, actor=actor, note=note)
         event = transition_task(
             task,
@@ -231,7 +297,26 @@ class HumanReviewService:
         # operator made vs the latest annotation. Captured per-project so
         # future tasks in the same project benefit from the human's call.
         self._record_conventions_from_correction(task, answer, actor)
+        # Update stats with HR weight (5x) — done for all submissions,
+        # including force-overridden ones.
+        self._increment_stats_from_hr(task, answer)
         return HumanCorrectionResult(task=task, artifact=artifact, answer=answer)
+
+    def _increment_stats_from_hr(self, task: Task, answer: dict) -> None:
+        from annotation_pipeline_skill.services.entity_statistics_service import (
+            HR_WEIGHT,
+            EntityStatisticsService,
+            iter_span_decisions,
+        )
+        svc = EntityStatisticsService(self.store)
+        for span, entity_type in iter_span_decisions(answer):
+            try:
+                svc.increment(
+                    project_id=task.pipeline_id, span=span,
+                    entity_type=entity_type, weight=HR_WEIGHT,
+                )
+            except Exception:  # noqa: BLE001
+                continue
 
     def _record_conventions_from_correction(self, task: Task, answer: dict, actor: str) -> None:
         from annotation_pipeline_skill.services.entity_convention_service import (

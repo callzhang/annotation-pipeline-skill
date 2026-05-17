@@ -302,3 +302,82 @@ def test_decide_accept_blocks_when_underlying_annotation_has_violations(tmp_path
     assert any("non_verbatim_span" in e["kind"] for e in exc.value.errors)
     # Task status unchanged
     assert store.load_task("t-hr-accept-bad").status is TaskStatus.HUMAN_REVIEW
+
+
+def test_submit_correction_rejects_when_against_prior(tmp_path):
+    import pytest
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.core.schema_validation import SchemaValidationError
+    from annotation_pipeline_skill.services.entity_statistics_service import (
+        EntityStatisticsService,
+    )
+    from annotation_pipeline_skill.services.human_review_service import (
+        HumanReviewService,
+    )
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    svc = EntityStatisticsService(store)
+    for _ in range(12):
+        svc.increment(project_id="p", span="Apple", entity_type="organization")
+
+    schema = {"type": "object", "additionalProperties": False, "required": ["rows"],
+              "properties": {"rows": {"type": "array"}}}
+    task = Task.new(
+        task_id="hr-1", pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {
+            "rows": [{"row_index": 0, "input": "Apple is mentioned"}],
+            "annotation_guidance": {"output_schema": schema},
+        }},
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    hr = HumanReviewService(store)
+    answer = {"rows": [{"row_index": 0, "output": {"entities": {"technology": ["Apple"]}}}]}
+    with pytest.raises(SchemaValidationError) as excinfo:
+        hr.submit_correction(task_id="hr-1", answer=answer, actor="op", note=None)
+    assert any(
+        e.get("kind") == "prior_disagreement" for e in (excinfo.value.errors or [])
+    )
+
+
+def test_submit_correction_with_force_bypasses_verifier(tmp_path):
+    from annotation_pipeline_skill.core.models import Task
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.entity_statistics_service import (
+        EntityStatisticsService,
+    )
+    from annotation_pipeline_skill.services.human_review_service import (
+        HumanReviewService,
+    )
+    from annotation_pipeline_skill.store.sqlite_store import SqliteStore
+
+    store = SqliteStore.open(tmp_path)
+    svc = EntityStatisticsService(store)
+    for _ in range(12):
+        svc.increment(project_id="p", span="Apple", entity_type="organization")
+
+    schema = {"type": "object", "additionalProperties": False, "required": ["rows"],
+              "properties": {"rows": {"type": "array"}}}
+    task = Task.new(
+        task_id="hr-2", pipeline_id="p",
+        source_ref={"kind": "jsonl", "payload": {
+            "rows": [{"row_index": 0, "input": "Apple is mentioned"}],
+            "annotation_guidance": {"output_schema": schema},
+        }},
+    )
+    task.status = TaskStatus.HUMAN_REVIEW
+    store.save_task(task)
+
+    hr = HumanReviewService(store)
+    answer = {"rows": [{"row_index": 0, "output": {"entities": {"technology": ["Apple"]}}}]}
+    result = hr.submit_correction(
+        task_id="hr-2", answer=answer, actor="op", note=None, force=True,
+    )
+    assert result.task.status is TaskStatus.ACCEPTED
+    # HR-overridden decision still updates stats with HR weight (5x).
+    assert svc.distribution(project_id="p", span="Apple") == {
+        "organization": 12, "technology": 5,
+    }
