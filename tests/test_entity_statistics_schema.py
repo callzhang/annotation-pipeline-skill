@@ -1,3 +1,7 @@
+import sqlite3
+
+import pytest
+
 from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 
 
@@ -18,15 +22,9 @@ def test_entity_statistics_primary_key(tmp_path):
         "VALUES (?, ?, ?, ?, ?)",
         ("p", "apple", "organization", 1, now),
     )
-    # Same (project_id, span_lower, entity_type) → conflict
-    import sqlite3
-    try:
+    with pytest.raises(sqlite3.IntegrityError):
         store._conn.execute(
             "INSERT INTO entity_statistics (project_id, span_lower, entity_type, count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
             ("p", "apple", "organization", 5, now),
         )
-        raised = False
-    except sqlite3.IntegrityError:
-        raised = True
-    assert raised
