@@ -186,3 +186,24 @@ CREATE TABLE export_manifests (
     known_limitations_json TEXT NOT NULL
 );
 CREATE INDEX idx_export_project_created ON export_manifests(project_id, created_at);
+
+-- Entity convention store: case-by-case "lesson learned" knowledge accumulated
+-- from QC discussions, arbiter rulings, and HR feedback. Used to inject
+-- per-project entity-type guidance into annotator/QC/arbiter prompts so
+-- ambiguous spans get consistent classification across runs.
+CREATE TABLE IF NOT EXISTS entity_conventions (
+    convention_id  TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL,
+    span_lower     TEXT NOT NULL,        -- lowercased for case-insensitive match
+    span_original  TEXT NOT NULL,        -- as first seen
+    entity_type    TEXT,                  -- canonical type; NULL when disputed
+    status         TEXT NOT NULL,         -- 'active' | 'disputed'
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    proposals_json TEXT NOT NULL DEFAULT '[]',  -- audit trail of (type, source, task_id, created_at)
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    created_by     TEXT NOT NULL,        -- first source: 'hr_correction'/'declared'/'arbiter_consensus'
+    notes          TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_project_span ON entity_conventions(project_id, span_lower);
+CREATE INDEX IF NOT EXISTS idx_conv_project_status ON entity_conventions(project_id, status);

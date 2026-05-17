@@ -485,6 +485,76 @@ button {
   margin: 4px 0 0;
 }
 
+.entity-convention-box {
+  background: #f1f7fc;
+  border: 1px solid #c5dbe9;
+  border-radius: 6px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+}
+.entity-convention-box h3 {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #2b3a42;
+  margin: 0 0 4px;
+}
+.entity-convention-box .hint {
+  font-size: 12px;
+  color: #6e7a82;
+  margin: 0 0 8px;
+}
+.convention-form {
+  display: grid;
+  grid-template-columns: 1fr 130px 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.convention-form input,
+.convention-form select {
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid #c5dbe9;
+  border-radius: 4px;
+}
+.convention-form button {
+  font-size: 13px;
+  padding: 4px 10px;
+  background: #2b3a42;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.convention-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.convention-error { color: #b03a2e; font-size: 12px; margin: 6px 0 0; }
+.convention-ok    { color: #1e7a3a; font-size: 12px; margin: 6px 0 0; }
+.convention-hint-source { color: #6e7a82; font-size: 11px; margin: 6px 0 0; }
+.convention-disputed {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #c5dbe9;
+}
+.convention-disputed strong {
+  font-size: 12px; color: #7a2b12;
+}
+.convention-disputed ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.convention-resolve-btn {
+  font-size: 11px;
+  margin-left: 4px;
+  padding: 2px 6px;
+  background: #fff;
+  border: 1px solid #c5dbe9;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.convention-list { margin-top: 10px; font-size: 12px; }
+.convention-list ul { margin: 4px 0 0; padding-left: 18px; }
+.convention-list code { background: #e8eef2; padding: 1px 3px; border-radius: 3px; }
+
 .drawer-tabs {
   border-bottom: 1px solid #d7e0e5;
   display: flex;

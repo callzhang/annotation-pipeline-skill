@@ -178,10 +178,15 @@ class SubagentRuntime:
         )
 
         annotation_started_at = utc_now()
+        conventions_block = self._build_conventions_block(task)
         annotation_result = await self._generate_async(
             stage_target,
             LLMGenerateRequest(
-                instructions=_annotation_instructions(task, guideline=guideline),
+                instructions=_annotation_instructions(
+                    task,
+                    guideline=guideline,
+                    conventions_block=conventions_block,
+                ),
                 prompt=self._annotation_prompt(task),
                 continuity_handle=task.metadata.get("continuity_handle"),
             ),
@@ -1261,6 +1266,10 @@ class SubagentRuntime:
             "needs changing.\n\n"
             "Return raw JSON only, no markdown fences."
         )
+        # Inject per-project entity conventions if any match the input text.
+        conventions_block = self._build_conventions_block(task)
+        if conventions_block:
+            instructions = instructions + "\n\n" + conventions_block
         # Include the resolved output_schema so the arbiter doesn't invent
         # entity types, phrase types, or field shapes when constructing
         # corrected_annotation. Without this constraint, gpt-5.5 was emitting
@@ -1539,6 +1548,48 @@ class SubagentRuntime:
             task,
             resolved_policy=self._resolved_qc_policy(task),
             guideline=guideline,
+            conventions_block=self._build_conventions_block(task),
+        )
+
+    def _build_conventions_block(self, task: Task) -> str | None:
+        """Look up entity conventions established for this project that match
+        any span in the task's input text. Returns a prompt block to inject
+        into the annotator / QC / arbiter instructions, or None if no
+        matches.
+        """
+        from annotation_pipeline_skill.services.entity_convention_service import (
+            EntityConventionService,
+        )
+        try:
+            payload = task.source_ref.get("payload") if isinstance(task.source_ref, dict) else None
+            rows = payload.get("rows") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                return None
+            # Concatenate all rows' input text for a single substring search.
+            combined = "\n".join(
+                r.get("input", "") for r in rows if isinstance(r, dict) and isinstance(r.get("input"), str)
+            )
+        except Exception:  # noqa: BLE001 — never let prompt build fail the task
+            return None
+        if not combined.strip():
+            return None
+        svc = EntityConventionService(self.store)
+        try:
+            matches = svc.find_matches_in_text(task.pipeline_id, combined)
+        except Exception:  # noqa: BLE001
+            return None
+        if not matches:
+            return None
+        lines = [
+            f"  - {m.span_original!r} → entities.{m.entity_type}"
+            + (f"  (notes: {m.notes})" if m.notes else "")
+            for m in matches[:50]  # cap at 50 to bound prompt size
+        ]
+        return (
+            "KNOWN ENTITY CONVENTIONS FOR THIS PROJECT (established by prior "
+            "QC consensus, arbiter rulings, or human review — apply them so "
+            "ambiguous spans get classified consistently across tasks):\n"
+            + "\n".join(lines)
         )
 
     def _annotation_prompt(self, task: Task) -> str:
@@ -1719,7 +1770,12 @@ class SubagentRuntime:
         )
 
 
-def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str:
+def _annotation_instructions(
+    task: Task,
+    *,
+    guideline: str | None = None,
+    conventions_block: str | None = None,
+) -> str:
     base = (
         "You are an annotation subagent. Return raw JSON only, with no markdown fences or commentary. "
         "Follow the output_schema and annotation_guidance fields in this prompt (output_schema is the JSON Schema your response must conform to). Honor allowed_entity_types and rules from annotation_guidance when present. "
@@ -1752,9 +1808,12 @@ def _annotation_instructions(task: Task, *, guideline: str | None = None) -> str
         "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself."
         f"\n\nModality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
+    parts = [base]
+    if conventions_block:
+        parts.append(conventions_block)
     if guideline:
-        return f"{base}\n\n{guideline}"
-    return base
+        parts.append(guideline)
+    return "\n\n".join(parts)
 
 
 def _qc_instructions(task: Task, *, guideline: str | None = None) -> str:
@@ -1788,6 +1847,7 @@ def _build_qc_instructions(
     *,
     resolved_policy: dict[str, Any],
     guideline: str | None = None,
+    conventions_block: str | None = None,
 ) -> str:
     base = (
         "You are a QC subagent. Inspect EVERY row of the task and the latest annotation artifact end-to-end. "
@@ -1831,9 +1891,12 @@ def _build_qc_instructions(
         f"qc_policy (informational): {json.dumps(resolved_policy, sort_keys=True)}. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
+    parts = [base]
+    if conventions_block:
+        parts.append(conventions_block)
     if guideline:
-        return f"{base}\n\n{guideline}"
-    return base
+        parts.append(guideline)
+    return "\n\n".join(parts)
 
 
 def _task_payload(task: Task) -> dict[str, Any]:

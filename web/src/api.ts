@@ -122,6 +122,76 @@ export async function postTaskMove(
   return response.json();
 }
 
+export interface EntityConvention {
+  convention_id: string;
+  project_id: string;
+  span: string;
+  entity_type: string | null;
+  status: "active" | "disputed";
+  evidence_count: number;
+  proposals: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  notes: string | null;
+}
+
+export async function fetchConventions(
+  projectId: string,
+  storeKey: string | null = null,
+): Promise<EntityConvention[]> {
+  const url = withStore(`/api/conventions?project=${encodeURIComponent(projectId)}`, storeKey);
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const data = (await response.json()) as { conventions?: EntityConvention[] };
+  return data.conventions ?? [];
+}
+
+export async function declareConvention(
+  payload: {
+    project_id: string;
+    span: string;
+    entity_type: string;
+    task_id?: string;
+    notes?: string;
+    actor?: string;
+  },
+  storeKey: string | null = null,
+): Promise<EntityConvention> {
+  const response = await fetch(withStore("/api/conventions", storeKey), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Convention API returned ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function resolveConventionDispute(
+  conventionId: string,
+  entityType: string,
+  storeKey: string | null = null,
+  actor?: string,
+  notes?: string,
+): Promise<EntityConvention> {
+  const response = await fetch(
+    withStore(`/api/conventions/${encodeURIComponent(conventionId)}/resolve`, storeKey),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entity_type: entityType, actor, notes }),
+    },
+  );
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { detail?: string; error?: string } | null;
+    throw new Error(errorPayload?.detail ?? errorPayload?.error ?? `Resolve API returned ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function postHumanReviewDecision(
   taskId: string,
   payload: Record<string, unknown>,

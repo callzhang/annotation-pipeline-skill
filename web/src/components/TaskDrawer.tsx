@@ -12,6 +12,12 @@ import { JsonViewer } from "./JsonViewer";
 import { PerRowView } from "./PerRowView";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
 import type { ReactNode } from "react";
+import {
+  declareConvention,
+  fetchConventions,
+  resolveConventionDispute,
+  type EntityConvention,
+} from "../api";
 
 interface TaskDrawerProps {
   task: TaskCard | null;
@@ -146,7 +152,14 @@ export function TaskDrawer({
       {detail ? (
         <>
           {detail.task.status === "human_review" ? (
-            <HumanReviewReasonBanner events={detail.events} />
+            <>
+              <HumanReviewReasonBanner events={detail.events} />
+              <EntityConventionForm
+                projectId={detail.task.pipeline_id}
+                taskId={detail.task.task_id}
+                sourceRef={detail.task.source_ref}
+              />
+            </>
           ) : null}
           <div className="drawer-tabs" role="tablist">
             {(["annotation", "raw", "discussions", "logs"] as const).map((tab) => (
@@ -585,3 +598,193 @@ function TimelineItem({ title, meta, value }: { title: string; meta: string; val
   );
 }
 
+
+const ENTITY_TYPES = [
+  "person", "organization", "project", "document", "time",
+  "number", "event", "location", "technology", "entity",
+] as const;
+
+function EntityConventionForm({
+  projectId,
+  taskId,
+  sourceRef,
+}: {
+  projectId: string;
+  taskId: string;
+  sourceRef: unknown;
+}) {
+  const [conventions, setConventions] = useState<EntityConvention[]>([]);
+  const [span, setSpan] = useState("");
+  const [entityType, setEntityType] = useState<string>(ENTITY_TYPES[1]);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const list = await fetchConventions(projectId);
+      setConventions(list);
+    } catch (e) {
+      // silent — listing is best-effort
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  // Suggest spans found in the task's input rows so the operator can click.
+  const inputSpansHint = useMemo(() => {
+    const payload =
+      typeof sourceRef === "object" && sourceRef !== null
+        ? (sourceRef as { payload?: { rows?: Array<{ input?: string }> } }).payload
+        : undefined;
+    const rows = payload?.rows ?? [];
+    return rows
+      .map((r) => (typeof r.input === "string" ? r.input : ""))
+      .filter(Boolean)
+      .join(" • ")
+      .slice(0, 400);
+  }, [sourceRef]);
+
+  const onSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const trimmed = span.trim();
+      if (!trimmed) {
+        setError("Span is required");
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      setMessage(null);
+      try {
+        const conv = await declareConvention({
+          project_id: projectId,
+          span: trimmed,
+          entity_type: entityType,
+          task_id: taskId,
+          notes: notes.trim() || undefined,
+          actor: "operator",
+        });
+        setMessage(
+          conv.status === "disputed"
+            ? `Recorded — now disputed (${conv.evidence_count} evidence, conflicting types in history)`
+            : `Recorded "${trimmed}" → ${entityType} (evidence_count=${conv.evidence_count})`,
+        );
+        setSpan("");
+        setNotes("");
+        await reload();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [span, entityType, projectId, taskId, notes, reload],
+  );
+
+  const onResolveDispute = useCallback(
+    async (convId: string, type: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await resolveConventionDispute(convId, type, null, "operator");
+        await reload();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [reload],
+  );
+
+  const disputed = conventions.filter((c) => c.status === "disputed");
+  const active = conventions.filter((c) => c.status === "active");
+
+  return (
+    <section className="entity-convention-box">
+      <h3>Entity Conventions for this project</h3>
+      <p className="hint">
+        Establish a per-project type for an ambiguous entity span. Future tasks whose input contains
+        this span will see the convention injected into annotator/QC/arbiter prompts.
+      </p>
+      <form onSubmit={onSubmit} className="convention-form">
+        <input
+          type="text"
+          placeholder="span (e.g. Gmail, Apple)"
+          value={span}
+          onChange={(e) => setSpan(e.target.value)}
+          disabled={busy}
+        />
+        <select value={entityType} onChange={(e) => setEntityType(e.target.value)} disabled={busy}>
+          {ENTITY_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          placeholder="notes (optional)"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !span.trim()}>
+          {busy ? "Saving..." : "Declare convention"}
+        </button>
+      </form>
+      {error ? <p className="convention-error">{error}</p> : null}
+      {message ? <p className="convention-ok">{message}</p> : null}
+      {inputSpansHint ? (
+        <p className="convention-hint-source">Input spans: {inputSpansHint}{inputSpansHint.length >= 400 ? "…" : ""}</p>
+      ) : null}
+      {disputed.length > 0 ? (
+        <div className="convention-disputed">
+          <strong>Disputed conventions ({disputed.length})</strong>
+          <ul>
+            {disputed.map((c) => {
+              const proposed = Array.from(
+                new Set(c.proposals.map((p) => String((p as { type?: unknown }).type ?? ""))),
+              ).filter(Boolean);
+              return (
+                <li key={c.convention_id}>
+                  <code>{c.span}</code> — proposed:{" "}
+                  {proposed.map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className="convention-resolve-btn"
+                      onClick={() => onResolveDispute(c.convention_id, t)}
+                      disabled={busy}
+                    >
+                      keep {t}
+                    </button>
+                  ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+      {active.length > 0 ? (
+        <details className="convention-list">
+          <summary>Active conventions ({active.length})</summary>
+          <ul>
+            {active.map((c) => (
+              <li key={c.convention_id}>
+                <code>{c.span}</code> → <em>{c.entity_type}</em>{" "}
+                <small>
+                  (×{c.evidence_count}, {c.created_by})
+                </small>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </section>
+  );
+}

@@ -135,8 +135,27 @@ class DashboardApi:
             if not project_id:
                 return self._json_response(400, {"error": "project_required"})
             return self._json_response(200, build_readiness_report(store, project_id))
+        if route == "/api/export-file":
+            rel_path = query.get("path", [None])[0]
+            if not rel_path:
+                return self._json_response(400, {"error": "path_required"})
+            candidate = (store.root / rel_path).resolve()
+            if not str(candidate).startswith(str(store.root.resolve())):
+                return self._json_response(403, {"error": "forbidden"})
+            if not candidate.exists():
+                return self._json_response(404, {"error": "not_found"})
+            filename = candidate.name
+            return (200, {"content-type": "application/octet-stream", "content-disposition": f'attachment; filename="{filename}"'}, candidate.read_bytes())
         if route == "/api/outbox":
             return self._json_response(200, build_outbox_summary(store, project_id=project_id))
+        if route == "/api/conventions":
+            if not project_id:
+                return self._json_response(400, {"error": "project_required"})
+            from annotation_pipeline_skill.services.entity_convention_service import (
+                EntityConventionService,
+            )
+            convs = EntityConventionService(store).list_for_project(project_id)
+            return self._json_response(200, {"conventions": [c.to_dict() for c in convs]})
         if route == "/api/runtime":
             return self._json_response(200, self._runtime_snapshot(store).to_dict())
         if route == "/api/runtime/monitor":
@@ -204,7 +223,58 @@ class DashboardApi:
         if route.startswith("/api/tasks/") and route.endswith("/move"):
             task_id = route.removeprefix("/api/tasks/").removesuffix("/move").strip("/")
             return self._post_task_move_response(store, task_id, body)
+        if route == "/api/conventions":
+            return self._post_convention_response(store, project_id, body)
+        if route.startswith("/api/conventions/") and route.endswith("/resolve"):
+            conv_id = route.removeprefix("/api/conventions/").removesuffix("/resolve").strip("/")
+            return self._post_convention_resolve_response(store, conv_id, body)
         return self._json_response(404, {"error": "not_found"})
+
+    def _post_convention_response(self, store: SqliteStore, project_id: str | None, body: dict) -> tuple:
+        from annotation_pipeline_skill.services.entity_convention_service import (
+            EntityConventionService,
+        )
+        pid = body.get("project_id") or project_id
+        if not pid:
+            return self._json_response(400, {"error": "project_required"})
+        span = body.get("span")
+        entity_type = body.get("entity_type")
+        if not isinstance(span, str) or not span.strip():
+            return self._json_response(400, {"error": "span_required"})
+        if not isinstance(entity_type, str) or not entity_type.strip():
+            return self._json_response(400, {"error": "entity_type_required"})
+        actor = body.get("actor") or "operator"
+        try:
+            conv = EntityConventionService(store).record_decision(
+                project_id=pid,
+                span=span,
+                entity_type=entity_type,
+                source=f"declared:{actor}",
+                task_id=body.get("task_id"),
+                notes=body.get("notes"),
+            )
+        except (ValueError, TypeError) as exc:
+            return self._json_response(400, {"error": str(exc)})
+        return self._json_response(200, conv.to_dict())
+
+    def _post_convention_resolve_response(self, store: SqliteStore, convention_id: str, body: dict) -> tuple:
+        from annotation_pipeline_skill.services.entity_convention_service import (
+            EntityConventionService,
+        )
+        resolved = body.get("entity_type")
+        if not isinstance(resolved, str) or not resolved.strip():
+            return self._json_response(400, {"error": "entity_type_required"})
+        actor = body.get("actor") or "operator"
+        try:
+            conv = EntityConventionService(store).clear_dispute(
+                convention_id=convention_id,
+                resolved_type=resolved,
+                actor=actor,
+                notes=body.get("notes"),
+            )
+        except KeyError:
+            return self._json_response(404, {"error": "convention_not_found"})
+        return self._json_response(200, conv.to_dict())
 
     def _stores_list(self) -> list[dict]:
         result = []

@@ -185,7 +185,33 @@ class HumanReviewService:
         self.store.append_artifact(artifact)
         self.store.append_event(event)
         self.store.save_task(task)
+        # Auto-record entity conventions for any entity-type changes the
+        # operator made vs the latest annotation. Captured per-project so
+        # future tasks in the same project benefit from the human's call.
+        self._record_conventions_from_correction(task, answer, actor)
         return HumanCorrectionResult(task=task, artifact=artifact, answer=answer)
+
+    def _record_conventions_from_correction(self, task: Task, answer: dict, actor: str) -> None:
+        from annotation_pipeline_skill.services.entity_convention_service import (
+            EntityConventionService,
+            extract_entity_type_decisions,
+        )
+        prior = self._latest_annotation_payload(task.task_id)
+        decisions = extract_entity_type_decisions(prior, answer)
+        if not decisions:
+            return
+        svc = EntityConventionService(self.store)
+        for span, entity_type in decisions:
+            try:
+                svc.record_decision(
+                    project_id=task.pipeline_id,
+                    span=span,
+                    entity_type=entity_type,
+                    source=f"hr_correction:{actor}",
+                    task_id=task.task_id,
+                )
+            except (ValueError, TypeError):
+                continue
 
     def _latest_annotation_payload(self, task_id: str) -> dict | None:
         """Load and parse the most recent annotation_result artifact's inner

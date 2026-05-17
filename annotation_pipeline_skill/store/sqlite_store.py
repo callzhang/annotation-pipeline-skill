@@ -29,6 +29,29 @@ from annotation_pipeline_skill.core.states import TaskStatus
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
+# Additive migrations: CREATE TABLE IF NOT EXISTS only, applied on every open
+# of an existing DB. Keeps the door open for adding tables without a formal
+# migration system. Drop additions here once a year by promoting them into
+# schema.sql proper.
+_ADDITIVE_MIGRATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS entity_conventions (
+    convention_id  TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL,
+    span_lower     TEXT NOT NULL,
+    span_original  TEXT NOT NULL,
+    entity_type    TEXT,
+    status         TEXT NOT NULL,
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    proposals_json TEXT NOT NULL DEFAULT '[]',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    created_by     TEXT NOT NULL,
+    notes          TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_project_span ON entity_conventions(project_id, span_lower);
+CREATE INDEX IF NOT EXISTS idx_conv_project_status ON entity_conventions(project_id, status);
+"""
+
 
 def _row_to_task(row: sqlite3.Row) -> Task:
     return Task.from_dict({
@@ -69,6 +92,10 @@ class SqliteStore:
         conn = store._conn
         if first_time:
             conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        else:
+            # Ensure additive schema migrations (CREATE TABLE IF NOT EXISTS only)
+            # land on existing DBs without a formal migration system.
+            conn.executescript(_ADDITIVE_MIGRATIONS_SQL)
         return store
 
     @property
