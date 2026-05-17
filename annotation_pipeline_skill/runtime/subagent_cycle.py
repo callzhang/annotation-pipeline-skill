@@ -1372,6 +1372,98 @@ class SubagentRuntime:
         )
         return TaskStatus.ACCEPTED
 
+    def _build_arbiter_request(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+    ) -> LLMGenerateRequest:
+        """Build a minimal second-opinion arbiter request.
+
+        The second arbiter is a sanity check, not a dispute resolver: it sees
+        only the input text and the proposed annotation, with no first-arbiter
+        output and no prior distribution. Independence is the whole point —
+        this is a cross-LLM check that the (span, type) call holds up.
+        """
+        current_annotation = self._slim_annotation_payload(annotation_artifact)
+        framing = (
+            "You are a second-opinion arbiter. Given the input text and the "
+            "proposed annotation, return your independent JSON corrected_annotation "
+            "(or echo the proposal if you agree).\n\n"
+            "Response shape:\n"
+            "{\n"
+            '  "verdicts": [],\n'
+            '  "corrected_annotation": <full annotation object> | null\n'
+            "}\n"
+            "Return raw JSON only, no markdown fences."
+        )
+        instructions = framing + "\n\n" + _SHARED_SPAN_RULES
+        prompt = json.dumps(
+            {
+                "task_id": task.task_id,
+                "task_payload": task.source_ref.get("payload", {}),
+                "current_annotation": current_annotation,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        return LLMGenerateRequest(
+            instructions=instructions,
+            prompt=prompt,
+            continuity_handle=None,
+        )
+
+    async def _invoke_second_arbiter(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+    ) -> dict | None:
+        """Run a second arbiter (different family) on the same task. Returns
+        its parsed JSON payload, or None if the call fails. The second
+        arbiter is given the SAME prompt as the first but does not see
+        the first arbiter's output or the prior distribution — independence
+        is critical for the cross-LLM check.
+        """
+        try:
+            client = self.client_factory("arbiter_secondary")
+        except Exception:  # noqa: BLE001
+            return None
+        # Build a fresh arbiter request from the existing prompt machinery.
+        request = self._build_arbiter_request(task, annotation_artifact)
+        try:
+            result = await client.generate(request)
+        except Exception:  # noqa: BLE001
+            return None
+        finally:
+            close = getattr(client, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001
+                    pass
+        try:
+            return _parse_llm_json(result.final_text)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def _resolve_first_arbiter_divergence(self, task: Task) -> None:
+        """Sync entry called by the scheduler when it sees a task with the
+        ``prior_verifier_first_arbiter_divergent`` flag set. Runs the second
+        arbiter and applies the resolution per spec §6.
+        """
+        asyncio.run(self._resolve_first_arbiter_divergence_async(task))
+
+    async def _resolve_first_arbiter_divergence_async(self, task: Task) -> None:
+        annotation_artifact = self._latest_annotation_artifact(task.task_id)
+        if annotation_artifact is None:
+            return
+        second_payload = await self._invoke_second_arbiter(task, annotation_artifact)
+        # Resolution logic comes in Task 8. For Task 7, just clear the flag
+        # so the scheduler doesn't loop on the same task. The actual three-
+        # way comparison happens in the next task.
+        task.metadata.pop("prior_verifier_first_arbiter_divergent", None)
+        task.metadata.pop("prior_verifier_payload", None)
+        self.store.save_task(task)
+
     async def _run_rearbitration(self, task: Task) -> None:
         """Worker entry for human-dragged REJECTED/HR → Arbitration cards.
 

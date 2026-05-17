@@ -240,3 +240,69 @@ def test_arbiter_correction_records_divergent_payload(tmp_path):
     after = store.load_task("t-arb-fix")
     assert after.metadata.get("prior_verifier_first_arbiter_divergent") is True
     assert "prior_verifier_payload" in after.metadata
+
+
+def test_second_arbiter_invoked_when_first_diverges(tmp_path):
+    """When the first arbiter's accepted annotation diverges from prior,
+    the runtime invokes a SECOND arbiter via the arbiter_secondary target."""
+    store = SqliteStore.open(tmp_path)
+    project = "p"
+    _seed_prior(store, project_id=project, span="Apple",
+                type_to_count={"organization": 12})
+
+    task = _make_task("t-second", input_text="Apple is here")
+    task.status = TaskStatus.ARBITRATING
+    task.metadata["prior_verifier_first_arbiter_divergent"] = True
+    task.metadata["prior_verifier_payload"] = {
+        "span": "Apple", "proposed_type": "technology",
+        "dominant_type": "organization", "dominant_count": 12,
+        "total": 12, "distribution": {"organization": 12},
+    }
+    store.save_task(task)
+
+    # Drop an annotation_result so _latest_annotation_artifact returns something.
+    rel = "artifact_payloads/t-second/final.json"
+    abs_path = store.root / rel
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(
+        json.dumps({"text": json.dumps({
+            "rows": [{"row_index": 0, "output": {"entities": {"technology": ["Apple"]}}}]
+        })}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-second", kind="annotation_result", path=rel,
+        content_type="application/json",
+    ))
+
+    invocations: list[str] = []
+
+    class _MultiArbiterClient:
+        def __init__(self, target):
+            self.target = target
+            invocations.append(target)
+        async def generate(self, request):
+            return LLMGenerateResult(
+                final_text=json.dumps({
+                    "verdicts": [],
+                    "corrected_annotation": {
+                        "rows": [{
+                            "row_index": 0,
+                            "output": {"entities": {"technology": ["Apple"]}},
+                        }]
+                    },
+                }),
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider=self.target, model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda t: _MultiArbiterClient(t),
+    )
+
+    # Method-under-test: drives the second-arbiter invocation
+    runtime._resolve_first_arbiter_divergence(store.load_task("t-second"))
+
+    # Second arbiter must have been invoked via the arbiter_secondary target.
+    assert "arbiter_secondary" in invocations
