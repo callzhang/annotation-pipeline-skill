@@ -575,6 +575,29 @@ MVP 外部任务 API 采用 pull + status callback 模式：
 - 协作审批流
 - 数据集 diff 和增量回放
 
+### 8.5 V1.2 功能 — 经验先验质量保障
+
+针对多 agent LLM 的相关错误 / 信息级联问题，引入"项目内统计先验"作为外
+部 verifier。设计文档见
+`docs/superpowers/specs/2026-05-17-prior-driven-verifier-design.md`。
+
+核心:
+- 两张表分工
+  - `entity_statistics`: 项目内所有 ACCEPTED 决策的累计分布（含 arbiter
+    决策），verifier 用。HR 决策 5x 权重
+  - `entity_conventions` (已存在): 注入 prompt 的高确定性子集，**不含**
+    arbiter 决策（避免 cascade）
+- Verifier 在三处触发: QC pass / arbiter ruling / HR submit_correction。
+  发现决策与项目历史分布显著偏离（样本 ≥ 10 且主类型 ≥ 80%）时升级
+- 偏离时调第二个 arbiter（不同 model family）独立判断，两 arbiter 一致
+  → 接受；不一致 → HR
+- 提供 Posterior Audit tab，operator 手动 Check 后列出所有 ACCEPTED 中
+  与当前 stats 不一致的 (task, span, type)，可一键打回 HR
+
+理论依据：Condorcet's jury theorem 要求投票者独立；LLM 之间共享 training
+bias 导致 r=0.78 错误相关性，纯 LLM 投票会放大错误。引入项目内经验分布
+作为外部 verifier 是文献一致推荐的做法。
+
 
 ## 9. 信息架构
 
