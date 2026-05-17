@@ -735,6 +735,26 @@ class SubagentRuntime:
             }
         return None
 
+    def _mark_first_arbiter_divergence_if_any(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+    ) -> None:
+        """If the just-accepted annotation has any (span, type) that diverges
+        from prior, stash the verifier payload on task.metadata so the
+        second-arbiter trigger (next task) can detect and invoke.
+
+        The caller is expected to invoke ``_transition`` immediately after
+        this returns, which persists ``task`` (and therefore the metadata)
+        via ``store.save_task``. Calling this twice is a no-op overwrite —
+        the helper is idempotent.
+        """
+        divergence = self._check_prior_verifier_on_annotation(task, annotation_artifact)
+        if divergence is None:
+            return
+        task.metadata["prior_verifier_first_arbiter_divergent"] = True
+        task.metadata["prior_verifier_payload"] = divergence["payload"]
+
     def _verifier_confirmed_all_spans(
         self,
         task: Task,
@@ -1239,6 +1259,11 @@ class SubagentRuntime:
             if not self._latest_annotation_is_valid_json(task):
                 arb["mechanical_fail"] += 1
                 return None
+            annotation_artifact = self._latest_annotation_artifact(task.task_id)
+            self._increment_entity_statistics_for_task(
+                task, annotation_artifact, weight=1
+            )
+            self._mark_first_arbiter_divergence_if_any(task, annotation_artifact)
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
@@ -1329,6 +1354,9 @@ class SubagentRuntime:
             metadata={"source": "arbiter_correction", "attempt_id": attempt_id},
         )
         self.store.append_artifact(artifact)
+        # Stats + verifier post-check on the corrected annotation that was just persisted.
+        self._increment_entity_statistics_for_task(task, artifact, weight=1)
+        self._mark_first_arbiter_divergence_if_any(task, artifact)
         self._transition(
             task,
             TaskStatus.ACCEPTED,

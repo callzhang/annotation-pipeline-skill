@@ -149,3 +149,94 @@ def test_qc_pass_with_cold_start_accepts(tmp_path):
     assert svc.distribution(project_id=project, span="Apple") == {
         "organization": 5, "technology": 1,
     }
+
+
+def test_arbiter_acceptance_increments_stats(tmp_path):
+    """When arbiter rules annotator-wins on a task that was QC-rejected,
+    the resulting ACCEPTED transition still increments stats so they
+    reflect every accepted decision in the project."""
+    store = SqliteStore.open(tmp_path)
+    project = "p"
+    # Seed a clear prior agreeing with the annotation under test.
+    _seed_prior(store, project_id=project, span="Acme",
+                type_to_count={"organization": 12})
+
+    annotation = {
+        "rows": [{
+            "row_index": 0,
+            "output": {"entities": {"organization": ["Acme"]}},
+        }]
+    }
+    task = _make_task("t-arb", input_text="Acme is mentioned")
+    task.status = TaskStatus.ARBITRATING
+    store.save_task(task)
+
+    # Drop a final annotation artifact for the runtime to read.
+    rel_path = "artifact_payloads/t-arb/final.json"
+    abs_path = store.root / rel_path
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(
+        json.dumps({"text": json.dumps(annotation)}), encoding="utf-8"
+    )
+    artifact = ArtifactRef.new(
+        task_id="t-arb", kind="annotation_result", path=rel_path,
+        content_type="application/json",
+    )
+    store.append_artifact(artifact)
+
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda _t: _RecorderClient(qc_passed=True, annotation=annotation),
+    )
+    # Drive _terminal_from_arbiter through the closed-branch path.
+    arb_outcome = {
+        "ran": True, "closed": 1, "fixed": 0, "unresolved": 0,
+        "mechanical_fail": 0, "corrected_annotation": None,
+    }
+    runtime._terminal_from_arbiter(
+        store.load_task("t-arb"),
+        attempt_id="t-arb-attempt-1", stage="arbitration", arb=arb_outcome,
+    )
+
+    svc = EntityStatisticsService(store)
+    # 12 from seed + 1 from the arbiter-driven acceptance.
+    assert svc.distribution(project_id=project, span="Acme") == {"organization": 13}
+
+
+def test_arbiter_correction_records_divergent_payload(tmp_path):
+    """When the arbiter writes a corrected_annotation whose final (span, type)
+    still diverges from prior, the post-check marks the task metadata so
+    the next task (invoke second arbiter) can pick it up."""
+    store = SqliteStore.open(tmp_path)
+    project = "p"
+    _seed_prior(store, project_id=project, span="Apple",
+                type_to_count={"organization": 12})
+
+    task = _make_task("t-arb-fix", input_text="Apple is here")
+    task.status = TaskStatus.ARBITRATING
+    store.save_task(task)
+
+    runtime = SubagentRuntime(
+        store=store,
+        client_factory=lambda _t: _RecorderClient(qc_passed=True, annotation={}),
+    )
+    corrected = {
+        "rows": [{
+            "row_index": 0,
+            "output": {"entities": {"technology": ["Apple"]}},  # diverges from prior
+        }]
+    }
+    arb_outcome = {
+        "ran": True, "closed": 0, "fixed": 1, "unresolved": 0,
+        "mechanical_fail": 0, "corrected_annotation": corrected,
+    }
+    result = runtime._apply_arbiter_correction(
+        store.load_task("t-arb-fix"),
+        attempt_id="t-arb-fix-attempt-1",
+        corrected=corrected,
+        arb=arb_outcome,
+    )
+    # First arbiter post-check should mark the divergence in task metadata.
+    after = store.load_task("t-arb-fix")
+    assert after.metadata.get("prior_verifier_first_arbiter_divergent") is True
+    assert "prior_verifier_payload" in after.metadata
