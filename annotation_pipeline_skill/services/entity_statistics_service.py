@@ -176,3 +176,38 @@ class EntityStatisticsService:
             })
         out.sort(key=lambda r: r["prior_total"], reverse=True)
         return out
+
+
+def iter_span_decisions(payload: Any) -> "list[tuple[str, str]]":
+    """Yield (span, entity_type) pairs from an annotation payload.
+
+    Walks ``rows[*].output.entities[type] = [span, ...]``. Only the
+    ``entities`` key is iterated — ``json_structures`` phrases are
+    free-form text that don't have a single canonical type per span (a
+    phrase can be both a "goal" and a "constraint" legitimately), so they
+    are NOT subject to the type-classification verifier.
+
+    Skips non-string spans, empty spans, and non-conforming structures.
+    """
+    out: list[tuple[str, str]] = []
+    if not isinstance(payload, dict):
+        return out
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        output = row.get("output")
+        if not isinstance(output, dict):
+            continue
+        entities = output.get("entities")
+        if not isinstance(entities, dict):
+            continue
+        for typ, items in entities.items():
+            if not isinstance(items, list):
+                continue
+            for span in items:
+                if isinstance(span, str) and span.strip():
+                    out.append((span, typ))
+    return out

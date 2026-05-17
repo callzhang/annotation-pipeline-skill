@@ -83,3 +83,41 @@ def test_contested_spans(tmp_path):
     assert contested[0]["span"] == "Microsoft" or contested[0]["span"] == "microsoft"
     assert contested[0]["prior_total"] == 30
     assert contested[0]["prior_distribution"] == {"organization": 13, "project": 12, "technology": 5}
+
+
+def test_iter_span_decisions_walks_entities():
+    from annotation_pipeline_skill.services.entity_statistics_service import (
+        iter_span_decisions,
+    )
+    payload = {
+        "rows": [
+            {
+                "row_index": 0,
+                "output": {
+                    "entities": {
+                        "organization": ["Apple", "Google"],
+                        "person": ["Alice"],
+                    },
+                    "json_structures": {
+                        "goal": ["improve perf"],
+                    },
+                },
+            }
+        ]
+    }
+    decisions = list(iter_span_decisions(payload))
+    assert ("Apple", "organization") in decisions
+    assert ("Google", "organization") in decisions
+    assert ("Alice", "person") in decisions
+    # json_structures is intentionally NOT included — only entities go through
+    # the type-classification verifier.
+    assert all(typ in ("organization", "person") for _, typ in decisions)
+
+
+def test_iter_span_decisions_handles_missing_fields():
+    from annotation_pipeline_skill.services.entity_statistics_service import (
+        iter_span_decisions,
+    )
+    assert list(iter_span_decisions({})) == []
+    assert list(iter_span_decisions({"rows": "not a list"})) == []
+    assert list(iter_span_decisions({"rows": [{"output": None}]})) == []
