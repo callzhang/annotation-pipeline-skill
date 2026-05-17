@@ -499,6 +499,29 @@ class SubagentRuntime:
         if qc_decision["passed"]:
             self._record_feedback_resolution(task, qc_attempt_id, qc_artifact, qc_decision)
             self._record_conventions_from_qc_consensus(task, annotation_artifact)
+            # Prior verifier: compare each (span, type) against project history.
+            verifier_failure = self._check_prior_verifier_on_annotation(
+                task, annotation_artifact
+            )
+            if verifier_failure is not None:
+                # Divergent — route to ARBITRATING for first-arbiter resolution.
+                self.store.append_feedback(verifier_failure["feedback"])
+                self._transition(
+                    task,
+                    TaskStatus.ARBITRATING,
+                    reason="prior verifier flagged divergence at QC pass",
+                    stage="prior_verifier",
+                    attempt_id=qc_attempt_id,
+                    metadata={
+                        "qc_artifact_id": qc_artifact.artifact_id,
+                        "prior_verifier_action": "qc_pass_divergent",
+                        "verifier_payload": verifier_failure["payload"],
+                    },
+                )
+                self.store.save_task(task)
+                return
+            # Agree / cold_start — accept and update statistics.
+            self._increment_entity_statistics_for_task(task, annotation_artifact, weight=1)
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
@@ -627,6 +650,112 @@ class SubagentRuntime:
                     continue
         except Exception:  # noqa: BLE001
             return
+
+    def _load_annotation_payload(self, annotation_artifact: ArtifactRef) -> dict | None:
+        """Read the canonical JSON annotation payload from an artifact.
+
+        Mirrors how _record_conventions_from_qc_consensus already reads it,
+        kept as a single helper so the QC-pass / arbiter / HR sites all
+        share the same parsing semantics.
+        """
+        try:
+            outer = self._read_artifact_payload(annotation_artifact)
+            if not isinstance(outer, dict):
+                return None
+            text = outer.get("text")
+            if isinstance(text, str):
+                try:
+                    return _parse_llm_json(text)
+                except (json.JSONDecodeError, ValueError):
+                    return None
+            return outer
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _check_prior_verifier_on_annotation(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+    ) -> dict | None:
+        """Return {feedback, payload} on the FIRST divergent (span, type), or
+        None when every span is agree/cold_start.
+        """
+        from annotation_pipeline_skill.services.entity_statistics_service import (
+            EntityStatisticsService,
+            iter_span_decisions,
+        )
+        payload = self._load_annotation_payload(annotation_artifact)
+        if payload is None:
+            return None
+        svc = EntityStatisticsService(self.store)
+        for span, entity_type in iter_span_decisions(payload):
+            result = svc.check(
+                project_id=task.pipeline_id,
+                span=span,
+                proposed_type=entity_type,
+            )
+            if result.status != "divergent":
+                continue
+            attempts = self.store.list_attempts(task.task_id)
+            attempt_id = attempts[-1].attempt_id if attempts else f"{task.task_id}-attempt-0"
+            verifier_payload = {
+                "span": result.span,
+                "proposed_type": result.proposed_type,
+                "dominant_type": result.dominant_type,
+                "dominant_count": result.dominant_count,
+                "total": result.total,
+                "distribution": result.distribution,
+            }
+            return {
+                "payload": verifier_payload,
+                "feedback": FeedbackRecord.new(
+                    task_id=task.task_id,
+                    attempt_id=attempt_id,
+                    source_stage=FeedbackSource.VALIDATION,
+                    severity=FeedbackSeverity.BLOCKING,
+                    category="prior_disagreement",
+                    message=(
+                        f"Span {result.span!r} was classified as {result.proposed_type!r} "
+                        f"but project history (N={result.total}) puts "
+                        f"{result.dominant_count}/{result.total} "
+                        f"({result.dominant_count * 100 // result.total}%) under "
+                        f"{result.dominant_type!r}. Re-evaluate via arbiter."
+                    ),
+                    target=verifier_payload,
+                    suggested_action="arbiter_rerun",
+                    created_by="prior_verifier",
+                ),
+            }
+        return None
+
+    def _increment_entity_statistics_for_task(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+        *,
+        weight: int,
+    ) -> None:
+        """Increment entity_statistics for every (span, type) in the task's
+        final annotation. Best-effort — never raise to the caller.
+        """
+        from annotation_pipeline_skill.services.entity_statistics_service import (
+            EntityStatisticsService,
+            iter_span_decisions,
+        )
+        payload = self._load_annotation_payload(annotation_artifact)
+        if payload is None:
+            return
+        svc = EntityStatisticsService(self.store)
+        for span, entity_type in iter_span_decisions(payload):
+            try:
+                svc.increment(
+                    project_id=task.pipeline_id,
+                    span=span,
+                    entity_type=entity_type,
+                    weight=weight,
+                )
+            except Exception:  # noqa: BLE001
+                continue
 
     def _record_feedback_resolution(
         self,
