@@ -395,3 +395,69 @@ def test_second_arbiter_third_option_routes_to_hr(tmp_path):
     runtime._resolve_first_arbiter_divergence(store.load_task("t"))
     after = store.load_task("t")
     assert after.status is TaskStatus.HUMAN_REVIEW
+
+
+def test_scheduler_routes_divergent_task_to_resolver(tmp_path):
+    """An ARBITRATING task with prior_verifier_first_arbiter_divergent=True
+    should be picked up by the scheduler claim loop and resolved via
+    _resolve_first_arbiter_divergence (not via the normal rearbitrate path)."""
+    from annotation_pipeline_skill.runtime.local_scheduler import LocalRuntimeScheduler
+    from annotation_pipeline_skill.core.runtime import RuntimeConfig
+
+    store = SqliteStore.open(tmp_path)
+    project = "p"
+    _seed_prior(store, project_id=project, span="Apple",
+                type_to_count={"organization": 12})
+
+    task = _make_task("t-sched", input_text="Apple here")
+    task.status = TaskStatus.ARBITRATING
+    task.metadata["prior_verifier_first_arbiter_divergent"] = True
+    task.metadata["prior_verifier_payload"] = {
+        "span": "Apple", "proposed_type": "technology",
+        "dominant_type": "organization", "dominant_count": 12,
+        "total": 12, "distribution": {"organization": 12},
+    }
+    store.save_task(task)
+
+    rel = "artifact_payloads/t-sched/final.json"
+    abs_path = store.root / rel
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(
+        json.dumps({"text": json.dumps({
+            "rows": [{
+                "row_index": 0,
+                "output": {"entities": {"technology": ["Apple"]}},
+            }]
+        })}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t-sched", kind="annotation_result", path=rel,
+        content_type="application/json",
+    ))
+
+    class _Stub:
+        async def generate(self, request):
+            return LLMGenerateResult(
+                final_text=json.dumps({
+                    "verdicts": [],
+                    "corrected_annotation": {
+                        "rows": [{"row_index": 0,
+                                  "output": {"entities": {"technology": ["Apple"]}}}]
+                    },
+                }),
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider="arbiter_secondary", model="stub", continuity_handle=None,
+            )
+
+    sched = LocalRuntimeScheduler(
+        store=store, client_factory=lambda _t: _Stub(),
+        config=RuntimeConfig(max_concurrent_tasks=1),
+    )
+
+    async def run_one():
+        await sched.run_forever(stop_when_idle=True, max_tasks=1)
+
+    asyncio.run(run_one())
+    after = store.load_task("t-sched")
+    assert after.status is TaskStatus.ACCEPTED

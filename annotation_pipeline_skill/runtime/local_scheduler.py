@@ -221,10 +221,24 @@ class LocalRuntimeScheduler:
                     # (codex subprocess, HTTP stream) hangs past this, we cancel
                     # so the finally clause releases the lease/active_run and
                     # the task gets recycled instead of zombifying the worker.
-                    await asyncio.wait_for(
-                        runtime.run_task_async(task, stage_target=stage_target),
-                        timeout=self.config.worker_task_timeout_seconds,
-                    )
+                    if (
+                        task.status is TaskStatus.ARBITRATING
+                        and task.metadata.get("prior_verifier_first_arbiter_divergent")
+                    ):
+                        # Divergent-flag path: the first arbiter accepted an
+                        # annotation that still diverges from project prior.
+                        # Route to the dedicated resolver (which invokes a
+                        # second arbiter) instead of the manual re-arbitrate
+                        # flow that run_task_async would dispatch to.
+                        await asyncio.wait_for(
+                            runtime._resolve_first_arbiter_divergence_async(task),
+                            timeout=self.config.worker_task_timeout_seconds,
+                        )
+                    else:
+                        await asyncio.wait_for(
+                            runtime.run_task_async(task, stage_target=stage_target),
+                            timeout=self.config.worker_task_timeout_seconds,
+                        )
                 except asyncio.TimeoutError:
                     import sys
                     print(
