@@ -50,6 +50,16 @@ CREATE TABLE IF NOT EXISTS entity_conventions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_project_span ON entity_conventions(project_id, span_lower);
 CREATE INDEX IF NOT EXISTS idx_conv_project_status ON entity_conventions(project_id, status);
+
+CREATE TABLE IF NOT EXISTS entity_statistics (
+    project_id   TEXT NOT NULL,
+    span_lower   TEXT NOT NULL,
+    entity_type  TEXT NOT NULL,
+    count        INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (project_id, span_lower, entity_type)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_stats_span ON entity_statistics(project_id, span_lower);
 """
 
 
@@ -92,10 +102,11 @@ class SqliteStore:
         conn = store._conn
         if first_time:
             conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
-        else:
-            # Ensure additive schema migrations (CREATE TABLE IF NOT EXISTS only)
-            # land on existing DBs without a formal migration system.
-            conn.executescript(_ADDITIVE_MIGRATIONS_SQL)
+        # Ensure additive schema migrations (CREATE TABLE IF NOT EXISTS only)
+        # land on both new and existing DBs. New DBs need them for tables not
+        # yet promoted into schema.sql; existing DBs need them for the same
+        # tables that were added after their initial creation.
+        conn.executescript(_ADDITIVE_MIGRATIONS_SQL)
         return store
 
     @property
