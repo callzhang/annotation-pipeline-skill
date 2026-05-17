@@ -1264,6 +1264,14 @@ class SubagentRuntime:
                 task, annotation_artifact, weight=1
             )
             self._mark_first_arbiter_divergence_if_any(task, annotation_artifact)
+            if task.metadata.get("prior_verifier_first_arbiter_divergent"):
+                # Annotator-wins ruling but still diverges from the project
+                # prior — leave the task in ARBITRATING so the scheduler's
+                # divergent-flag dispatch picks it up and calls a second
+                # arbiter (see _resolve_first_arbiter_divergence_async).
+                # Don't ACCEPT here; that would strand the flag.
+                self.store.save_task(task)
+                return None
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
@@ -1357,6 +1365,13 @@ class SubagentRuntime:
         # Stats + verifier post-check on the corrected annotation that was just persisted.
         self._increment_entity_statistics_for_task(task, artifact, weight=1)
         self._mark_first_arbiter_divergence_if_any(task, artifact)
+        if task.metadata.get("prior_verifier_first_arbiter_divergent"):
+            # Corrected annotation still diverges from the project prior.
+            # Same handling as the annotator-wins branch in _terminal_from_arbiter:
+            # leave the task in ARBITRATING for the second-arbiter dispatch
+            # to resolve.
+            self.store.save_task(task)
+            return None
         self._transition(
             task,
             TaskStatus.ACCEPTED,
