@@ -498,13 +498,16 @@ class SubagentRuntime:
         self._record_explicit_consensus(task, qc_attempt_id, qc_artifact, qc_decision)
         if qc_decision["passed"]:
             self._record_feedback_resolution(task, qc_attempt_id, qc_artifact, qc_decision)
-            self._record_conventions_from_qc_consensus(task, annotation_artifact)
-            # Prior verifier: compare each (span, type) against project history.
+            # Prior verifier: compare each (span, type) against project history
+            # BEFORE recording any convention. Spec §3.2 only allows conventions
+            # to grow from "annotator+QC consensus + verifier agree" — divergent
+            # and cold_start paths must not contribute to the dictionary.
             verifier_failure = self._check_prior_verifier_on_annotation(
                 task, annotation_artifact
             )
             if verifier_failure is not None:
                 # Divergent — route to ARBITRATING for first-arbiter resolution.
+                # No convention update (the verifier just flagged the decision).
                 self.store.append_feedback(verifier_failure["feedback"])
                 self._transition(
                     task,
@@ -520,7 +523,11 @@ class SubagentRuntime:
                 )
                 self.store.save_task(task)
                 return
-            # Agree / cold_start — accept and update statistics.
+            # Agree or cold_start. Only the agree path contributes to
+            # conventions (spec §3.2); cold_start has no prior to confirm.
+            # Stats++ on both paths (broad verifier-source signal).
+            if self._verifier_confirmed_all_spans(task, annotation_artifact):
+                self._record_conventions_from_qc_consensus(task, annotation_artifact)
             self._increment_entity_statistics_for_task(task, annotation_artifact, weight=1)
             self._transition(
                 task,
@@ -727,6 +734,41 @@ class SubagentRuntime:
                 ),
             }
         return None
+
+    def _verifier_confirmed_all_spans(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+    ) -> bool:
+        """True only when every (span, type) in the annotation received an
+        ``agree`` verdict from the verifier — i.e. each span had a prior
+        with ≥ MIN_PRIOR_SAMPLES total observations and the dominant type
+        matched the annotator+QC consensus (or no dominant existed).
+
+        cold_start spans (insufficient prior) do NOT count as confirmed.
+        Per spec §3.2, conventions only grow from confirmed consensus so
+        the dictionary stays a high-trust subset of the broader stats.
+        """
+        from annotation_pipeline_skill.services.entity_statistics_service import (
+            EntityStatisticsService,
+            iter_span_decisions,
+        )
+        payload = self._load_annotation_payload(annotation_artifact)
+        if payload is None:
+            return False
+        svc = EntityStatisticsService(self.store)
+        any_agree = False
+        for span, entity_type in iter_span_decisions(payload):
+            r = svc.check(
+                project_id=task.pipeline_id,
+                span=span,
+                proposed_type=entity_type,
+            )
+            if r.status == "divergent":
+                return False
+            if r.status == "agree":
+                any_agree = True
+        return any_agree
 
     def _increment_entity_statistics_for_task(
         self,
