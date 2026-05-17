@@ -9,6 +9,7 @@ from annotation_pipeline_skill.core.models import ArtifactRef, FeedbackRecord, T
 from annotation_pipeline_skill.core.schema_validation import (
     SchemaValidationError,
     find_cross_type_collisions,
+    find_trailing_punctuation_spans,
     find_verbatim_violations,
     validate_payload_against_task_schema,
 )
@@ -69,6 +70,10 @@ class HumanReviewService:
         if next_status is TaskStatus.ACCEPTED:
             latest_annotation = self._latest_annotation_payload(task_id)
             if latest_annotation is not None:
+                # Same span checks the annotator / arbiter / submit_correction
+                # paths run. Accepting "as-is" must NOT bypass them — the
+                # underlying annotation is what would end up in the training
+                # export, and the operator may not have noticed defects.
                 violations = find_verbatim_violations(task, latest_annotation)
                 if violations:
                     raise SchemaValidationError(
@@ -79,6 +84,30 @@ class HumanReviewService:
                              "path": f"rows[{v['row_index']}].output.{v['field']}",
                              "message": f"span {v['span']!r} is not a verbatim substring of the row's input.text"}
                             for v in violations
+                        ],
+                    )
+                collisions = find_cross_type_collisions(latest_annotation)
+                if collisions:
+                    raise SchemaValidationError(
+                        f"underlying annotation has {len(collisions)} cross-type entity collision(s); "
+                        f"use submit_correction or request_changes",
+                        [
+                            {"kind": "cross_type_collision",
+                             "path": f"rows[{c['row_index']}].output.entities",
+                             "message": f"span {c['span']!r} tagged as both {c['types'][0]!r} and {c['types'][1]!r}; pick one"}
+                            for c in collisions
+                        ],
+                    )
+                trailing = find_trailing_punctuation_spans(task, latest_annotation)
+                if trailing:
+                    raise SchemaValidationError(
+                        f"underlying annotation has {len(trailing)} span(s) with trailing sentence punctuation; "
+                        f"use submit_correction or request_changes",
+                        [
+                            {"kind": "trailing_punctuation_span",
+                             "path": f"rows[{t['row_index']}].output.{t['field']}",
+                             "message": f"span {t['span']!r} should be {t['trimmed']!r} — trim trailing punctuation"}
+                            for t in trailing
                         ],
                     )
         decision = {
@@ -165,6 +194,19 @@ class HumanReviewService:
                      "path": f"rows[{c['row_index']}].output.entities",
                      "message": f"span {c['span']!r} tagged as both {c['types'][0]!r} and {c['types'][1]!r}; pick one"}
                     for c in collisions
+                ],
+            )
+        # Trailing-punctuation span boundary — block "Mitul Mallik." when the
+        # trimmed form is also verbatim in input.text.
+        trailing = find_trailing_punctuation_spans(task, answer)
+        if trailing:
+            raise SchemaValidationError(
+                f"corrected answer has {len(trailing)} span(s) with trailing sentence punctuation",
+                [
+                    {"kind": "trailing_punctuation_span",
+                     "path": f"rows[{t['row_index']}].output.{t['field']}",
+                     "message": f"span {t['span']!r} should be {t['trimmed']!r} — trim trailing punctuation"}
+                    for t in trailing
                 ],
             )
 

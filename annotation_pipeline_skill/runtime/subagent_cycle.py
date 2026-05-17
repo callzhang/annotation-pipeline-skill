@@ -498,6 +498,7 @@ class SubagentRuntime:
         self._record_explicit_consensus(task, qc_attempt_id, qc_artifact, qc_decision)
         if qc_decision["passed"]:
             self._record_feedback_resolution(task, qc_attempt_id, qc_artifact, qc_decision)
+            self._record_conventions_from_qc_consensus(task, annotation_artifact)
             self._transition(
                 task,
                 TaskStatus.ACCEPTED,
@@ -564,6 +565,68 @@ class SubagentRuntime:
                     metadata={"feedback_id": feedback.feedback_id, "qc_artifact_id": qc_artifact.artifact_id},
                 )
         self.store.save_task(task)
+
+    def _record_conventions_from_qc_consensus(
+        self,
+        task: Task,
+        annotation_artifact: ArtifactRef,
+    ) -> None:
+        """Capture entity-type decisions from an annotator+QC consensus into
+        the project's convention dictionary.
+
+        Trigger: QC passed without arbiter intervention. The (span, type)
+        decisions in the current annotation reflect joint annotator+QC
+        agreement, suitable for guiding future tasks. Decisions made by
+        arbiter (the closed/fixed acceptance paths) are intentionally NOT
+        recorded — arbiter is another LLM, not human-level authority.
+        """
+        from annotation_pipeline_skill.services.entity_convention_service import (
+            EntityConventionService,
+            extract_entity_type_decisions,
+        )
+        # Read the latest annotation payload (cleaned canonical JSON written
+        # by _serialize_llm_json) and the prelabel baseline to diff against.
+        try:
+            current = self._read_artifact_payload(annotation_artifact)
+            if not isinstance(current, dict):
+                return
+            text = current.get("text")
+            if isinstance(text, str):
+                try:
+                    current = _parse_llm_json(text)
+                except (json.JSONDecodeError, ValueError):
+                    return
+            prelabel = None
+            for art in self.store.list_artifacts(task.task_id):
+                if art.kind == "annotation_result" and art.metadata.get("provider") == "prelabel":
+                    prelabel_outer = self._read_artifact_payload(art)
+                    if isinstance(prelabel_outer, dict):
+                        pre_text = prelabel_outer.get("text")
+                        if isinstance(pre_text, str):
+                            try:
+                                prelabel = _parse_llm_json(pre_text)
+                            except (json.JSONDecodeError, ValueError):
+                                prelabel = None
+                        else:
+                            prelabel = prelabel_outer
+                    break
+            decisions = extract_entity_type_decisions(prelabel or {}, current)
+            if not decisions:
+                return
+            svc = EntityConventionService(self.store)
+            for span, entity_type in decisions:
+                try:
+                    svc.record_decision(
+                        project_id=task.pipeline_id,
+                        span=span,
+                        entity_type=entity_type,
+                        source="qc_consensus",
+                        task_id=task.task_id,
+                    )
+                except Exception:  # noqa: BLE001 — convention recording is best-effort
+                    continue
+        except Exception:  # noqa: BLE001
+            return
 
     def _record_feedback_resolution(
         self,
@@ -809,7 +872,10 @@ class SubagentRuntime:
         # types in the same row. Blocking — annotator must pick one.
         # json_structures collisions are NOT blocked (phrases can legitimately
         # play multiple roles).
-        from annotation_pipeline_skill.core.schema_validation import find_cross_type_collisions
+        from annotation_pipeline_skill.core.schema_validation import (
+            find_cross_type_collisions,
+            find_trailing_punctuation_spans,
+        )
         collisions = find_cross_type_collisions(payload)
         if collisions:
             first = collisions[0]
@@ -823,6 +889,24 @@ class SubagentRuntime:
                 ),
                 "reason": "cross-type entity collision",
                 "target": {"row_index": first["row_index"], "span": first["span"], "types": first["types"]},
+            }
+        # Trailing-punctuation span boundary check: blocks "Mitul Mallik."
+        # when "Mitul Mallik" is also in input. The entity is the name,
+        # not the sentence boundary.
+        trailing = find_trailing_punctuation_spans(task, payload)
+        if trailing:
+            first = trailing[0]
+            return {
+                "category": "trailing_punctuation_span",
+                "message": (
+                    f"Row {first['row_index']} {first['field']} span {first['span']!r} ends "
+                    f"with sentence-ending punctuation that should not be part of the entity. "
+                    f"Re-emit as {first['trimmed']!r} — the trimmed form is also verbatim in "
+                    f"input.text and that's where the entity boundary belongs."
+                ),
+                "reason": "trailing-punctuation span boundary",
+                "target": {"row_index": first["row_index"], "field": first["field"],
+                           "span": first["span"], "trimmed": first["trimmed"]},
             }
         return None
 
@@ -1033,8 +1117,15 @@ class SubagentRuntime:
         # Cross-type collision — same span tagged as two entity types. Block
         # the correction; arbiter's internal retry loop already ran, so the
         # outer caller will hit mechanical_fail and either retry or escalate.
-        from annotation_pipeline_skill.core.schema_validation import find_cross_type_collisions
+        from annotation_pipeline_skill.core.schema_validation import (
+            find_cross_type_collisions,
+            find_trailing_punctuation_spans,
+        )
         if find_cross_type_collisions(corrected):
+            return None
+        # Trailing-punctuation boundary check — same rule as the annotator
+        # validation path. Arbiter should fix this in retries.
+        if find_trailing_punctuation_spans(task, corrected):
             return None
         # Match the annotator write path (see _serialize_llm_json): dedupe
         # within-type. No character-level normalization — the downstream
@@ -1267,6 +1358,10 @@ class SubagentRuntime:
             "needs changing.\n\n"
             "Return raw JSON only, no markdown fences."
         )
+        # All three agents (annotator, QC, arbiter) share the same cross-cutting
+        # span rules — verbatim, no character substitution, no trailing punct,
+        # no duplicates, one type per span. Single source of truth in code.
+        instructions = instructions + "\n\n" + _SHARED_SPAN_RULES
         # Inject per-project entity conventions if any match the input text.
         conventions_block = self._build_conventions_block(task)
         if conventions_block:
@@ -1771,6 +1866,33 @@ class SubagentRuntime:
         )
 
 
+_SHARED_SPAN_RULES = """\
+CROSS-CUTTING SPAN RULES (every agent — annotator, QC, arbiter — enforces the same set):
+
+1. VERBATIM: every entity span and json_structures phrase MUST appear byte-for-byte as a
+   substring of input.text. The pipeline runs a deterministic substring check; any non-verbatim
+   span is BLOCKING and bounces the task back.
+
+2. NO CHARACTER SUBSTITUTION. Do not normalize:
+   - Traditional ↔ Simplified Chinese (蕭 ≠ 萧, 盧 ≠ 卢) — copy whichever form is in input
+   - LaTeX escapes (`7.68\\%`, `$\\alpha$`, `AdaB$^2$N`) — keep the escape, don't render
+   - UTF-8 mojibake (`90Â°`) — keep as-is, do not "fix"
+   - Defanged URLs/IPs (`hxxp://`, `[.]`) — keep defanged
+   - Whitespace inside CJK character sequences (`5 7` ≠ `57`, `落 合` ≠ `落合`) — preserve
+
+3. SPAN BOUNDARY: do NOT include sentence-ending punctuation (`.,;:!?。，；：！？`) at the
+   END of an entity span, even when that character is verbatim in input.text. The entity is
+   the name itself, not the sentence boundary. Emit `Mitul Mallik`, not `Mitul Mallik.`.
+
+4. NO DUPLICATES: each (entity_type, span) pair appears at most once per row. The runtime
+   dedupes at write time, but emit deduped to start with.
+
+5. ONE TYPE PER SPAN PER ROW: an entity span may not be tagged under two entity types within
+   the same row. Cross-type collisions are BLOCKING. json_structures fields may overlap (a
+   phrase can be both a `goal` and a `constraint`).
+"""
+
+
 def _annotation_instructions(
     task: Task,
     *,
@@ -1809,7 +1931,7 @@ def _annotation_instructions(
         "Omit discussion_replies on a first attempt with no prior feedback. Never set consensus yourself."
         f"\n\nModality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
-    parts = [base]
+    parts = [base, _SHARED_SPAN_RULES]
     if conventions_block:
         parts.append(conventions_block)
     if guideline:
@@ -1892,7 +2014,7 @@ def _build_qc_instructions(
         f"qc_policy (informational): {json.dumps(resolved_policy, sort_keys=True)}. "
         f"Modality: {task.modality}. Requirements: {json.dumps(task.annotation_requirements, sort_keys=True)}."
     )
-    parts = [base]
+    parts = [base, _SHARED_SPAN_RULES]
     if conventions_block:
         parts.append(conventions_block)
     if guideline:

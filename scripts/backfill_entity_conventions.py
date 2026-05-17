@@ -76,6 +76,28 @@ def _pick_prelabel_artifact(store: SqliteStore, task_id: str):
     return None
 
 
+def _arbiter_touched_acceptance(store: SqliteStore, task_id: str) -> bool:
+    """True if the task's history shows an arbiter ruling (corrected_annotation
+    OR 'annotator-wins') was part of the accepted path. Used to exclude
+    arbiter-influenced decisions from the convention dictionary per policy
+    (only annotator+QC consensus or operator/HR decisions are eligible).
+    """
+    for ev in store.list_events(task_id):
+        if ev.next_status != TaskStatus.ACCEPTED:
+            continue
+        reason = (ev.reason or "").lower()
+        if "arbiter" in reason:
+            return True
+    # Also check for arbiter_correction artifacts (a fix that may have been
+    # applied without an explicit "arbiter" in the reason).
+    for art in store.list_artifacts(task_id):
+        if art.kind == "annotation_result" and "arbiter_correction" in art.path:
+            return True
+        if art.kind == "annotation_result" and art.metadata.get("source") == "arbiter_correction":
+            return True
+    return False
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_root", type=Path, help="Project root containing .annotation-pipeline/")
@@ -91,10 +113,18 @@ def main(argv: list[str]) -> int:
     skipped_no_prelabel = 0
     skipped_no_final = 0
     skipped_parse_fail = 0
+    skipped_arbiter_touched = 0
     recorded = 0
     errors: list[tuple[str, str]] = []
 
     for task in tasks:
+        # Per policy: only annotator+QC consensus or HR-authored decisions
+        # are eligible. Tasks whose path through the pipeline touched the
+        # arbiter (annotator-wins or corrected_annotation) are excluded —
+        # arbiter is another LLM, not human-level authority.
+        if _arbiter_touched_acceptance(store, task.task_id):
+            skipped_arbiter_touched += 1
+            continue
         final_art = _pick_final_artifact(store, task.task_id)
         if final_art is None:
             skipped_no_final += 1
@@ -109,13 +139,18 @@ def main(argv: list[str]) -> int:
         decisions = extract_entity_type_decisions(prelabel_ann or {}, final_ann)
         if not decisions:
             continue
+        # Source label reflects the path: human_review_answer → hr_correction,
+        # else qc_consensus (we excluded arbiter-touched tasks above).
+        source_label = (
+            "hr_correction" if final_art.kind == "human_review_answer" else "qc_consensus"
+        )
         for span, entity_type in decisions:
             try:
                 svc.record_decision(
                     project_id=task.pipeline_id,
                     span=span,
                     entity_type=entity_type,
-                    source="backfill_diff",
+                    source=source_label,
                     task_id=task.task_id,
                 )
                 recorded += 1
@@ -137,6 +172,7 @@ def main(argv: list[str]) -> int:
         "decisions_recorded": recorded,
         "skipped_no_final_artifact": skipped_no_final,
         "skipped_parse_failures": skipped_parse_fail,
+        "skipped_arbiter_touched": skipped_arbiter_touched,
         "errors": len(errors),
         "by_project": by_project,
     }, indent=2))

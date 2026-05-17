@@ -188,20 +188,51 @@ class EntityConventionService:
         rows = conn.execute(q, params).fetchall()
         return [self._load_row(r) for r in rows]
 
+    # Skip conventions whose span is shorter than this (digits, single
+    # letters, "CA" etc). They substring-match almost any input and pollute
+    # the prompt with noise like "'1' → entities.number".
+    MIN_INJECTION_SPAN_LEN = 4
+    # Require at least this many evidence rows before injecting. Filters
+    # out one-off LLM choices that haven't accumulated as a pattern.
+    MIN_INJECTION_EVIDENCE = 5
+    # Entity types whose conventions we never inject — the catch-all type
+    # is by design generic and shouldn't override the LLM's judgment.
+    EXCLUDED_TYPES_FOR_INJECTION: tuple[str, ...] = ("entity",)
+
     def find_matches_in_text(
         self, project_id: str, text: str
     ) -> list[EntityConvention]:
-        """Return active conventions whose span (case-insensitive) appears
-        as a substring of ``text``. Disputed conventions are not returned —
-        the runtime should not inject contradictory guidance.
+        """Return active conventions whose span occurs as a word-boundary
+        match in ``text`` (case-insensitive). Disputed conventions are
+        excluded — the runtime should not inject contradictory guidance.
+
+        Match rules:
+          - Span must be at least ``MIN_INJECTION_SPAN_LEN`` characters
+            long; shorter spans substring-match too liberally.
+          - Span must appear at a word boundary (or as a complete token).
+            For pure-ASCII spans we use ``\\b``; for spans containing CJK
+            or other non-word characters we fall back to plain substring
+            since ``\\b`` doesn't apply there.
+          - The convention must have ``evidence_count >=
+            MIN_INJECTION_EVIDENCE`` so we don't inject single
+            observations.
         """
         if not text:
             return []
         text_lower = text.lower()
         out: list[EntityConvention] = []
         for conv in self.list_for_project(project_id, include_disputed=False):
-            if conv.span_lower and conv.span_lower in text_lower:
-                out.append(conv)
+            if not conv.span_lower:
+                continue
+            if len(conv.span_lower) < self.MIN_INJECTION_SPAN_LEN:
+                continue
+            if conv.evidence_count < self.MIN_INJECTION_EVIDENCE:
+                continue
+            if conv.entity_type in self.EXCLUDED_TYPES_FOR_INJECTION:
+                continue
+            if not _span_in_text_at_word_boundary(conv.span_lower, text_lower):
+                continue
+            out.append(conv)
         return out
 
     def _load_row(self, row: sqlite3.Row) -> EntityConvention:
@@ -294,3 +325,23 @@ def extract_entity_type_decisions(
                     seen_spans.add(span_key)
                     decisions.append((s.strip(), typ))
     return decisions
+
+
+def _span_in_text_at_word_boundary(span: str, text: str) -> bool:
+    """Case-insensitive word-boundary match. Both args expected lowercase.
+
+    For ASCII spans (e.g. "Gmail", "Mitul Mallik") we require ``\\b`` on both
+    ends so "CA" doesn't match the "ca" inside "callable" or "decade". For
+    spans containing CJK or other non-``\\w`` characters, ``\\b`` doesn't
+    apply meaningfully — fall back to plain substring.
+    """
+    import re
+
+    if not span or not text:
+        return False
+    # If the span has any non-ASCII letter / digit / underscore chars, just
+    # use substring matching.
+    if not all(ord(c) < 128 and (c.isalnum() or c in " .-_'") for c in span):
+        return span in text
+    pattern = r"(?<!\w)" + re.escape(span) + r"(?!\w)"
+    return bool(re.search(pattern, text))
