@@ -193,7 +193,7 @@ class SubagentRuntime:
         )
         annotation_finished_at = utc_now()
         task.current_attempt += 1
-        cleaned_annotation_text = _serialize_llm_json(annotation_result.final_text)
+        cleaned_annotation_text = _serialize_llm_json(annotation_result.final_text, task=task)
         annotation_artifact = self._write_stage_artifact(
             task,
             annotation_result,
@@ -1036,8 +1036,9 @@ class SubagentRuntime:
         from annotation_pipeline_skill.core.schema_validation import find_cross_type_collisions
         if find_cross_type_collisions(corrected):
             return None
-        # Dedupe within-type spans before persisting (matches the annotator
-        # write path — see _serialize_llm_json).
+        # Match the annotator write path (see _serialize_llm_json): dedupe
+        # within-type. No character-level normalization — the downstream
+        # GLiNER pipeline requires byte-for-byte verbatim spans.
         _dedupe_within_type_spans(corrected)
 
         cleaned_text = json.dumps(corrected, sort_keys=True, indent=2)
@@ -1959,16 +1960,24 @@ def _parse_llm_json(text: str) -> Any:
     return _robust_json_loads(text)
 
 
-def _serialize_llm_json(text: str) -> str:
+def _serialize_llm_json(text: str, *, task: Task | None = None) -> str:
     """Parse LLM output and re-serialize as canonical JSON. Returns the
     original text if no JSON can be recovered (caller surfaces the error
     downstream).
 
-    Also dedupes within-type spans (annotators / arbiter sometimes emit
-    the same string twice under one entity type). Cross-type collisions
-    and non-verbatim spans are NOT touched — those are quality issues
-    that should be surfaced, not silently changed.
+    Dedupes within-type spans (annotators / arbiter sometimes emit the same
+    string twice under one entity type) but performs NO character-level
+    normalization of spans. Per the downstream GLiNER pipeline, spans must
+    be byte-for-byte substrings of input.text — any "cleanup" (CJK
+    whitespace collapse, trailing punctuation strip, Traditional↔Simplified,
+    LaTeX escape removal) breaks the verbatim guarantee training relies on.
+
+    Cross-type collisions and non-verbatim spans are NOT silently rewritten;
+    they fail the verification gate and surface as feedback.
     """
+    # `task` is accepted for API compatibility with callers that already
+    # pass it, but no normalization needs it today.
+    del task
     try:
         parsed = _parse_llm_json(text)
     except (ValueError, TypeError):
