@@ -192,15 +192,23 @@ independently. The final annotation merges all resolutions.
 
 New tab in operator dashboard: **Posterior Audit**.
 
+Audit has two complementary functions surfaced in the same tab. The
+first finds *task-level* problems (one specific decision diverges from
+the established prior); the second finds *span-level* problems (the
+project has no stable consensus on what this span should be).
+
 Endpoint: `GET /api/projects/<id>/posterior_audit`
 
-Returns a list of accepted tasks where any current (span, type) in their
-final annotation deviates from `entity_statistics` according to the
-verifier rules. Output shape:
+### 7.1 Task-level: deviating decisions
+
+Lists accepted tasks where any (span, type) in their final annotation
+deviates from `entity_statistics` according to the verifier rules
+(prior has ≥10 samples, dominant type ≥80%, current decision picked a
+different type).
 
 ```json
 {
-  "deviations": [
+  "task_deviations": [
     {
       "task_id": "v3_initial_deployment-001234",
       "row_index": 3,
@@ -214,13 +222,60 @@ verifier rules. Output shape:
 }
 ```
 
-UI:
-- Tab title "Posterior Audit" with a "Check" button (operator-triggered,
-  not background-polling, to keep cost predictable).
-- After click, results render as a sortable table. Each row has a "Send
-  to HR" button that transitions the task to `HUMAN_REVIEW` via existing
-  HR routing.
-- Empty list → "All accepted tasks agree with current statistics" banner.
+Each row gets a "Send to HR" button that transitions the task to
+`HUMAN_REVIEW` via existing HR routing.
+
+### 7.2 Span-level: contested concepts (no project consensus)
+
+Lists spans where the `entity_statistics` distribution itself is
+unresolved — multiple types each meaningfully represented, no clear
+winner. These are the project's ambiguous concepts that operator
+attention can resolve once instead of repeatedly per task.
+
+Detection rules (a span is "contested" if ALL of):
+- `total >= MIN_CONTESTED_SAMPLES` (default 10) — enough data to have
+  an opinion at all
+- No type accounts for `>= DOMINANCE_THRESHOLD` (0.80) — there isn't a
+  clear dominant
+- At least two types each have `>= MIN_RUNNER_UP_SHARE` (default 0.20) —
+  it's a genuine split, not noise
+
+```json
+{
+  "contested_spans": [
+    {
+      "span": "Microsoft",
+      "prior_total": 30,
+      "prior_distribution": {"organization": 13, "project": 12, "technology": 5},
+      "top_share": 0.43,
+      "runner_up_share": 0.40
+    }
+  ]
+}
+```
+
+Each row gets a UI control for the operator to declare a canonical type
+for the project. The declaration:
+- Records a high-trust entry in `entity_conventions` (acts as if it
+  were an HR decision — `source = "operator_declaration"`)
+- Adds the operator's choice to `entity_statistics` with `hr_weight = 5`
+  per occurrence, OR re-weights existing entries (one of two
+  implementations — pick during writing-plans)
+- Future tasks see the canonical type via the convention injection
+  path, and the verifier will now flag dissenters
+
+This is the *forward-looking* fix — once a concept is declared, the
+runtime starts steering toward consensus.
+
+### 7.3 UI
+
+- Tab title **Posterior Audit** with a **Check** button. Operator-
+  triggered, not background-polling, to keep cost and pagination
+  predictable.
+- After clicking, two sections render: "Task-level deviations" (Send to
+  HR per row) and "Contested spans" (Declare canonical type per row).
+- Empty both → "All accepted tasks agree with current statistics; no
+  contested spans" banner.
 
 ## 8. Bootstrap
 
@@ -302,9 +357,14 @@ Modules touched:
      operator authority).
 5. **`services/entity_statistics_service.py`** (new): increment helpers
    used at ACCEPTED transitions.
-6. **`interfaces/api.py`**: new endpoint `GET /posterior_audit`.
-7. **`web/`**: new "Posterior Audit" tab with Check button + Send-to-HR
-   buttons.
+6. **`interfaces/api.py`**: new endpoint `GET /posterior_audit` returning
+   both `task_deviations` and `contested_spans`. New endpoint
+   `POST /entity_conventions/declare` for the contested-spans
+   "Declare canonical type" action (records as
+   `source=operator_declaration` in `entity_conventions`).
+7. **`web/`**: new "Posterior Audit" tab with Check button. Two sections:
+   task deviations (with Send-to-HR per row) and contested spans (with
+   Declare-canonical-type dropdown per row).
 8. **`scripts/bootstrap_entity_statistics.py`** (new, one-time): scan all
    accepted tasks, build initial stats with HR weighting.
 9. **`llm_profiles.yaml`**: add `arbiter_secondary` profile + target.
@@ -320,6 +380,9 @@ runtime:
     min_prior_samples: 10
     dominance_threshold: 0.80
     hr_weight: 5
+  posterior_audit:
+    min_contested_samples: 10
+    min_runner_up_share: 0.20    # at least two types each ≥ 20% → contested
 ```
 
 Disable via `enabled: false` for projects that don't want the verifier.
