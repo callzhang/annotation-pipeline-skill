@@ -1453,16 +1453,177 @@ class SubagentRuntime:
         asyncio.run(self._resolve_first_arbiter_divergence_async(task))
 
     async def _resolve_first_arbiter_divergence_async(self, task: Task) -> None:
+        """Three-way resolution per spec §6:
+
+        - second_arbiter == first_arbiter  -> ACCEPTED (override prior;
+          two LLMs from different families outvote the historical prior)
+        - second_arbiter == prior_dominant -> flip annotation to the
+          prior type and ACCEPT (first arbiter was the outlier)
+        - second_arbiter is a third type   -> HUMAN_REVIEW (genuine
+          three-way disagreement)
+        - second arbiter unavailable       -> fall back to first arbiter's
+          decision; surface in audit via ``prior_verifier_action``
+        """
         annotation_artifact = self._latest_annotation_artifact(task.task_id)
         if annotation_artifact is None:
+            self._clear_divergence_flag(task)
+            self.store.save_task(task)
             return
+        payload = task.metadata.get("prior_verifier_payload") or {}
+        span = payload.get("span")
+        first_type = payload.get("proposed_type")
+        prior_type = payload.get("dominant_type")
+        if not span or not first_type or not prior_type:
+            self._clear_divergence_flag(task)
+            self.store.save_task(task)
+            return
+
         second_payload = await self._invoke_second_arbiter(task, annotation_artifact)
-        # Resolution logic comes in Task 8. For Task 7, just clear the flag
-        # so the scheduler doesn't loop on the same task. The actual three-
-        # way comparison happens in the next task.
+        if not isinstance(second_payload, dict):
+            # Second arbiter unavailable -- accept first arbiter's call to
+            # avoid blocking the pipeline (spec §12 verifier_partial). Surface
+            # in audit via metadata.
+            task.metadata["prior_verifier_action"] = "second_arbiter_unavailable"
+            self._clear_divergence_flag(task)
+            self.store.save_task(task)
+            return
+
+        second_corrected = second_payload.get("corrected_annotation") if isinstance(
+            second_payload.get("corrected_annotation"), dict
+        ) else None
+        second_type = self._extract_type_for_span(second_corrected, span) if second_corrected else None
+        if second_type is None:
+            # Second arbiter chose "annotator-wins" implicitly -- use the
+            # annotation that's currently on disk.
+            current = self._load_annotation_payload(annotation_artifact)
+            second_type = self._extract_type_for_span(current, span)
+
+        attempt_id = self._next_attempt_id(task)
+
+        if second_type == first_type:
+            task.metadata["prior_verifier_action"] = "resolved_to_first"
+            self._clear_divergence_flag(task)
+            self._increment_entity_statistics_for_task(task, annotation_artifact, weight=1)
+            self._transition(
+                task,
+                TaskStatus.ACCEPTED,
+                reason="second arbiter agrees with first; override prior",
+                stage="prior_verifier",
+                attempt_id=attempt_id,
+                metadata={"prior_verifier_action": "resolved_to_first"},
+            )
+        elif second_type == prior_type:
+            # Override the annotation file: change span's type to prior_type.
+            corrected_payload = self._load_annotation_payload(annotation_artifact)
+            self._rewrite_span_type(corrected_payload, span, first_type, prior_type)
+            new_artifact = self._write_corrected_annotation_artifact(
+                task, corrected_payload, attempt_id=attempt_id,
+            )
+            task.metadata["prior_verifier_action"] = "resolved_to_prior"
+            self._clear_divergence_flag(task)
+            self._increment_entity_statistics_for_task(task, new_artifact, weight=1)
+            self._transition(
+                task,
+                TaskStatus.ACCEPTED,
+                reason="second arbiter agrees with prior; flip first arbiter's call",
+                stage="prior_verifier",
+                attempt_id=attempt_id,
+                metadata={"prior_verifier_action": "resolved_to_prior"},
+            )
+        else:
+            task.metadata["prior_verifier_action"] = "escalated_to_hr"
+            self._clear_divergence_flag(task)
+            self._transition(
+                task,
+                TaskStatus.HUMAN_REVIEW,
+                reason="three-way disagreement: first arbiter, second arbiter, and prior all differ",
+                stage="prior_verifier",
+                attempt_id=attempt_id,
+                metadata={
+                    "first_arbiter_type": first_type,
+                    "second_arbiter_type": second_type,
+                    "prior_dominant_type": prior_type,
+                    "span": span,
+                },
+            )
+        self.store.save_task(task)
+
+    @staticmethod
+    def _extract_type_for_span(payload: Any, span: str) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        for row in payload.get("rows", []) or []:
+            if not isinstance(row, dict):
+                continue
+            entities = (row.get("output") or {}).get("entities")
+            if not isinstance(entities, dict):
+                continue
+            for typ, items in entities.items():
+                if isinstance(items, list) and span in items:
+                    return typ
+        return None
+
+    @staticmethod
+    def _rewrite_span_type(payload: Any, span: str, old_type: str, new_type: str) -> None:
+        if not isinstance(payload, dict):
+            return
+        for row in payload.get("rows", []) or []:
+            if not isinstance(row, dict):
+                continue
+            entities = (row.get("output") or {}).get("entities")
+            if not isinstance(entities, dict):
+                continue
+            old_items = entities.get(old_type) or []
+            if span in old_items:
+                old_items.remove(span)
+                if not old_items:
+                    entities.pop(old_type, None)
+                else:
+                    entities[old_type] = old_items
+                entities.setdefault(new_type, []).append(span)
+
+    def _write_corrected_annotation_artifact(
+        self,
+        task: Task,
+        payload: dict | None,
+        *,
+        attempt_id: str | None = None,
+    ) -> ArtifactRef:
+        """Persist a prior-verifier-corrected annotation as a new
+        ``annotation_result`` artifact and return the ArtifactRef. Mirrors
+        the on-disk shape used by ``_apply_arbiter_correction`` so the
+        downstream ``_load_annotation_payload`` reader round-trips cleanly.
+        """
+        if attempt_id is None:
+            attempt_id = self._next_attempt_id(task)
+        rel = f"artifact_payloads/{task.task_id}/{attempt_id}_prior_verifier_fix.json"
+        abs_path = self.store.root / rel
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        body = payload if isinstance(payload, dict) else {}
+        abs_path.write_text(
+            json.dumps(
+                {
+                    "text": json.dumps(body, ensure_ascii=False),
+                    "source": "prior_verifier_fix",
+                },
+                sort_keys=True,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        artifact = ArtifactRef.new(
+            task_id=task.task_id,
+            kind="annotation_result",
+            path=rel,
+            content_type="application/json",
+            metadata={"source": "prior_verifier_fix", "attempt_id": attempt_id},
+        )
+        self.store.append_artifact(artifact)
+        return artifact
+
+    def _clear_divergence_flag(self, task: Task) -> None:
         task.metadata.pop("prior_verifier_first_arbiter_divergent", None)
         task.metadata.pop("prior_verifier_payload", None)
-        self.store.save_task(task)
 
     async def _run_rearbitration(self, task: Task) -> None:
         """Worker entry for human-dragged REJECTED/HR → Arbitration cards.

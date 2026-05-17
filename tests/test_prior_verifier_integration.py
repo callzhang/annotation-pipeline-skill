@@ -306,3 +306,92 @@ def test_second_arbiter_invoked_when_first_diverges(tmp_path):
 
     # Second arbiter must have been invoked via the arbiter_secondary target.
     assert "arbiter_secondary" in invocations
+
+
+def _setup_post_first_arbiter(tmp_path, second_arbiter_type):
+    """Fabricate a task post first-arbiter (divergent) with the second
+    arbiter stubbed to return ``second_arbiter_type`` for "Apple"."""
+    store = SqliteStore.open(tmp_path)
+    project = "p"
+    _seed_prior(store, project_id=project, span="Apple",
+                type_to_count={"organization": 12})
+
+    task = _make_task("t", input_text="Apple is referenced here")
+    task.status = TaskStatus.ARBITRATING
+    task.metadata["prior_verifier_first_arbiter_divergent"] = True
+    task.metadata["prior_verifier_payload"] = {
+        "span": "Apple", "proposed_type": "technology",
+        "dominant_type": "organization", "dominant_count": 12,
+        "total": 12, "distribution": {"organization": 12},
+    }
+    store.save_task(task)
+
+    rel = "artifact_payloads/t/final.json"
+    abs_path = store.root / rel
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(
+        json.dumps({"text": json.dumps({
+            "rows": [{
+                "row_index": 0,
+                "output": {"entities": {"technology": ["Apple"]}},
+            }]
+        })}),
+        encoding="utf-8",
+    )
+    store.append_artifact(ArtifactRef.new(
+        task_id="t", kind="annotation_result", path=rel,
+        content_type="application/json",
+    ))
+
+    class _Client:
+        async def generate(self, request):
+            return LLMGenerateResult(
+                final_text=json.dumps({
+                    "verdicts": [],
+                    "corrected_annotation": {
+                        "rows": [{
+                            "row_index": 0,
+                            "output": {"entities": {second_arbiter_type: ["Apple"]}},
+                        }]
+                    },
+                }),
+                raw_response={}, usage={}, diagnostics={}, runtime="stub",
+                provider="arbiter_secondary", model="stub", continuity_handle=None,
+            )
+
+    runtime = SubagentRuntime(store=store, client_factory=lambda _t: _Client())
+    return store, runtime
+
+
+def test_second_arbiter_matches_first_accepts_with_first(tmp_path):
+    """Second arbiter says technology (same as first). Two LLMs from
+    different families agree -> ACCEPTED with technology, overriding prior."""
+    store, runtime = _setup_post_first_arbiter(tmp_path, "technology")
+    runtime._resolve_first_arbiter_divergence(store.load_task("t"))
+    after = store.load_task("t")
+    assert after.status is TaskStatus.ACCEPTED
+
+
+def test_second_arbiter_matches_prior_flips_to_prior(tmp_path):
+    """Second arbiter agrees with the prior (organization). First arbiter
+    was the outlier -> ACCEPTED with organization."""
+    store, runtime = _setup_post_first_arbiter(tmp_path, "organization")
+    runtime._resolve_first_arbiter_divergence(store.load_task("t"))
+    after = store.load_task("t")
+    assert after.status is TaskStatus.ACCEPTED
+    # The final annotation artifact should now have Apple = organization.
+    arts = [a for a in store.list_artifacts("t") if a.kind == "annotation_result"]
+    latest = arts[-1]
+    outer = json.loads((store.root / latest.path).read_text())
+    text = outer.get("text")
+    inner = json.loads(text) if isinstance(text, str) else outer
+    assert inner["rows"][0]["output"]["entities"] == {"organization": ["Apple"]}
+
+
+def test_second_arbiter_third_option_routes_to_hr(tmp_path):
+    """Second arbiter returns a third type (project) - three-way
+    disagreement -> HUMAN_REVIEW."""
+    store, runtime = _setup_post_first_arbiter(tmp_path, "project")
+    runtime._resolve_first_arbiter_divergence(store.load_task("t"))
+    after = store.load_task("t")
+    assert after.status is TaskStatus.HUMAN_REVIEW
