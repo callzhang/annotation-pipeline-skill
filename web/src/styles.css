@@ -555,6 +555,156 @@ button {
 .convention-list ul { margin: 4px 0 0; padding-left: 18px; }
 .convention-list code { background: #e8eef2; padding: 1px 3px; border-radius: 3px; }
 
+.convention-quick-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.convention-pick-card {
+  background: #ffffff;
+  border: 1px solid #d6e2ec;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+}
+.convention-pick-context {
+  color: #2b3a42;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 2px;
+  white-space: pre-wrap;
+}
+.convention-pick-context mark {
+  background: #fff1a8;
+  border-radius: 2px;
+  font-weight: 700;
+  padding: 1px 3px;
+}
+.convention-pick-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 12px;
+}
+.convention-pick-history {
+  color: #6e7a82;
+  font-size: 11px;
+  margin: 2px 0 0;
+}
+.convention-pick-disputed-tag {
+  color: #a92e1f;
+  font-weight: 700;
+}
+.convention-pick-tally {
+  color: #6e7a82;
+  font-size: 9px;
+  margin-left: 3px;
+  vertical-align: middle;
+}
+.convention-pick-btn.current .convention-pick-tally,
+.convention-pick-btn.established .convention-pick-tally {
+  color: inherit;
+  opacity: 0.75;
+}
+.convention-pick-span {
+  background: #e8eef2;
+  border-radius: 3px;
+  font-weight: 600;
+  padding: 2px 6px;
+}
+.convention-pick-sep {
+  color: #8fa3af;
+  margin: 0 2px;
+}
+.convention-pick-btn {
+  background: #ffffff;
+  border: 1px solid #c5dbe9;
+  border-radius: 3px;
+  color: #2b3a42;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 7px;
+  transition: border-color 80ms, color 80ms, background 80ms;
+}
+.convention-pick-btn:hover:not(:disabled) {
+  border-color: #2f6f73;
+  color: #2f6f73;
+}
+.convention-pick-btn.current {
+  background: #e8f4f1;
+  border-color: #5fb09c;
+  color: #1a5244;
+  font-weight: 700;
+}
+.convention-pick-btn.established {
+  background: #2f6f73;
+  border-color: #2f6f73;
+  color: #ffffff;
+  font-weight: 700;
+}
+.convention-pick-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.convention-manual {
+  border-top: 1px dashed #c5dbe9;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.convention-manual summary {
+  color: #6e7a82;
+  cursor: pointer;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.manual-review-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.manual-review-source h4 {
+  color: #2b3a42;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.manual-review-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manual-review-row {
+  background: #fbfcfd;
+  border: 1px solid #d7e0e5;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.manual-review-row-label {
+  color: #8fa3af;
+  display: block;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.manual-review-row-text {
+  color: #172026;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .drawer-tabs {
   border-bottom: 1px solid #d7e0e5;
   display: flex;

@@ -9,7 +9,7 @@ import {
 } from "../drawer_state";
 import { AnnotationView } from "./AnnotationView";
 import { JsonViewer } from "./JsonViewer";
-import { PerRowView } from "./PerRowView";
+import { PerRowView, extractOutputsByIndex } from "./PerRowView";
 import type { TaskCard, TaskDetail, TaskDetailArtifact } from "../types";
 import type { ReactNode } from "react";
 import {
@@ -39,9 +39,18 @@ export function TaskDrawer({
   onClose,
 }: TaskDrawerProps) {
   const [width, setWidth] = useState<number>(DRAWER_DEFAULT_WIDTH);
-  const [drawerTab, setDrawerTab] = useState<"raw" | "annotation" | "discussions" | "logs">("annotation");
+  const [drawerTab, setDrawerTab] = useState<"raw" | "annotation" | "discussions" | "logs" | "manual_review">("annotation");
   const [annotationFormat, setAnnotationFormat] = useState<"structured" | "json">("structured");
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  // Default to the Manual Review tab whenever a task enters HR, so the
+  // operator's quick-pick UI is the first thing they see.
+  const hrStatus = detail?.task.status === "human_review";
+  useEffect(() => {
+    if (hrStatus) setDrawerTab("manual_review");
+    else if (drawerTab === "manual_review") setDrawerTab("annotation");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hrStatus, detail?.task.task_id]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -152,17 +161,13 @@ export function TaskDrawer({
       {detail ? (
         <>
           {detail.task.status === "human_review" ? (
-            <>
-              <HumanReviewReasonBanner events={detail.events} />
-              <EntityConventionForm
-                projectId={detail.task.pipeline_id}
-                taskId={detail.task.task_id}
-                sourceRef={detail.task.source_ref}
-              />
-            </>
+            <HumanReviewReasonBanner events={detail.events} />
           ) : null}
           <div className="drawer-tabs" role="tablist">
-            {(["annotation", "raw", "discussions", "logs"] as const).map((tab) => (
+            {(detail.task.status === "human_review"
+              ? (["manual_review", "annotation", "raw", "discussions", "logs"] as const)
+              : (["annotation", "raw", "discussions", "logs"] as const)
+            ).map((tab) => (
               <button
                 key={tab}
                 role="tab"
@@ -171,12 +176,29 @@ export function TaskDrawer({
                 type="button"
                 onClick={() => setDrawerTab(tab)}
               >
-                {tab === "raw" ? "Raw Data" : tab === "annotation" ? "Annotation" : tab === "discussions" ? "Discussions" : "Logs"}
+                {tab === "raw"
+                  ? "Raw Data"
+                  : tab === "annotation"
+                  ? "Annotation"
+                  : tab === "discussions"
+                  ? "Discussions"
+                  : tab === "manual_review"
+                  ? "Manual Review"
+                  : "Logs"}
               </button>
             ))}
           </div>
 
           <div className="detail-sections">
+            {drawerTab === "manual_review" ? (
+              <ManualReviewTab
+                projectId={detail.task.pipeline_id}
+                taskId={detail.task.task_id}
+                sourceRef={detail.task.source_ref}
+                artifacts={detail.artifacts}
+              />
+            ) : null}
+
             {drawerTab === "raw" ? (
               <>
                 <PerRowView sourceRef={detail.task.source_ref} artifacts={detail.artifacts} />
@@ -604,15 +626,191 @@ const ENTITY_TYPES = [
   "number", "event", "location", "technology", "entity",
 ] as const;
 
-function EntityConventionForm({
+function ManualReviewTab({
   projectId,
   taskId,
   sourceRef,
+  artifacts,
 }: {
   projectId: string;
   taskId: string;
   sourceRef: unknown;
+  artifacts: TaskDetailArtifact[];
 }) {
+  return (
+    <div className="manual-review-tab">
+      <EntityConventionForm
+        projectId={projectId}
+        taskId={taskId}
+        sourceRef={sourceRef}
+        artifacts={artifacts}
+      />
+    </div>
+  );
+}
+
+// Find the first occurrence of `span` in `text`, return the surrounding
+// window (±radius chars, truncated at the nearest sentence boundary if one
+// lands inside the window, otherwise snapped to a word boundary). Returns
+// null if the span isn't in the text. Handles English . ? ! and Chinese
+// 。？！sentence terminators.
+//
+// Periods inside acronyms ("U.S.", "e.g.") are NOT treated as sentence
+// boundaries — heuristic: a period preceded by a single uppercase letter
+// or by another period/letter-period pattern is part of an abbreviation.
+function spanContext(text: string, span: string, radius = 50): {
+  before: string;
+  match: string;
+  after: string;
+} | null {
+  const idx = text.indexOf(span);
+  if (idx === -1) return null;
+  const spanEnd = idx + span.length;
+  const initialStart = Math.max(0, idx - radius);
+  const initialEnd = Math.min(text.length, spanEnd + radius);
+  let start = initialStart;
+  let end = initialEnd;
+
+  // LEFT — find latest real sentence end inside the window. Falls back to
+  // the nearest word boundary so we don't cut a word in half.
+  const left = text.slice(initialStart, idx);
+  const leftBoundary = lastSentenceBoundary(left);
+  if (leftBoundary !== -1) {
+    start = initialStart + leftBoundary;
+  } else if (initialStart > 0) {
+    // No sentence boundary in window — snap forward to the next word start
+    // so the excerpt doesn't begin mid-word.
+    const ws = left.search(/\s/);
+    if (ws !== -1) start = initialStart + ws + 1;
+  }
+
+  // RIGHT — same, mirrored.
+  const right = text.slice(spanEnd, initialEnd);
+  const rightBoundary = firstSentenceBoundary(right);
+  if (rightBoundary !== -1) {
+    end = spanEnd + rightBoundary;
+  } else if (initialEnd < text.length) {
+    // Snap backward to the last whitespace so the excerpt doesn't end
+    // mid-word.
+    const lastWs = right.search(/\s\S*$/);
+    if (lastWs > 0) end = spanEnd + lastWs;
+  }
+
+  return {
+    before: text.slice(start, idx),
+    match: text.slice(idx, spanEnd),
+    after: text.slice(spanEnd, end),
+  };
+}
+
+// Return the index in `text` immediately after the LAST sentence-end
+// punctuation, or -1 if none. An abbreviation period ("U.S.", "Mr.",
+// "e.g.") is NOT a sentence end — we filter it out by requiring that the
+// character before the period is NOT a single uppercase letter on its own
+// (preceded by another non-letter or start of string) or another period.
+function lastSentenceBoundary(text: string): number {
+  let result = -1;
+  const re = /([.?!]+["')\]]?\s+|[。？！])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const punctStart = m.index;
+    if (looksLikeAbbreviation(text, punctStart)) continue;
+    result = punctStart + m[0].length;
+  }
+  return result;
+}
+
+function firstSentenceBoundary(text: string): number {
+  const re = /([.?!]+["')\]]?\s+|[。？！])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (looksLikeAbbreviation(text, m.index)) continue;
+    return m.index + m[0].length;
+  }
+  return -1;
+}
+
+// A period at `idx` looks like an abbreviation when the chars right before
+// it form one of: a single capital letter ("U" before "U."), another
+// capital-period pair ("S" after "U." in "U.S."), or a known abbreviation
+// stem like "Mr", "Mrs", "Dr", "Inc", "Co", "etc", "vs".
+function looksLikeAbbreviation(text: string, periodIdx: number): boolean {
+  if (text[periodIdx] !== ".") return false;
+  // Check char immediately before the period.
+  const prev = text[periodIdx - 1] ?? "";
+  if (/[A-Z]/.test(prev)) {
+    const before = text[periodIdx - 2] ?? "";
+    // Sole uppercase letter ("A." at start of word) or "X.Y." chain.
+    if (before === "" || /[\s.([{]/.test(before)) return true;
+  }
+  // Check 2-3 char stems just before the period.
+  const stem = text.slice(Math.max(0, periodIdx - 4), periodIdx);
+  if (/(?:^|\W)(?:Mr|Mrs|Dr|Inc|Co|etc|vs|e\.g|i\.e|cf)$/.test(stem)) return true;
+  return false;
+}
+
+// Aggregate historical type proposals on an EntityConvention so the operator
+// sees what past annotator / QC / arbiter submissions claimed for this span.
+function summarizeProposals(
+  convention: EntityConvention | undefined,
+): { counts: Record<string, number>; total: number; label: string } {
+  const counts: Record<string, number> = {};
+  let total = 0;
+  for (const p of convention?.proposals ?? []) {
+    const t = String((p as { type?: unknown }).type ?? "").trim();
+    if (!t) continue;
+    counts[t] = (counts[t] ?? 0) + 1;
+    total += 1;
+  }
+  const label = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, n]) => `${t}×${n}`)
+    .join(", ");
+  return { counts, total, label };
+}
+
+function extractInputRows(sourceRef: unknown): Array<{ label: string | null; text: string }> {
+  if (!sourceRef || typeof sourceRef !== "object") return [];
+  const payload = (sourceRef as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== "object") return [];
+  const rec = payload as Record<string, unknown>;
+  if (typeof rec.text === "string" && rec.text.trim()) {
+    return [{ label: null, text: rec.text }];
+  }
+  const rows = rec.rows;
+  if (!Array.isArray(rows)) return [];
+  const out: Array<{ label: string | null; text: string }> = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const rr = r as Record<string, unknown>;
+    let text: string | null = null;
+    if (typeof rr.input === "string") text = rr.input;
+    else if (rr.input && typeof rr.input === "object") {
+      const inner = (rr.input as Record<string, unknown>).text;
+      if (typeof inner === "string") text = inner;
+    } else if (typeof rr.text === "string") text = rr.text;
+    if (!text) continue;
+    const id =
+      (typeof rr.row_id === "string" && rr.row_id) ||
+      (typeof rr.source_id === "string" && rr.source_id) ||
+      (typeof rr.row_index === "number" ? `row ${rr.row_index}` : null);
+    out.push({ label: id, text });
+  }
+  return out;
+}
+
+function EntityConventionForm({
+  projectId,
+  taskId,
+  sourceRef,
+  artifacts,
+}: {
+  projectId: string;
+  taskId: string;
+  sourceRef: unknown;
+  artifacts: TaskDetailArtifact[];
+}) {
+  const inputRows = useMemo(() => extractInputRows(sourceRef), [sourceRef]);
   const [conventions, setConventions] = useState<EntityConvention[]>([]);
   const [span, setSpan] = useState("");
   const [entityType, setEntityType] = useState<string>(ENTITY_TYPES[1]);
@@ -620,6 +818,7 @@ function EntityConventionForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [pendingPick, setPendingPick] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -634,19 +833,66 @@ function EntityConventionForm({
     void reload();
   }, [reload]);
 
-  // Suggest spans found in the task's input rows so the operator can click.
-  const inputSpansHint = useMemo(() => {
-    const payload =
-      typeof sourceRef === "object" && sourceRef !== null
-        ? (sourceRef as { payload?: { rows?: Array<{ input?: string }> } }).payload
-        : undefined;
-    const rows = payload?.rows ?? [];
-    return rows
-      .map((r) => (typeof r.input === "string" ? r.input : ""))
-      .filter(Boolean)
-      .join(" • ")
-      .slice(0, 400);
-  }, [sourceRef]);
+  // Extract entity (span, current_type) pairs from this task's latest
+  // annotation so the operator can declare conventions in one click.
+  const quickPicks = useMemo(() => {
+    const outputs = extractOutputsByIndex(artifacts);
+    const seen = new Set<string>();
+    const pairs: Array<{ span: string; currentType: string }> = [];
+    for (const out of outputs.values()) {
+      const entities = (out as { entities?: Record<string, unknown> }).entities;
+      if (!entities || typeof entities !== "object") continue;
+      for (const [type, spans] of Object.entries(entities)) {
+        if (!Array.isArray(spans)) continue;
+        for (const s of spans) {
+          if (typeof s !== "string") continue;
+          const key = `${s}|${type}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          pairs.push({ span: s, currentType: type });
+        }
+      }
+    }
+    return pairs;
+  }, [artifacts]);
+
+  // Index conventions by span so we can mark spans that already have one.
+  const conventionBySpan = useMemo(() => {
+    const map = new Map<string, EntityConvention>();
+    for (const c of conventions) map.set(c.span, c);
+    return map;
+  }, [conventions]);
+
+  const declarePick = useCallback(
+    async (pickSpan: string, pickType: string) => {
+      const key = `${pickSpan}|${pickType}`;
+      setPendingPick(key);
+      setBusy(true);
+      setError(null);
+      setMessage(null);
+      try {
+        const conv = await declareConvention({
+          project_id: projectId,
+          span: pickSpan,
+          entity_type: pickType,
+          task_id: taskId,
+          actor: "operator",
+        });
+        setMessage(
+          conv.status === "disputed"
+            ? `Recorded "${pickSpan}" — now disputed (history conflicts)`
+            : `Recorded "${pickSpan}" → ${pickType}`,
+        );
+        await reload();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+        setPendingPick(null);
+      }
+    },
+    [projectId, taskId, reload],
+  );
 
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -706,42 +952,117 @@ function EntityConventionForm({
 
   return (
     <section className="entity-convention-box">
-      <h3>Entity Conventions for this project</h3>
       <p className="hint">
-        Establish a per-project type for an ambiguous entity span. Future tasks whose input contains
-        this span will see the convention injected into annotator/QC/arbiter prompts.
+        Click an entity span below to declare its type as a project-wide convention.
+        Future tasks will see it injected into annotator/QC/arbiter prompts.
       </p>
-      <form onSubmit={onSubmit} className="convention-form">
-        <input
-          type="text"
-          placeholder="span (e.g. Gmail, Apple)"
-          value={span}
-          onChange={(e) => setSpan(e.target.value)}
-          disabled={busy}
-        />
-        <select value={entityType} onChange={(e) => setEntityType(e.target.value)} disabled={busy}>
-          {ENTITY_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <input
-          type="text"
-          placeholder="notes (optional)"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          disabled={busy}
-        />
-        <button type="submit" disabled={busy || !span.trim()}>
-          {busy ? "Saving..." : "Declare convention"}
-        </button>
-      </form>
       {error ? <p className="convention-error">{error}</p> : null}
       {message ? <p className="convention-ok">{message}</p> : null}
-      {inputSpansHint ? (
-        <p className="convention-hint-source">Input spans: {inputSpansHint}{inputSpansHint.length >= 400 ? "…" : ""}</p>
-      ) : null}
+
+      {quickPicks.length > 0 ? (
+        <div className="convention-quick-picks">
+          {quickPicks.map(({ span: pickSpan, currentType }) => {
+            const existing = conventionBySpan.get(pickSpan);
+            // First row whose input text contains this span — show its
+            // surrounding sentence so the operator doesn't have to read the
+            // whole task.
+            let ctx: { before: string; match: string; after: string } | null = null;
+            for (const r of inputRows) {
+              ctx = spanContext(r.text, pickSpan);
+              if (ctx) break;
+            }
+            // Build the history line: count of each proposed type across
+            // past annotator/QC submissions for this span.
+            const history = summarizeProposals(existing);
+            return (
+              <div className="convention-pick-card" key={`${pickSpan}|${currentType}`}>
+                {ctx ? (
+                  <p className="convention-pick-context">
+                    {ctx.before ? <>…{ctx.before}</> : null}
+                    <mark>{ctx.match}</mark>
+                    {ctx.after ? <>{ctx.after}…</> : null}
+                  </p>
+                ) : null}
+                <div className="convention-pick-row">
+                  <code className="convention-pick-span">{pickSpan}</code>
+                  <span className="convention-pick-sep">→</span>
+                  {ENTITY_TYPES.map((t) => {
+                    const isCurrent = t === currentType;
+                    const isExisting = existing?.entity_type === t;
+                    const key = `${pickSpan}|${t}`;
+                    const pending = pendingPick === key;
+                    const cls = [
+                      "convention-pick-btn",
+                      isCurrent ? "current" : "",
+                      isExisting ? "established" : "",
+                    ].filter(Boolean).join(" ");
+                    const historyCount = history.counts[t] ?? 0;
+                    return (
+                      <button
+                        type="button"
+                        key={t}
+                        className={cls}
+                        disabled={busy}
+                        title={
+                          isExisting
+                            ? `Convention already set: ${pickSpan} → ${t}`
+                            : isCurrent
+                            ? `Current annotation type — click to lock in as convention`
+                            : `Declare ${pickSpan} → ${t}`
+                        }
+                        onClick={() => declarePick(pickSpan, t)}
+                      >
+                        {pending ? "…" : t}
+                        {historyCount > 0 ? (
+                          <span className="convention-pick-tally">×{historyCount}</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                {history.total > 0 ? (
+                  <p className="convention-pick-history">
+                    History: {history.label}
+                    {existing?.status === "disputed" ? <span className="convention-pick-disputed-tag"> · disputed</span> : null}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="hint">No entities found in this task's annotation.</p>
+      )}
+
+      <details className="convention-manual">
+        <summary>+ declare a span not in the annotation</summary>
+        <form onSubmit={onSubmit} className="convention-form">
+          <input
+            type="text"
+            placeholder="span (e.g. Gmail, Apple)"
+            value={span}
+            onChange={(e) => setSpan(e.target.value)}
+            disabled={busy}
+          />
+          <select value={entityType} onChange={(e) => setEntityType(e.target.value)} disabled={busy}>
+            {ENTITY_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="notes (optional)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            disabled={busy}
+          />
+          <button type="submit" disabled={busy || !span.trim()}>
+            {busy ? "Saving..." : "Declare convention"}
+          </button>
+        </form>
+      </details>
       {disputed.length > 0 ? (
         <div className="convention-disputed">
           <strong>Disputed conventions ({disputed.length})</strong>
