@@ -33,6 +33,67 @@ from annotation_pipeline_skill.store.sqlite_store import SqliteStore
 from annotation_pipeline_skill.llm.profiles import ProfileValidationError
 
 
+def build_posterior_audit(store, *, project_id: str) -> dict:
+    """Scan every ACCEPTED task and compare its (span, type) decisions to
+    entity_statistics. Return task-level deviations and project-level
+    contested spans.
+    """
+    from annotation_pipeline_skill.core.states import TaskStatus
+    from annotation_pipeline_skill.services.entity_statistics_service import (
+        EntityStatisticsService,
+        iter_span_decisions,
+    )
+    from annotation_pipeline_skill.runtime.subagent_cycle import _parse_llm_json
+    import json as _json
+    import re
+
+    def _load_annotation(task):
+        arts = store.list_artifacts(task.task_id)
+        hr = [a for a in arts if a.kind == "human_review_answer"]
+        if hr:
+            outer = _json.loads((store.root / hr[-1].path).read_text(encoding="utf-8"))
+            return outer.get("answer") if isinstance(outer, dict) else None
+        anns = [a for a in arts if a.kind == "annotation_result"]
+        if not anns:
+            return None
+        outer = _json.loads((store.root / anns[-1].path).read_text(encoding="utf-8"))
+        text = outer.get("text")
+        if not isinstance(text, str):
+            return None
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+        try:
+            return _parse_llm_json(text)
+        except (ValueError, _json.JSONDecodeError):
+            return None
+
+    svc = EntityStatisticsService(store)
+    deviations = []
+    for task in store.list_tasks_by_pipeline(project_id):
+        if task.status is not TaskStatus.ACCEPTED:
+            continue
+        payload = _load_annotation(task)
+        if payload is None:
+            continue
+        for span, entity_type in iter_span_decisions(payload):
+            r = svc.check(project_id=project_id, span=span, proposed_type=entity_type)
+            if r.status != "divergent":
+                continue
+            deviations.append({
+                "task_id": task.task_id,
+                "row_index": 0,  # iter_span_decisions doesn't currently yield row_index;
+                                 # UI can still show "task-level" without it.
+                "span": r.span,
+                "current_type": r.proposed_type,
+                "prior_dominant_type": r.dominant_type,
+                "prior_distribution": r.distribution,
+                "prior_total": r.total,
+            })
+    return {
+        "task_deviations": deviations,
+        "contested_spans": svc.contested_spans(project_id=project_id),
+    }
+
+
 CONFIG_FILE_DEFINITIONS: dict[str, str] = {
     "annotation_rules.yaml": "Annotation Rules",
     "annotators.yaml": "Annotation Agents",
@@ -156,6 +217,10 @@ class DashboardApi:
             )
             convs = EntityConventionService(store).list_for_project(project_id)
             return self._json_response(200, {"conventions": [c.to_dict() for c in convs]})
+        if route == "/api/posterior-audit":
+            if not project_id:
+                return self._json_response(400, {"error": "project_required"})
+            return self._json_response(200, build_posterior_audit(store, project_id=project_id))
         if route == "/api/runtime":
             return self._json_response(200, self._runtime_snapshot(store).to_dict())
         if route == "/api/runtime/monitor":
