@@ -14,6 +14,7 @@ import { SchemaPanel } from "./components/SchemaPanel";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { KanbanBoard } from "./components/KanbanBoard";
 import { OutputPanel } from "./components/OutputPanel";
+import { PosteriorAuditPanel } from "./components/PosteriorAuditPanel";
 import { ProvidersPanel } from "./components/ProvidersPanel";
 import { RuntimePanel } from "./components/RuntimePanel";
 import { TaskDrawer } from "./components/TaskDrawer";
@@ -22,7 +23,7 @@ import type { KanbanSnapshot, ProjectSummary, StoreInfo, TaskCard, TaskDetail } 
 import { useUrlState, type UrlState } from "./url_state";
 
 const emptySnapshot: KanbanSnapshot = { project_id: null, columns: [] };
-type ViewMode = "kanban" | "runtime" | "output" | "providers" | "config" | "events" | "documents" | "schema";
+type ViewMode = "kanban" | "runtime" | "output" | "providers" | "config" | "events" | "documents" | "schema" | "posterior-audit";
 
 const urlDefaults: UrlState = { view: "kanban", store: null, project: null, task: null };
 
@@ -243,6 +244,9 @@ export default function App() {
         <button className={viewMode === "schema" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("schema")}>
           Schema
         </button>
+        <button className={viewMode === "posterior-audit" ? "view-tab selected" : "view-tab"} type="button" onClick={() => setView("posterior-audit")}>
+          Posterior Audit
+        </button>
       </nav>
 
       {error ? <div className="notice">{error}</div> : null}
@@ -264,6 +268,28 @@ export default function App() {
       {viewMode === "events" ? <EventLogPanel projectId={selectedProjectId} storeKey={selectedStoreKey} /> : null}
       {viewMode === "documents" ? <DocumentsPanel storeKey={selectedStoreKey} /> : null}
       {viewMode === "schema" ? <SchemaPanel storeKey={selectedStoreKey} /> : null}
+      {viewMode === "posterior-audit" ? (
+        <PosteriorAuditPanel
+          projectId={selectedProjectId}
+          onSendToHr={async (taskId) => {
+            await postTaskMove(taskId, "human_review", "posterior_audit", selectedStoreKey);
+            setSnapshot(await fetchKanbanSnapshot(selectedProjectId, selectedStoreKey));
+          }}
+          onDeclareCanonical={async (span, entityType) => {
+            if (!selectedProjectId) return;
+            await fetch("/api/conventions", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                project_id: selectedProjectId,
+                span,
+                entity_type: entityType,
+                actor: "operator_declaration",
+              }),
+            });
+          }}
+        />
+      ) : null}
       <TaskDrawer
         task={selectedTask}
         detail={selectedDetail}

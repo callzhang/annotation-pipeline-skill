@@ -298,3 +298,26 @@ export interface ProviderConfigSnapshot {
   diagnostics: Record<string, ProviderDiagnostic>;
 }
 
+export type TaskDeviation = {
+  task_id: string;
+  row_index: number;
+  span: string;
+  current_type: string;
+  prior_dominant_type: string;
+  prior_distribution: Record<string, number>;
+  prior_total: number;
+};
+
+export type ContestedSpan = {
+  span: string;
+  prior_total: number;
+  prior_distribution: Record<string, number>;
+  top_share: number;
+  runner_up_share: number;
+};
+
+export type PosteriorAudit = {
+  task_deviations: TaskDeviation[];
+  contested_spans: ContestedSpan[];
+};
+
